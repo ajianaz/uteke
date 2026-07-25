@@ -27,6 +27,21 @@ function Write-ErrorMsg { param([string]$msg) Write-Host "[ERROR] $msg" -Foregro
 $REPO = "codecoradev/uteke"
 $BINARIES = @("uteke.exe", "uteke-serve.exe", "uteke-mcp.exe")
 
+# Use gh token for authenticated API requests if available
+$env:GH_TOKEN = $env:GH_TOKEN
+if (-not $env:GH_TOKEN) {
+    try { $env:GH_TOKEN = gh auth token 2>$null } catch {}
+}
+
+function Invoke-GitHubApi {
+    param([string]$Uri)
+    $params = @{ Uri = $Uri; UseBasicParsing = $true }
+    if ($env:GH_TOKEN) {
+        $params.Headers = @{ Authorization = "Bearer $env:GH_TOKEN" }
+    }
+    return Invoke-WebRequest @params
+}
+
 # Detect architecture
 $ARCH = [Environment]::GetEnvironmentVariable("PROCESSOR_ARCHITECTURE")
 if ($ARCH -eq "AMD64" -or $ARCH -eq "x86_64") {
@@ -42,25 +57,23 @@ if ($ARCH -eq "AMD64" -or $ARCH -eq "x86_64") {
 function Get-LatestVersion {
     Write-Info "Fetching latest release from GitHub..."
     try {
-        # Try redirect method first (no API rate limit)
-        $response = Invoke-WebRequest -Uri "https://github.com/$REPO/releases/latest" -MaximumRedirection 0 -ErrorAction SilentlyContinue
-        if ($response.StatusCode -eq 302 -or $response.StatusCode -eq 301) {
-            $location = $response.Headers.Location
-            if ($location -match "/tag/(v[\d.]+)") {
-                return $matches[1]
+        $apiUrl = "https://api.github.com/repos/$REPO/releases?per_page=30"
+        $response = Invoke-GitHubApi -Uri $apiUrl
+        $releases = $response.Content | ConvertFrom-Json
+        foreach ($release in $releases) {
+            if ($release.assets.Count -gt 0) {
+                foreach ($asset in $release.assets) {
+                    if ($asset.name -like "*x86_64-pc-windows-msvc*") {
+                        Write-Info "Found version: $($release.tag_name)"
+                        return $release.tag_name
+                    }
+                }
             }
         }
+        Write-ErrorMsg "No release with Windows binary found on GitHub."
     } catch {
-        Write-Warn "Redirect method failed, trying GitHub API..."
-    }
-    
-    # Fallback to GitHub API
-    try {
-        $apiUrl = "https://api.github.com/repos/$REPO/releases/latest"
-        $release = Invoke-WebRequest -Uri $apiUrl -UseBasicParsing | ConvertFrom-Json
-        return $release.tag_name
-    } catch {
-        Write-ErrorMsg "Failed to get latest version. Set -Version to pin a specific version."
+        Write-Warn "GitHub API failed: $($_.Exception.Message)"
+        Write-ErrorMsg "Failed to get latest version. Set -Version v0.10.0 to pin a version."
     }
 }
 
