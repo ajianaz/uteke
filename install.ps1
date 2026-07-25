@@ -3,7 +3,8 @@
     Uteke Windows installer — installs uteke CLI, server, and MCP binaries
 .DESCRIPTION
     Downloads and installs the latest uteke release for Windows x64 from GitHub.
-    Usage: irm https://raw.githubusercontent.com/codecoradev/uteke/main/install.ps1 | iex
+    Usage: Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass; irm https://raw.githubusercontent.com/codecoradev/uteke/main/install.ps1 | iex
+    Or:    powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/codecoradev/uteke/main/install.ps1 | iex"
 #>
 
 [CmdletBinding()]

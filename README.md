@@ -59,7 +59,7 @@ uteke remember "Deploy v2.1 to staging" \
 | **Cargo** | `cargo install uteke-cli` |
 | **Docker** | `docker run -d -p 127.0.0.1:8767:8767 -v uteke-data:/data ghcr.io/codecoradev/uteke:latest` |
 | **Binary** | [GitHub Releases](https://github.com/codecoradev/uteke/releases) (macOS, Linux, Windows) |
-| **Windows (PowerShell)** | `irm https://raw.githubusercontent.com/codecoradev/uteke/main/install.ps1 | iex` |
+| **Windows (PowerShell)** | `powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/codecoradev/uteke/main/install.ps1 | iex"` |
 
 📖 [Full install guide](INSTALL.md) · [Docker docs](docs/docker.md)
 </details>
