@@ -1,5 +1,21 @@
 ## [Unreleased]
 
+## [0.10.1] — 2026-07-24
+
+### Changed
+- **Default data directory migrated from `~/.uteke` to `~/.codecora/uteke` (#773, #778)** — First launch auto-migrates existing data via atomic `rename` (cross-device fallback: recursive copy). Set `UTEKE_HOME` to override. All docs, CLI help, and config defaults updated.
+
+### Fixed
+- **`uteke upgrade` command not found (#777)** — `commands::upgrade` module was private, now `pub(crate)`.
+- **`DELETE /doc/delete` ignored query string on CI runners (#777)** — `req.url().query()` returned `None` on some environments; replaced with `req.uri().query()` split pattern.
+- **Windows uninstall paths in INSTALL.md (#778)** — All four `~/.uteke` references now point to `~/.codecora/uteke`.
+- **Clippy: redundant `&format!` borrow (#778)** — `Error::generic(&format!(…))` → `Error::generic(format!(…))`.
+- **Test env var pollution (#778)** — `uteke_home` tests now save/restore `HOME` and `UTEKE_HOME` to prevent parallel test race conditions.
+
+### Contributors
+- [@ajianaz](https://github.com/ajianaz) — data dir migration with auto-migrate (#778)
+- [@ajianaz](https://github.com/ajianaz) — fix upgrade visibility and doc delete query (#777)
+
 ## [0.10.0] — 2026-07-22
 
 ### Changed
