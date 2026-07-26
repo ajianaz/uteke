@@ -88,13 +88,15 @@ Rooms enable multi-agent collaborative memory — multiple agents share a room a
 
 ```python
 # Create a shared room
-uteke(action="room_remember", room_id="sprint-planning", content="Deploy scheduled for Friday", author="agent1")
 uteke(action="room_create", room_id="sprint-planning", title="Sprint Planning")
 
-# Add a memory to a room (use remember with room_id)
-uteke(action="remember", content="Deploy at 3pm", room_id="sprint-planning", namespace="team")
+# Add a memory to a room (with author attribution)
+uteke(action="room_remember", room_id="sprint-planning", content="Deploy scheduled for Friday", author="agent1")
 
-# Recall from a room
+# Add a reference document to a room
+uteke(action="room_document", room_id="sprint-planning", content="Architecture spec: ...", title="Arch Spec")
+
+# Recall from a room (semantic search — query is required)
 uteke(action="room_recall", room_id="sprint-planning", content="deploy deadline")
 
 # List all rooms (cross-namespace)
@@ -208,16 +210,67 @@ hermes mcp add uteke --command uteke-mcp
 | `remember` | Store a new memory |
 | `recall` | Semantic search |
 | `search` | Keyword search |
-| `list` | List memories |
+| `list` | List memories (with namespace filter) |
 | `forget` | Delete memory |
-| `stats` | Store statistics |
-| `room_remember` | Store memory in a room with author |
+| `stats` | Namespace or global statistics |
+| `room_remember` | Store memory in a room with author attribution |
+| `room_document` | Store a reference document in a room |
 | `room_create` | Create a room |
-| `room_recall` | Recall from a room |
-| `room_list` | List all rooms |
-| `room_summary` | Room topic summary |
-| `room_stats` | Room statistics |
-| `room_delete` | Delete a room |
+| `room_recall` | Semantic search within a room (requires `query`) |
+| `room_list` | List all rooms (cross-namespace) |
+| `room_summary` | Room topic summary with clusters and highlights |
+| `room_stats` | Room statistics (memory count, participants) |
+| `room_delete` | Delete a room (memories preserved) |
+| `namespace_list` | List all namespaces |
+| `namespace_stats` | Statistics for a specific namespace |
+| `tags_list` | List all tags |
+| `tags_rename` | Rename a tag across all memories |
+| `tags_delete` | Delete a tag from all memories |
+| `consolidate` | Merge similar memories (with threshold) |
+| `aging` | Aging cleanup of old memories |
+| `import` | Import memories from JSON |
+| `importance` | Recompute importance scores |
+| `doctor` | Health check (alias for `/health`) |
+
+## Valid Memory Types
+
+When using `remember`, `room_remember`, or `room_document`, the `type` parameter accepts these values:
+
+| Type | Description |
+|------|-------------|
+| `fact` | A factual statement or observation |
+| `procedure` | A how-to, process, or workflow |
+| `preference` | A user or system preference |
+| `decision` | A decision that was made |
+| `context` | Background context for a topic |
+| `note` | A general note |
+| `insight` | An insight or conclusion |
+| `reference` | A reference document (default for `room_document`) |
+| `event` | A time-based event |
+
+> **Warning:** Using an invalid type (e.g., `document`) causes HTTP 500. Use `reference` instead of `document`.
+
+## HTTP API Notes
+
+The uteke HTTP server (`uteke-serve`) uses **exact path matching** — query parameters are NOT part of the route. This means:
+
+```bash
+# ✅ Correct — POST with JSON body
+curl -X POST http://127.0.0.1:8767/stats \
+  -H 'Content-Type: application/json' \
+  -d '{"namespace": "cto"}'
+
+# ❌ Wrong — GET with query params returns 404
+curl http://127.0.0.1:8767/stats?namespace=cto
+```
+
+**All endpoints that accept parameters use POST with JSON body**, not GET with query strings.
+
+### Known Issues
+
+- **#784** — `room/stats` counts deprecated memories (inflated counts vs `room/summary`)
+- **#785** — `room/recall` requires `query` parameter (cannot list all memories in a room)
+- **#786** — Full HTTP API reference documentation is pending
 
 ## Memory-Provider for Other Agents
 
@@ -262,8 +315,9 @@ This installs uteke as the agent's default memory provider — relevant memories
 
 ## How It Works (uteke-tool)
 
-- **Remember**: POST to `/remember` — content is embedded (EmbeddingGemma Q4, 768d) and stored in SQLite + HNSW vector index
+- **Remember**: POST to `/remember` — content is embedded (EmbeddingGemma Q4, 768d) and stored in SQLite + HNSW vector index. Supports `type` param (see [Valid Memory Types](#valid-memory-types))
 - **Recall**: POST to `/recall` — semantic search via hybrid RRF (vector + FTS5), returns ranked results
+- **Room Remember**: POST to `/room/remember` — stores memory and links to room in a single call. **Requires** `room_id` (not `room`). Use `type="reference"` for documents (not `document` — causes 500)
 - **Rooms**: Cross-namespace collaboration spaces — rooms span namespaces, enabling multi-agent coordination
 - **MCP**: JSON-RPC over stdio or HTTP — standard MCP protocol for AI agent integration
 

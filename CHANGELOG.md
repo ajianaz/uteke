@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Docs
+- **Hermes integration docs updated** — Fixed incorrect `room_remember` example (was using `remember` with `room_id` which is not supported by `/remember` endpoint). Added `room_document` action. Added "Valid Memory Types" section. Added "HTTP API Notes" section documenting POST-with-body pattern and known issues (#784, #785, #786).
+
 ## [0.10.1] — 2026-07-24
 
 ### Changed
