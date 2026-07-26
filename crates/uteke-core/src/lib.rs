@@ -2022,10 +2022,14 @@ mod tests {
 
     #[test]
     fn test_uteke_home_with_env() {
-        // Save originals to prevent test pollution across parallel test threads.
+        // Isolate from parallel tests: use a unique temp HOME and set UTEKE_HOME.
+        let tmp = std::env::temp_dir().join("uteke_test_home_env");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
         let orig_uteke = std::env::var("UTEKE_HOME").ok();
         let orig_home = std::env::var("HOME").ok();
         unsafe {
+            std::env::set_var("HOME", &tmp);
             std::env::set_var("UTEKE_HOME", "/tmp/custom_home");
         }
         let home = uteke_home().unwrap_or_else(|_| PathBuf::from("/tmp/.codecora/uteke"));
@@ -2039,6 +2043,7 @@ mod tests {
         if let Some(ref v) = orig_home {
             unsafe { std::env::set_var("HOME", v) };
         }
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
