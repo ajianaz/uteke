@@ -432,12 +432,16 @@ impl super::Store {
         author: Option<&str>,
     ) -> Result<Vec<String>, Error> {
         let sql = match author {
-            Some(_) => "SELECT rm.memory_id FROM room_memories rm \
+            Some(_) => {
+                "SELECT rm.memory_id FROM room_memories rm \
                           INNER JOIN memories m ON rm.memory_id = m.id \
-                          WHERE rm.room_id = ?1 AND rm.author = ?2 AND m.deprecated = 0",
-            None => "SELECT rm.memory_id FROM room_memories rm \
+                          WHERE rm.room_id = ?1 AND rm.author = ?2 AND m.deprecated = 0"
+            }
+            None => {
+                "SELECT rm.memory_id FROM room_memories rm \
                      INNER JOIN memories m ON rm.memory_id = m.id \
-                     WHERE rm.room_id = ?1 AND m.deprecated = 0",
+                     WHERE rm.room_id = ?1 AND m.deprecated = 0"
+            }
         };
 
         let mut stmt = self
