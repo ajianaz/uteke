@@ -960,33 +960,43 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
             }
         }
 
-        // ── Room Recall (semantic — requires non-empty query) ─────────────
+        // ── Room Recall (semantic with optional fallback to chronological) ──
         (Method::Post, "/room/recall") => match read_body::<RoomRecallRequest>(req.as_reader()) {
             Ok(req_data) => {
-                if req_data.query.trim().is_empty() {
-                    return ctx.error_response_for(
-                        req,
-                        400,
-                        "Empty query is not allowed. Use GET /room/memories for chronological listing.",
+                let query = req_data.query.as_deref().unwrap_or("").trim();
+                if query.is_empty() {
+                    // No query provided — fall back to chronological recall (#785)
+                    match uteke.recall_room(
+                        &req_data.room_id,
+                        req_data.author.as_deref(),
+                        req_data.limit,
+                    ) {
+                        Ok(memories) => ctx.ok_response_for(req, &memories),
+                        Err(e) => {
+                            error!("Internal error: {e}");
+                            ctx.error_response_for(req, 500, "Internal server error")
+                        }
+                    }
+                } else {
+                    // Semantic recall with query
+                    let min_score = req_data.min_score.unwrap_or(
+                        ctx.recall_config
+                            .as_ref()
+                            .and_then(|r| r.min_score)
+                            .unwrap_or(DEFAULT_MIN_SCORE as f64) as f32,
                     );
-                }
-                let min_score = req_data.min_score.unwrap_or(
-                    ctx.recall_config
-                        .as_ref()
-                        .and_then(|r| r.min_score)
-                        .unwrap_or(DEFAULT_MIN_SCORE as f64) as f32,
-                );
-                match uteke.recall_room_semantic(
-                    &req_data.room_id,
-                    &req_data.query,
-                    req_data.limit,
-                    req_data.author.as_deref(),
-                    min_score,
-                ) {
-                    Ok(results) => ctx.ok_response_for(req, &results),
-                    Err(e) => {
-                        error!("Internal error: {e}");
-                        ctx.error_response_for(req, 500, "Internal server error")
+                    match uteke.recall_room_semantic(
+                        &req_data.room_id,
+                        query,
+                        req_data.limit,
+                        req_data.author.as_deref(),
+                        min_score,
+                    ) {
+                        Ok(results) => ctx.ok_response_for(req, &results),
+                        Err(e) => {
+                            error!("Internal error: {e}");
+                            ctx.error_response_for(req, 500, "Internal server error")
+                        }
                     }
                 }
             }

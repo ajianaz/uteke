@@ -291,7 +291,10 @@ pub fn default_doc_limit() -> usize {
 #[derive(Deserialize)]
 pub struct RoomRecallRequest {
     pub room_id: String,
-    pub query: String,
+    /// Semantic search query. When `None` or empty, falls back to
+    /// chronological recall (equivalent to `GET /room/memories`) (#785).
+    #[serde(default)]
+    pub query: Option<String>,
     #[serde(default = "default_limit")]
     pub limit: usize,
     #[serde(default)]
