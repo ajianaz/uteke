@@ -1,0 +1,232 @@
+//! Runtime CPU feature detection and ORT library resolution.
+//!
+//! Solves SIGILL (Exit Code 132) on CPUs without AVX2 (e.g., Celeron J4125/N4020)
+//! by dynamically selecting the correct ONNX Runtime shared library at startup.
+//!
+//! Resolution order:
+//! 1. `ORT_LIB_PATH` env var — explicit override (for testing / custom setups).
+//! 2. If AVX2 is detected → `./libonnxruntime.so` (AVX2 build, ships in standard bundle).
+//! 3. If AVX2 is NOT detected → `./ort-legacy/libonnxruntime.so` (SSE4.2 build, sidecar).
+//! 4. If no library found → return error (caller can fall back to non-ORT embedder).
+
+use std::path::PathBuf;
+
+/// Name of the legacy ORT sidecar directory (placed next to the binary).
+const LEGACY_ORT_DIR: &str = "ort-legacy";
+
+/// ORT shared library filename per platform.
+#[cfg(target_os = "linux")]
+const ORT_LIB_NAME: &str = "libonnxruntime.so";
+#[cfg(target_os = "macos")]
+const ORT_LIB_NAME: &str = "libonnxruntime.dylib";
+#[cfg(target_os = "windows")]
+const ORT_LIB_NAME: &str = "onnxruntime.dll";
+
+/// Result of CPU feature detection and ORT library resolution.
+pub struct OrtLibInfo {
+    /// Path to the resolved ORT shared library.
+    pub lib_path: PathBuf,
+    /// Whether AVX2 was detected on this CPU.
+    pub has_avx2: bool,
+}
+
+impl std::fmt::Debug for OrtLibInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OrtLibInfo")
+            .field("lib_path", &self.lib_path)
+            .field("has_avx2", &self.has_avx2)
+            .finish()
+    }
+}
+
+/// Detect whether the current CPU supports AVX2.
+///
+/// Returns `false` on non-x86_64 architectures (ARM, etc.) since those
+/// don't use AVX2 at all — the standard ORT build will work fine.
+#[inline]
+pub fn has_avx2() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: `is_x86_feature_detected!` is a compile-time macro that
+        // generates a `cpuid` instruction. It is safe to call at any time.
+        std::is_x86_feature_detected!("avx2")
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        // Non-x86_64 (ARM, RISC-V, etc.) — no AVX2 concept.
+        // Use the standard library; the x86-specific SIGILL issue doesn't apply.
+        true
+    }
+}
+
+/// Resolve the path to the ONNX Runtime shared library.
+///
+/// Search order:
+/// 1. `ORT_LIB_PATH` environment variable (explicit override).
+/// 2. AVX2 detected → `<exe_dir>/libonnxruntime.so` (standard bundle).
+/// 3. No AVX2 → `<exe_dir>/ort-legacy/libonnxruntime.so` (legacy sidecar).
+///
+/// # Errors
+///
+/// Returns a descriptive error if no ORT library can be found.
+pub fn resolve_ort_lib() -> Result<OrtLibInfo, String> {
+    // 1. Explicit env var override
+    if let Ok(env_path) = std::env::var("ORT_LIB_PATH") {
+        let path = PathBuf::from(&env_path);
+        if path.exists() {
+            tracing::info!(
+                "ORT: using explicit library path from ORT_LIB_PATH: {}",
+                path.display()
+            );
+            return Ok(OrtLibInfo {
+                lib_path: path,
+                has_avx2: has_avx2(),
+            });
+        }
+        return Err(format!(
+            "ORT_LIB_PATH set to '{}' but file does not exist",
+            env_path
+        ));
+    }
+
+    let exe_dir = exe_dir()?;
+    let avx2 = has_avx2();
+
+    if avx2 {
+        // 2. AVX2 CPU → use standard library next to binary
+        let standard_path = exe_dir.join(ORT_LIB_NAME);
+        if standard_path.exists() {
+            tracing::info!(
+                "ORT: AVX2 detected, using standard library: {}",
+                standard_path.display()
+            );
+            return Ok(OrtLibInfo {
+                lib_path: standard_path,
+                has_avx2: true,
+            });
+        }
+        // Standard lib not found — this is fine during development (cargo run)
+        // The error will be caught when ort::init_from() is called.
+        tracing::warn!(
+            "ORT: AVX2 detected but no standard library found at {}. \
+             If running from source, set ORT_LIB_PATH or build with download-binaries.",
+            standard_path.display()
+        );
+        return Err(format!(
+            "AVX2 detected but ONNX Runtime library not found at '{}'. \
+             Set ORT_LIB_PATH or use the standard release bundle.",
+            standard_path.display()
+        ));
+    }
+
+    // 3. No AVX2 → look for legacy sidecar
+    let legacy_path = exe_dir.join(LEGACY_ORT_DIR).join(ORT_LIB_NAME);
+    if legacy_path.exists() {
+        tracing::info!(
+            "ORT: No AVX2 detected, using legacy (SSE4.2) library: {}",
+            legacy_path.display()
+        );
+        return Ok(OrtLibInfo {
+            lib_path: legacy_path,
+            has_avx2: false,
+        });
+    }
+
+    Err(format!(
+        "CPU lacks AVX2 and legacy ORT library not found at '{}'. \
+         Use the 'legacy' release bundle which includes the ort-legacy/ sidecar.",
+        legacy_path.display()
+    ))
+}
+
+/// Get the directory containing the running executable.
+fn exe_dir() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("failed to determine executable path: {e}"))?;
+    exe.parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| "executable path has no parent directory".into())
+}
+
+/// Initialize the ORT environment using the resolved library path.
+///
+/// This must be called **once** before any `ort::Session` is created.
+/// Returns the `OrtLibInfo` on success so callers can log which variant is in use.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - No suitable ORT library can be found (`resolve_ort_lib` failure).
+/// - The library fails to load (`ort::init_from` failure, e.g. version mismatch).
+pub fn init_ort_environment() -> Result<OrtLibInfo, String> {
+    let info = resolve_ort_lib()?;
+
+    ort::init_from(&info.lib_path)
+        .map_err(|e| format!(
+            "Failed to load ONNX Runtime from '{}': {e}. \
+             Ensure the library version matches ort crate 2.0.0-rc.12.",
+            info.lib_path.display()
+        ))?
+        .commit();
+
+    tracing::info!(
+        "ORT environment initialized successfully (AVX2={})",
+        info.has_avx2
+    );
+
+    Ok(info)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn has_avx2_returns_bool() {
+        // Just verify it doesn't panic — the actual value depends on the test machine.
+        let _avx2 = has_avx2();
+    }
+
+    #[test]
+    fn resolve_ort_lib_prefers_env_var() {
+        // Create a temp file to use as fake ORT lib
+        let tmp = std::env::temp_dir().join("test_ort_lib_resolve.so");
+        std::fs::write(&tmp, b"fake").unwrap();
+
+        // SAFETY: set_var/remove_var in test code is safe — no concurrent access.
+        unsafe {
+            std::env::set_var("ORT_LIB_PATH", &tmp);
+        }
+        let result = resolve_ort_lib();
+        unsafe {
+            std::env::remove_var("ORT_LIB_PATH");
+        }
+
+        // Cleanup
+        std::fs::remove_file(&tmp).ok();
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().lib_path, tmp);
+    }
+
+    #[test]
+    fn resolve_ort_lib_errors_on_missing_env_var_path() {
+        // SAFETY: set_var/remove_var in test code is safe — no concurrent access.
+        unsafe {
+            std::env::set_var("ORT_LIB_PATH", "/nonexistent/path/libonnxruntime.so");
+        }
+        let result = resolve_ort_lib();
+        unsafe {
+            std::env::remove_var("ORT_LIB_PATH");
+        }
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("does not exist"));
+    }
+
+    #[test]
+    fn exe_dir_returns_parent() {
+        let dir = exe_dir().unwrap();
+        assert!(dir.exists(), "exe dir should exist: {}", dir.display());
+    }
+}

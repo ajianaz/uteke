@@ -2,6 +2,7 @@
 
 use crate::Error;
 use crate::embed::Embedder;
+use crate::embed::ort_init;
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -48,6 +49,22 @@ pub struct OnnxEmbedder {
 impl OnnxEmbedder {
     /// Create a new embedding engine. Downloads model if not cached.
     pub fn new() -> Result<Self, Error> {
+        // ── Pre-flight: Initialize ORT environment with the correct library ──
+        // This detects AVX2 support and loads the appropriate ONNX Runtime shared
+        // library (standard AVX2 or legacy SSE4.2 sidecar). Must run before any
+        // Session is created. The once_lock ensures we only init once per process.
+        static ORT_INIT: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+        ORT_INIT
+            .get_or_init(|| {
+                ort_init::init_ort_environment().map(|_| ())
+            })
+            .as_ref()
+            .map_err(|e| Error::embed_msg(format!(
+                "ONNX Runtime initialization failed: {e}. \
+                 CPU may lack required SIMD support. Use the 'legacy' bundle \
+                 (includes SSE4.2 ORT) or set ORT_LIB_PATH."
+            )))?;
+
         let model_dir = Self::model_dir()?;
         std::fs::create_dir_all(&model_dir)
             .map_err(|e| Error::embed("create model directory", e))?;
