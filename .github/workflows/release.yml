@@ -230,10 +230,65 @@ jobs:
           name: ${{ matrix.artifact }}-${{ steps.version.outputs.VERSION }}
           path: release/${{ matrix.artifact }}-${{ steps.version.outputs.VERSION }}.${{ matrix.ext }}
 
-  # NOTE: Windows legacy ORT build (SSE4.2 no-AVX2) removed in v0.10.2.
-  # ORT v1.24.4 removed --enable_msvc_static_runtime and its internal protobuf
-  # hardcodes /MT, causing LNK2038 with /MD. The standard Windows build uses
-  # prebuilt ORT with AVX2 which is fine for all modern x86_64 CPUs.
+  build-ort-legacy-windows:
+    name: Build legacy ORT Windows (SSE4.2, no AVX2)
+    needs: [verify-main]
+    runs-on: windows-latest
+    steps:
+      - name: Checkout onnxruntime source
+        uses: actions/checkout@v7
+        with:
+          repository: microsoft/onnxruntime
+          ref: v${{ env.ORT_VERSION }}
+          path: onnxruntime-src
+
+      - name: Setup MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Cache legacy ORT build
+        id: cache-ort
+        uses: actions/cache@v4
+        with:
+          path: onnxruntime-build/Release/onnxruntime.dll
+          key: ort-legacy-win-sse42-${{ env.ORT_VERSION }}-v1
+
+      - name: Build ONNX Runtime (SSE4.2 only)
+        if: steps.cache-ort.outputs.cache-hit != 'true'
+        shell: cmd
+        run: |
+          mkdir onnxruntime-build
+          cmake -S onnxruntime-src\cmake -B onnxruntime-build ^
+            -Donnxruntime_BUILD_SHARED_LIB=ON ^
+            -Donnxruntime_BUILD_UNIT_TESTS=OFF ^
+            -Donnxruntime_ENABLE_PYTHON=OFF ^
+            -Donnxruntime_ENABLE_CPUINFO=OFF ^
+            -Donnxruntime_USE_AVX=OFF ^
+            -Donnxruntime_USE_AVX2=OFF ^
+            -Donnxruntime_USE_AVX512=OFF ^
+            -Donnxruntime_BUILD_BENCHMARKS=OFF ^
+            -Donnxruntime_BUILD_OBJC=OFF ^
+            -Donnxruntime_BUILD_CSHARP=OFF ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_INSTALL_PREFIX=onnxruntime-install ^
+            "-DCMAKE_CXX_FLAGS=/wd4875"
+          cmake --build onnxruntime-build --config Release --parallel %NUMBER_OF_PROCESSORS%
+
+      - name: Package legacy ORT
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path ort-legacy
+          Copy-Item "onnxruntime-build\Release\onnxruntime*.dll" ort-legacy/ -ErrorAction SilentlyContinue
+          if (-not (Test-Path "ort-legacy\onnxruntime.dll")) {
+            # Try x64 output dir
+            Copy-Item "onnxruntime-build\x64\Release\onnxruntime*.dll" ort-legacy/ -ErrorAction SilentlyContinue
+          }
+          Get-ChildItem ort-legacy/ | Format-Table Name, Length
+
+      - name: Upload legacy ORT artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ort-legacy-windows-x64
+          path: ort-legacy/
 
   publish-crates:
     name: Publish to crates.io
@@ -307,11 +362,55 @@ jobs:
           name: uteke-x86_64-unknown-linux-gnu-legacy-${{ steps.version.outputs.VERSION }}
           path: legacy-release/uteke-x86_64-unknown-linux-gnu-legacy-${{ steps.version.outputs.VERSION }}.tar.gz
 
-  # NOTE: package-legacy-windows removed — no Windows legacy ORT build (see above).
+  package-legacy-windows:
+    name: Package Windows x64 legacy bundle
+    needs: [build-release, build-ort-legacy-windows]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Extract version
+        id: version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Download standard Windows x64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: uteke-x86_64-pc-windows-msvc-${{ steps.version.outputs.VERSION }}
+          path: standard-artifact
+
+      - name: Download legacy ORT artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ort-legacy-windows-x64
+          path: ort-legacy
+
+      - name: Create legacy bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path legacy-release
+          Expand-Archive "standard-artifact\uteke-x86_64-pc-windows-msvc-${{ steps.version.outputs.VERSION }}.zip" -DestinationPath legacy-release -Force
+          # Add legacy ORT DLLs in ort-legacy subdirectory
+          New-Item -ItemType Directory -Force -Path legacy-release\ort-legacy
+          Copy-Item "ort-legacy\*.dll" legacy-release\ort-legacy\ -ErrorAction SilentlyContinue
+          Write-Host "Standard ORT libs:"
+          Get-ChildItem legacy-release\onnxruntime*.dll -ErrorAction SilentlyContinue
+          Write-Host "Legacy ORT libs:"
+          Get-ChildItem legacy-release\ort-legacy\
+          Write-Host "`nFull bundle contents:"
+          Get-ChildItem legacy-release\
+          7z a "uteke-x86_64-pc-windows-msvc-legacy-${{ steps.version.outputs.VERSION }}.zip" legacy-release\*
+
+      - name: Upload legacy artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: uteke-x86_64-pc-windows-msvc-legacy-${{ steps.version.outputs.VERSION }}
+          path: uteke-x86_64-pc-windows-msvc-legacy-${{ steps.version.outputs.VERSION }}.zip
 
   release:
     name: Create GitHub Release
-    needs: [build-release, package-legacy]
+    needs: [build-release, package-legacy, package-legacy-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -363,8 +462,9 @@ jobs:
           printf '| Linux (x86_64, legacy) | `uteke-x86_64-unknown-linux-gnu-legacy-%s.tar.gz` |\\n' "${VER}" >> release-notes.md
           printf '| Linux (ARM64) | `uteke-aarch64-unknown-linux-gnu-%s.tar.gz` |\\n' "${VER}" >> release-notes.md
           printf '| macOS (Apple Silicon) | `uteke-aarch64-apple-darwin-%s.tar.gz` |\\n' "${VER}" >> release-notes.md
-          printf '| Windows (x86_64) | `uteke-x86_64-pc-windows-msvc-%s.zip` |\\n\\n' "${VER}" >> release-notes.md
-          printf '### 🖥️ Legacy Bundle (Linux only)\\n\\nThe **legacy** bundle includes a SSE4.2-only ONNX Runtime sidecar (`ort-legacy/`). Use this on older CPUs without AVX2 support (e.g., Intel Celeron J4125/N4020) to avoid SIGILL crashes.\\n\\n' >> release-notes.md
+          printf '| Windows (x86_64) | `uteke-x86_64-pc-windows-msvc-%s.zip` |\\n' "${VER}" >> release-notes.md
+          printf '| Windows (x86_64, legacy) | `uteke-x86_64-pc-windows-msvc-legacy-%s.zip` |\\n\\n' "${VER}" >> release-notes.md
+          printf '### 🖥️ Legacy Bundles (Linux + Windows)\\n\\nThe **legacy** bundles include a SSE4.2-only ONNX Runtime sidecar (`ort-legacy/`). Use these on older CPUs without AVX2 support (e.g., Intel Celeron J4125/N4020) to avoid SIGILL crashes.\\n\\n' >> release-notes.md
           printf '### 🚀 Quick Start\\n\\n```bash\\n# Quick install (Linux / macOS)\\ncurl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh | sh\\n\\n# Pin a specific version\\nUTEKE_VERSION=%s curl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh | sh\\n\\n# Store a memory\\nuteke remember "Important context" --tags project\\n\\n# Recall by meaning\\nuteke recall "what was that context?"\\n\\n# Start server for fast AI agent access\\nuteke-serve --port 8767\\n```\\n\\n' >> release-notes.md
           printf '**Full changelog:** https://github.com/codecoradev/uteke/blob/main/CHANGELOG.md\\n' >> release-notes.md
 
@@ -420,35 +520,37 @@ jobs:
 
       - name: Extract binaries for Docker context
         run: |
-          mkdir -p binaries binaries-amd64 binaries-arm64
           cd release-artifacts
-          # download-artifact@v4 extracts artifacts into subdirectories named after the artifact.
-          # Inside each is the uploaded .tar.gz file.
-          AMD64_TGZ=$(find . -name "uteke-x86_64-unknown-linux-gnu-*.tar.gz" | head -1)
-          ARM64_TGZ=$(find . -name "uteke-aarch64-unknown-linux-gnu-*.tar.gz" | head -1)
-          if [ -z "$AMD64_TGZ" ] || [ -z "$ARM64_TGZ" ]; then
-            echo "::error::Linux tarballs not found"
-            echo "Available:" && find . -type f | head -30
+          mkdir -p binaries
+          AMD64=$(find . -name "uteke-x86_64-unknown-linux-gnu-${{ github.ref_name }}.tar.gz" | head -1)
+          ARM64=$(find . -name "uteke-aarch64-unknown-linux-gnu-${{ github.ref_name }}.tar.gz" | head -1)
+          if [ -z "$AMD64" ] || [ -z "$ARM64" ]; then
+            echo "::error::Linux binary artifacts not found"
+            echo "Available files:" && find . -type f | head -20
             exit 1
           fi
-          echo "Extracting amd64 from: $AMD64_TGZ"
-          tar xzf "$AMD64_TGZ" -C binaries-amd64
-          echo "Extracting arm64 from: $ARM64_TGZ"
-          tar xzf "$ARM64_TGZ" -C binaries-arm64
-          # Move binaries to final locations
+          # Extract amd64 → rename binaries, keep .so in amd64 subfolder
+          mkdir -p binaries-amd64
+          tar xzf "$AMD64" -C binaries-amd64
           mv binaries-amd64/uteke binaries/uteke-amd64
           mv binaries-amd64/uteke-serve binaries/uteke-serve-amd64
           mv binaries-amd64/uteke-mcp binaries/uteke-mcp-amd64
+          # Keep ORT .so files in arch-specific subfolder for Dockerfile
+          mkdir -p binaries/ort-amd64
+          cp binaries-amd64/libonnxruntime*.so* binaries/ort-amd64/ 2>/dev/null || true
+          # Extract arm64 → same pattern
+          mkdir -p binaries-arm64
+          tar xzf "$ARM64" -C binaries-arm64
           mv binaries-arm64/uteke binaries/uteke-arm64
           mv binaries-arm64/uteke-serve binaries/uteke-serve-arm64
           mv binaries-arm64/uteke-mcp binaries/uteke-mcp-arm64
-          # ORT shared libraries in arch-specific subdirs
-          mkdir -p binaries/ort-amd64 binaries/ort-arm64
-          cp binaries-amd64/libonnxruntime*.so* binaries/ort-amd64/ 2>/dev/null || true
+          mkdir -p binaries/ort-arm64
           cp binaries-arm64/libonnxruntime*.so* binaries/ort-arm64/ 2>/dev/null || true
           chmod +x binaries/uteke-* binaries/uteke-serve-* binaries/uteke-mcp-*
           echo "=== Docker context ==="
           ls -lh binaries/
+          ls -lh binaries/ort-amd64/ 2>/dev/null || true
+          ls -lh binaries/ort-arm64/ 2>/dev/null || true
 
       - name: Docker meta
         id: meta
