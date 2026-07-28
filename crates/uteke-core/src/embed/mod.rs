@@ -6,6 +6,8 @@ pub mod engine;
 pub mod fallback;
 pub mod ollama;
 pub mod openai;
+#[cfg(feature = "onnx")]
+pub mod ort_init;
 
 pub use embed_trait::Embedder;
 #[cfg(feature = "onnx")]
