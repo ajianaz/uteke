@@ -413,51 +413,42 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Download Linux binaries from build artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           pattern: uteke-*-${{ github.ref_name }}
           path: release-artifacts
-          skip-decompress: true
 
       - name: Extract binaries for Docker context
         run: |
-          mkdir -p binaries
+          mkdir -p binaries binaries-amd64 binaries-arm64
           cd release-artifacts
-          # Downloaded as raw zip files (skip-decompress=true)
-          # Extract each artifact zip, then extract the inner tar.gz
-          AMD64_ZIP=$(find . -name "uteke-x86_64-unknown-linux-gnu-${{ github.ref_name }}.zip" | head -1)
-          ARM64_ZIP=$(find . -name "uteke-aarch64-unknown-linux-gnu-${{ github.ref_name }}.zip" | head -1)
-          if [ -z "$AMD64_ZIP" ] || [ -z "$ARM64_ZIP" ]; then
-            echo "::error::Linux binary artifact zips not found"
-            echo "Available files:" && find . -type f | head -20
+          # download-artifact@v4 extracts artifacts into subdirectories named after the artifact.
+          # Inside each is the uploaded .tar.gz file.
+          AMD64_TGZ=$(find . -name "uteke-x86_64-unknown-linux-gnu-*.tar.gz" | head -1)
+          ARM64_TGZ=$(find . -name "uteke-aarch64-unknown-linux-gnu-*.tar.gz" | head -1)
+          if [ -z "$AMD64_TGZ" ] || [ -z "$ARM64_TGZ" ]; then
+            echo "::error::Linux tarballs not found"
+            echo "Available:" && find . -type f | head -30
             exit 1
           fi
-          # Extract amd64
-          mkdir -p binaries-amd64
-          unzip -o "$AMD64_ZIP" -d binaries-amd64-inner/
-          AMD64_TGZ=$(find binaries-amd64-inner -name "*.tar.gz" | head -1)
+          echo "Extracting amd64 from: $AMD64_TGZ"
           tar xzf "$AMD64_TGZ" -C binaries-amd64
+          echo "Extracting arm64 from: $ARM64_TGZ"
+          tar xzf "$ARM64_TGZ" -C binaries-arm64
+          # Move binaries to final locations
           mv binaries-amd64/uteke binaries/uteke-amd64
           mv binaries-amd64/uteke-serve binaries/uteke-serve-amd64
           mv binaries-amd64/uteke-mcp binaries/uteke-mcp-amd64
-          # Keep ORT .so files in arch-specific subfolder for Dockerfile
-          mkdir -p binaries/ort-amd64
-          cp binaries-amd64/libonnxruntime*.so* binaries/ort-amd64/ 2>/dev/null || true
-          # Extract arm64
-          mkdir -p binaries-arm64
-          unzip -o "$ARM64_ZIP" -d binaries-arm64-inner/
-          ARM64_TGZ=$(find binaries-arm64-inner -name "*.tar.gz" | head -1)
-          tar xzf "$ARM64_TGZ" -C binaries-arm64
           mv binaries-arm64/uteke binaries/uteke-arm64
           mv binaries-arm64/uteke-serve binaries/uteke-serve-arm64
           mv binaries-arm64/uteke-mcp binaries/uteke-mcp-arm64
-          mkdir -p binaries/ort-arm64
+          # ORT shared libraries in arch-specific subdirs
+          mkdir -p binaries/ort-amd64 binaries/ort-arm64
+          cp binaries-amd64/libonnxruntime*.so* binaries/ort-amd64/ 2>/dev/null || true
           cp binaries-arm64/libonnxruntime*.so* binaries/ort-arm64/ 2>/dev/null || true
           chmod +x binaries/uteke-* binaries/uteke-serve-* binaries/uteke-mcp-*
           echo "=== Docker context ==="
           ls -lh binaries/
-          ls -lh binaries/ort-amd64/ 2>/dev/null || true
-          ls -lh binaries/ort-arm64/ 2>/dev/null || true
 
       - name: Docker meta
         id: meta
