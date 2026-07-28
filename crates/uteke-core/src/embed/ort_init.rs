@@ -135,22 +135,19 @@ pub fn resolve_ort_lib() -> Result<OrtLibInfo, String> {
 
     // 4. Docker/system fallback: check standard system library paths.
     // In Docker containers, binaries are in /usr/local/bin/ but .so is in /usr/local/lib/.
-    let system_paths: &[&str] = &[
-        "/usr/local/lib",
-        "/usr/lib",
-        "/lib",
-    ];
-    for dir in system_paths {
-        let system_path = std::path::Path::new(dir).join(ORT_LIB_NAME);
-        if system_path.exists() {
-            tracing::info!(
-                "ORT: Using system library at {}",
-                system_path.display()
-            );
-            return Ok(OrtLibInfo {
-                lib_path: system_path,
-                has_avx2: avx2,
-            });
+    // On Windows, system paths are not applicable (DLLs are loaded from exe dir or PATH).
+    #[cfg(unix)]
+    {
+        let system_paths: &[&str] = &["/usr/local/lib", "/usr/lib", "/lib"];
+        for dir in system_paths {
+            let system_path = std::path::Path::new(dir).join(ORT_LIB_NAME);
+            if system_path.exists() {
+                tracing::info!("ORT: Using system library at {}", system_path.display());
+                return Ok(OrtLibInfo {
+                    lib_path: system_path,
+                    has_avx2: avx2,
+                });
+            }
         }
     }
 
@@ -163,8 +160,8 @@ pub fn resolve_ort_lib() -> Result<OrtLibInfo, String> {
 
 /// Get the directory containing the running executable.
 fn exe_dir() -> Result<PathBuf, String> {
-    let exe = std::env::current_exe()
-        .map_err(|e| format!("failed to determine executable path: {e}"))?;
+    let exe =
+        std::env::current_exe().map_err(|e| format!("failed to determine executable path: {e}"))?;
     exe.parent()
         .map(|p| p.to_path_buf())
         .ok_or_else(|| "executable path has no parent directory".into())
@@ -184,11 +181,13 @@ pub fn init_ort_environment() -> Result<OrtLibInfo, String> {
     let info = resolve_ort_lib()?;
 
     ort::init_from(&info.lib_path)
-        .map_err(|e| format!(
-            "Failed to load ONNX Runtime from '{}': {e}. \
+        .map_err(|e| {
+            format!(
+                "Failed to load ONNX Runtime from '{}': {e}. \
              Ensure the library version matches ort crate 2.0.0-rc.12.",
-            info.lib_path.display()
-        ))?
+                info.lib_path.display()
+            )
+        })?
         .commit();
 
     tracing::info!(

@@ -230,6 +230,65 @@ jobs:
           name: ${{ matrix.artifact }}-${{ steps.version.outputs.VERSION }}
           path: release/${{ matrix.artifact }}-${{ steps.version.outputs.VERSION }}.${{ matrix.ext }}
 
+  build-ort-legacy-windows:
+    name: Build legacy ORT Windows (SSE4.2, no AVX2)
+    needs: [verify-main]
+    runs-on: windows-latest
+    steps:
+      - name: Checkout onnxruntime source
+        uses: actions/checkout@v7
+        with:
+          repository: microsoft/onnxruntime
+          ref: v${{ env.ORT_VERSION }}
+          path: onnxruntime-src
+
+      - name: Setup MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Cache legacy ORT build
+        id: cache-ort
+        uses: actions/cache@v4
+        with:
+          path: onnxruntime-build/Release/onnxruntime.dll
+          key: ort-legacy-win-sse42-${{ env.ORT_VERSION }}-v1
+
+      - name: Build ONNX Runtime (SSE4.2 only)
+        if: steps.cache-ort.outputs.cache-hit != 'true'
+        shell: cmd
+        run: |
+          mkdir onnxruntime-build
+          cmake -S onnxruntime-src\cmake -B onnxruntime-build ^
+            -Donnxruntime_BUILD_SHARED_LIB=ON ^
+            -Donnxruntime_BUILD_UNIT_TESTS=OFF ^
+            -Donnxruntime_ENABLE_PYTHON=OFF ^
+            -Donnxruntime_ENABLE_CPUINFO=OFF ^
+            -Donnxruntime_USE_AVX=OFF ^
+            -Donnxruntime_USE_AVX2=OFF ^
+            -Donnxruntime_USE_AVX512=OFF ^
+            -Donnxruntime_BUILD_BENCHMARKS=OFF ^
+            -Donnxruntime_BUILD_OBJC=OFF ^
+            -Donnxruntime_BUILD_CSHARP=OFF ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_INSTALL_PREFIX=onnxruntime-install
+          cmake --build onnxruntime-build --config Release --parallel %NUMBER_OF_PROCESSORS%
+
+      - name: Package legacy ORT
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path ort-legacy
+          Copy-Item "onnxruntime-build\Release\onnxruntime*.dll" ort-legacy/ -ErrorAction SilentlyContinue
+          if (-not (Test-Path "ort-legacy\onnxruntime.dll")) {
+            # Try x64 output dir
+            Copy-Item "onnxruntime-build\x64\Release\onnxruntime*.dll" ort-legacy/ -ErrorAction SilentlyContinue
+          }
+          Get-ChildItem ort-legacy/ | Format-Table Name, Length
+
+      - name: Upload legacy ORT artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ort-legacy-windows-x64
+          path: ort-legacy/
+
   publish-crates:
     name: Publish to crates.io
     needs: [verify-main]
@@ -302,9 +361,55 @@ jobs:
           name: uteke-x86_64-unknown-linux-gnu-legacy-${{ steps.version.outputs.VERSION }}
           path: legacy-release/uteke-x86_64-unknown-linux-gnu-legacy-${{ steps.version.outputs.VERSION }}.tar.gz
 
+  package-legacy-windows:
+    name: Package Windows x64 legacy bundle
+    needs: [build-release, build-ort-legacy-windows]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Extract version
+        id: version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Download standard Windows x64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: uteke-x86_64-pc-windows-msvc-${{ steps.version.outputs.VERSION }}
+          path: standard-artifact
+
+      - name: Download legacy ORT artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ort-legacy-windows-x64
+          path: ort-legacy
+
+      - name: Create legacy bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path legacy-release
+          Expand-Archive "standard-artifact\uteke-x86_64-pc-windows-msvc-${{ steps.version.outputs.VERSION }}.zip" -DestinationPath legacy-release -Force
+          # Add legacy ORT DLLs in ort-legacy subdirectory
+          New-Item -ItemType Directory -Force -Path legacy-release\ort-legacy
+          Copy-Item "ort-legacy\*.dll" legacy-release\ort-legacy\ -ErrorAction SilentlyContinue
+          Write-Host "Standard ORT libs:"
+          Get-ChildItem legacy-release\onnxruntime*.dll -ErrorAction SilentlyContinue
+          Write-Host "Legacy ORT libs:"
+          Get-ChildItem legacy-release\ort-legacy\
+          Write-Host "`nFull bundle contents:"
+          Get-ChildItem legacy-release\
+          7z a "uteke-x86_64-pc-windows-msvc-legacy-${{ steps.version.outputs.VERSION }}.zip" legacy-release\*
+
+      - name: Upload legacy artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: uteke-x86_64-pc-windows-msvc-legacy-${{ steps.version.outputs.VERSION }}
+          path: uteke-x86_64-pc-windows-msvc-legacy-${{ steps.version.outputs.VERSION }}.zip
+
   release:
     name: Create GitHub Release
-    needs: [build-release, package-legacy]
+    needs: [build-release, package-legacy, package-legacy-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -356,8 +461,9 @@ jobs:
           printf '| Linux (x86_64, legacy) | `uteke-x86_64-unknown-linux-gnu-legacy-%s.tar.gz` |\\n' "${VER}" >> release-notes.md
           printf '| Linux (ARM64) | `uteke-aarch64-unknown-linux-gnu-%s.tar.gz` |\\n' "${VER}" >> release-notes.md
           printf '| macOS (Apple Silicon) | `uteke-aarch64-apple-darwin-%s.tar.gz` |\\n' "${VER}" >> release-notes.md
-          printf '| Windows (x86_64) | `uteke-x86_64-pc-windows-msvc-%s.zip` |\\n\\n' "${VER}" >> release-notes.md
-          printf '### 🖥️ Linux Legacy Bundle\\n\\nThe **legacy** bundle includes a SSE4.2-only ONNX Runtime sidecar (`ort-legacy/`). Use this on older CPUs without AVX2 support (e.g., Intel Celeron J4125/N4020) to avoid SIGILL crashes.\\n\\n' >> release-notes.md
+          printf '| Windows (x86_64) | `uteke-x86_64-pc-windows-msvc-%s.zip` |\\n' "${VER}" >> release-notes.md
+          printf '| Windows (x86_64, legacy) | `uteke-x86_64-pc-windows-msvc-legacy-%s.zip` |\\n\\n' "${VER}" >> release-notes.md
+          printf '### 🖥️ Legacy Bundles (Linux + Windows)\\n\\nThe **legacy** bundles include a SSE4.2-only ONNX Runtime sidecar (`ort-legacy/`). Use these on older CPUs without AVX2 support (e.g., Intel Celeron J4125/N4020) to avoid SIGILL crashes.\\n\\n' >> release-notes.md
           printf '### 🚀 Quick Start\\n\\n```bash\\n# Quick install (Linux / macOS)\\ncurl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh | sh\\n\\n# Pin a specific version\\nUTEKE_VERSION=%s curl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh | sh\\n\\n# Store a memory\\nuteke remember "Important context" --tags project\\n\\n# Recall by meaning\\nuteke recall "what was that context?"\\n\\n# Start server for fast AI agent access\\nuteke-serve --port 8767\\n```\\n\\n' >> release-notes.md
           printf '**Full changelog:** https://github.com/codecoradev/uteke/blob/main/CHANGELOG.md\\n' >> release-notes.md
 
