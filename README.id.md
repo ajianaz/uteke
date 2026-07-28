@@ -83,7 +83,7 @@ Wizard-nya akan:
 2. **Tanya** AI agent apa yang kamu pakai (Hermes, Claude, Cursor, Pi, OpenCode)
 3. **Pilih** mode integrasi — manual tool calls vs automatic memory-provider
 4. **Toggle** fitur on/off (Aging, Auto-maintenance, Graph rerank, Salience/Recency boost, Server mode)
-5. **Tulis** `~/.uteke/uteke.toml` dengan pilihan kamu
+5. **Tulis** `~/.codecora/uteke/uteke.toml` dengan pilihan kamu
 6. **Install** file integrasi agent otomatis (`uteke init`)
 7. **Tunjukkan** semua command uteke, dikelompokkan per kategori
 
@@ -274,7 +274,7 @@ Bisa. Uteke punya MCP server yang langsung pakai dengan Claude Code, Cursor, dan
 <details>
 <summary><strong>Sudah production-ready?</strong></summary>
 
-Uteke sekarang v0.7.2 dengan 206 test, CI/CD di setiap commit, dan benchmark harness. Dipakai production oleh tim CodeCora dan early adopter lain. Masih di versi 0.x — mungkin ada rough edges, tapi core-nya udah stabil.
+Uteke sekarang v0.10.2 dengan 431 test, CI/CD di setiap commit, dan benchmark harness. Dipakai production oleh tim CodeCora dan early adopter lain. Masih di versi 0.x — mungkin ada rough edges, tapi core-nya udah stabil.
 </details>
 
 ---
@@ -283,7 +283,7 @@ Uteke sekarang v0.7.2 dengan 206 test, CI/CD di setiap commit, dan benchmark har
 
 ```bash
 cargo build --workspace        # Build
-cargo test --workspace         # Test (206 test)
+cargo test --workspace         # Test (431 test)
 cargo clippy -- -D warnings    # Lint
 cargo fmt                      # Format
 ```
