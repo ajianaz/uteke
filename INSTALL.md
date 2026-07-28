@@ -55,7 +55,7 @@ curl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh |
 Pin a specific version with `UTEKE_VERSION`:
 
 ```bash
-UTEKE_VERSION=v0.0.7 curl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh | sh
+UTEKE_VERSION=v0.10.2 curl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh | sh
 ```
 
 ### Windows Setup
@@ -114,7 +114,7 @@ Model cached at:
 ## Verify Installation
 
 ```bash
-uteke --version        # Should show "uteke 0.0.2"
+uteke --version        # Should show "uteke 0.10.2"
 uteke stats            # Should show store statistics
 
 # Quick smoke test

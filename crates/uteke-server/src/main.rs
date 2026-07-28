@@ -3,6 +3,8 @@
 //! Keeps the embedding model loaded in RAM for <50ms recall.
 //! Usage: `uteke-serve [--port 8767] [--host 127.0.0.1] [--auth-token <TOKEN>]`
 
+#[cfg(feature = "docgen")]
+mod api_registry;
 mod context;
 mod handlers;
 mod types;
@@ -141,7 +143,9 @@ fn main() {
                 println!(
                     "  GET  /room/memories       → ?room_id=<id>[&author=&limit=] → chronological memories"
                 );
-                println!("  POST /room/recall          → {{ room_id, query }} → ranked memories");
+                println!(
+                    "  POST /room/recall          → {{ room_id, query? }} → ranked memories (query optional, falls back to chronological)"
+                );
                 println!("  POST /room/summary         → {{ room_id }} → {{ summary }}");
                 println!("  POST /room/document        → {{ room_id }} → {{ document }}");
                 println!("  POST /room/stats           → {{ room_id }} → room stats");

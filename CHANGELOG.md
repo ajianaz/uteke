@@ -1,4 +1,23 @@
-## [Unreleased]
+## [0.10.2] — 2026-07-28
+
+### Fixed
+- **SIGILL on CPUs without AVX2 (#709)** — Runtime CPU feature detection now dynamically selects between AVX2 and SSE4.2 ONNX Runtime shared libraries. CI builds a legacy SSE4.2-only ORT sidecar for both Linux and Windows. Use the `*-legacy*` release bundles on older CPUs (e.g., Intel Celeron J4125/N4020).
+- **`POST /room/remember` returned 500 for invalid memory types (#789)** — Validation errors now correctly return HTTP 400 instead of 500.
+- **Room operations counted deprecated memories (#784)** — `room_stats()`, `recall_room()`, and `get_room_memory_ids()` now filter `deprecated = 0`. Previously caused 76% stat inflation (620 vs 148 active).
+- **`POST /room/recall` required query parameter (#785)** — `query` is now `Option<String>` with `#[serde(default)]`. Empty/missing query falls back to chronological recall instead of returning 400.
+- **`DELETE /forget` rejected short ID prefixes (#794)** — `list` and `room_recall` display 8-char ID prefixes, but `forget` required full UUIDs. Now resolves short prefixes via SQL `LIKE` with ambiguous-match detection (400 if >1 match).
+
+### Changed
+- **ORT loading switched from `download-binaries` to `load-dynamic`** — ORT shared library is now loaded at runtime via `dlopen`/`LoadLibrary` instead of being statically linked. Release bundles now include the ORT `.so`/`.dylib`/`.dll` as sidecar files.
+
+### Added
+- **Auto-generated API reference docs (#786)** — New `crates/docgen` binary reads route registry + `schemars::JsonSchema` derives to generate `docs/api-reference.md`. CI `docs-check` job fails if docs are stale. Feature-gated behind `docgen` flag — zero runtime overhead.
+
+### Security
+- **Bump quinn-proto 0.11.14 → 0.11.15 (GHSA-4w2j-m93h-cj5j)** — Dependency patch for HTTP/3 stream injection vulnerability.
+
+### Docs
+- **Hermes integration docs updated** — Fixed incorrect `room_remember` example (was using `remember` with `room_id` which is not supported by `/remember` endpoint). Added `room_document` action. Added "Valid Memory Types" section. Added "HTTP API Notes" section documenting POST-with-body pattern and known issues (#784, #785, #786).
 
 ## [0.10.1] — 2026-07-24
 

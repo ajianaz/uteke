@@ -225,6 +225,9 @@ impl super::Store {
     }
 
     /// Get statistics about a room.
+    ///
+    /// Only counts active (non-deprecated) memories — matches the behavior of
+    /// `recall_room` and `room_summary` which also filter `deprecated = 0` (#784).
     pub fn room_stats(&self, room_id: &str) -> Result<Option<RoomStats>, Error> {
         let room = match self.get_room(room_id)? {
             Some(r) => r,
@@ -234,16 +237,22 @@ impl super::Store {
         let memory_count: usize =
             self.conn
                 .query_row(
-                    "SELECT COUNT(DISTINCT memory_id) FROM room_memories WHERE room_id = ?1",
+                    "SELECT COUNT(DISTINCT rm.memory_id) FROM room_memories rm \
+                     INNER JOIN memories m ON rm.memory_id = m.id \
+                     WHERE rm.room_id = ?1 AND m.deprecated = 0",
                     params![room_id],
                     |row| row.get::<_, i64>(0),
                 )
                 .map_err(|e| Error::db("room memory count", e))? as usize;
 
-        // Get distinct authors as participants
+        // Get distinct authors as participants (only for active memories)
         let mut stmt = self
             .conn
-            .prepare("SELECT DISTINCT author FROM room_memories WHERE room_id = ?1 ORDER BY author")
+            .prepare(
+                "SELECT DISTINCT rm.author FROM room_memories rm \
+                 INNER JOIN memories m ON rm.memory_id = m.id \
+                 WHERE rm.room_id = ?1 AND m.deprecated = 0 ORDER BY rm.author",
+            )
             .map_err(|e| Error::db("room participants", e))?;
         let participants: Vec<String> = stmt
             .query_map(params![room_id], |row| row.get(0))
@@ -254,7 +263,9 @@ impl super::Store {
         let last_activity: Option<String> = self
             .conn
             .query_row(
-                "SELECT MAX(joined_at) FROM room_memories WHERE room_id = ?1",
+                "SELECT MAX(rm.joined_at) FROM room_memories rm \
+                 INNER JOIN memories m ON rm.memory_id = m.id \
+                 WHERE rm.room_id = ?1 AND m.deprecated = 0",
                 params![room_id],
                 |row| row.get(0),
             )
@@ -303,6 +314,7 @@ impl super::Store {
 
     /// Recall all memories linked to a room, sorted by time.
     /// Cross-namespace: returns memories from ALL namespaces that contributed to the room.
+    /// Only returns active (non-deprecated) memories (#784).
     pub fn recall_room(
         &self,
         room_id: &str,
@@ -319,7 +331,7 @@ impl super::Store {
                  m.slug, m.source, m.source_type \
                  FROM memories m \
                  INNER JOIN room_memories rm ON m.id = rm.memory_id \
-                 WHERE rm.room_id = ?1 AND rm.author = ?2 \
+                 WHERE rm.room_id = ?1 AND rm.author = ?2 AND m.deprecated = 0 \
                  ORDER BY rm.joined_at ASC \
                  LIMIT ?3"
             }
@@ -330,7 +342,7 @@ impl super::Store {
                  m.slug, m.source, m.source_type \
                  FROM memories m \
                  INNER JOIN room_memories rm ON m.id = rm.memory_id \
-                 WHERE rm.room_id = ?1 AND rm.author = ?2 \
+                 WHERE rm.room_id = ?1 AND rm.author = ?2 AND m.deprecated = 0 \
                  ORDER BY rm.joined_at ASC"
             }
             (None, false) => {
@@ -340,7 +352,7 @@ impl super::Store {
                  m.slug, m.source, m.source_type \
                  FROM memories m \
                  INNER JOIN room_memories rm ON m.id = rm.memory_id \
-                 WHERE rm.room_id = ?1 \
+                 WHERE rm.room_id = ?1 AND m.deprecated = 0 \
                  ORDER BY rm.joined_at ASC \
                  LIMIT ?2"
             }
@@ -351,7 +363,7 @@ impl super::Store {
                  m.slug, m.source, m.source_type \
                  FROM memories m \
                  INNER JOIN room_memories rm ON m.id = rm.memory_id \
-                 WHERE rm.room_id = ?1 \
+                 WHERE rm.room_id = ?1 AND m.deprecated = 0 \
                  ORDER BY rm.joined_at ASC"
             }
         };
@@ -413,14 +425,23 @@ impl super::Store {
     /// Get memory IDs linked to a room.
     /// Returns just the IDs — much cheaper than full recall when only
     /// filtering is needed.
+    /// Only returns IDs of active (non-deprecated) memories (#784).
     pub fn get_room_memory_ids(
         &self,
         room_id: &str,
         author: Option<&str>,
     ) -> Result<Vec<String>, Error> {
         let sql = match author {
-            Some(_) => "SELECT memory_id FROM room_memories WHERE room_id = ?1 AND author = ?2",
-            None => "SELECT memory_id FROM room_memories WHERE room_id = ?1",
+            Some(_) => {
+                "SELECT rm.memory_id FROM room_memories rm \
+                          INNER JOIN memories m ON rm.memory_id = m.id \
+                          WHERE rm.room_id = ?1 AND rm.author = ?2 AND m.deprecated = 0"
+            }
+            None => {
+                "SELECT rm.memory_id FROM room_memories rm \
+                     INNER JOIN memories m ON rm.memory_id = m.id \
+                     WHERE rm.room_id = ?1 AND m.deprecated = 0"
+            }
         };
 
         let mut stmt = self
@@ -1314,6 +1335,50 @@ mod tests {
     }
 
     #[test]
+    fn recall_room_excludes_deprecated_memories() {
+        let store = Store::open(":memory:").unwrap();
+        store.create_room("dep-recall", None, "default").unwrap();
+
+        let m1 = make_test_memory("mem-rd1", "active memory", &[]);
+        let mut m2 = make_test_memory("mem-rd2", "deprecated memory", &[]);
+        m2.deprecated = true;
+        store.insert(&m1).unwrap();
+        store.insert(&m2).unwrap();
+        store
+            .link_memory_to_room("dep-recall", "mem-rd1", "alice", "participant")
+            .unwrap();
+        store
+            .link_memory_to_room("dep-recall", "mem-rd2", "bob", "participant")
+            .unwrap();
+
+        let mems = store.recall_room("dep-recall", None, 0).unwrap();
+        assert_eq!(mems.len(), 1, "deprecated memory should be excluded");
+        assert_eq!(mems[0].id, "mem-rd1");
+    }
+
+    #[test]
+    fn get_room_memory_ids_excludes_deprecated() {
+        let store = Store::open(":memory:").unwrap();
+        store.create_room("dep-ids", None, "default").unwrap();
+
+        let m1 = make_test_memory("mem-gid1", "active", &[]);
+        let mut m2 = make_test_memory("mem-gid2", "deprecated", &[]);
+        m2.deprecated = true;
+        store.insert(&m1).unwrap();
+        store.insert(&m2).unwrap();
+        store
+            .link_memory_to_room("dep-ids", "mem-gid1", "alice", "participant")
+            .unwrap();
+        store
+            .link_memory_to_room("dep-ids", "mem-gid2", "alice", "participant")
+            .unwrap();
+
+        let ids = store.get_room_memory_ids("dep-ids", None).unwrap();
+        assert_eq!(ids.len(), 1, "deprecated memory ID should be excluded");
+        assert_eq!(ids[0], "mem-gid1");
+    }
+
+    #[test]
     fn get_room_memory_ids_with_author() {
         let store = Store::open(":memory:").unwrap();
         store.create_room("ids-auth", None, "default").unwrap();
@@ -1385,6 +1450,35 @@ mod tests {
         let store = Store::open(":memory:").unwrap();
         let stats = store.room_stats("nope").unwrap();
         assert!(stats.is_none());
+    }
+
+    #[test]
+    fn room_stats_excludes_deprecated_memories() {
+        let store = Store::open(":memory:").unwrap();
+        store
+            .create_room("dep-stats", Some("Deprecated Stats"), "default")
+            .unwrap();
+
+        let m1 = make_test_memory("mem-d1", "active", &[]);
+        let mut m2 = make_test_memory("mem-d2", "deprecated", &[]);
+        m2.deprecated = true;
+        store.insert(&m1).unwrap();
+        store.insert(&m2).unwrap();
+        store
+            .link_memory_to_room("dep-stats", "mem-d1", "alice", "participant")
+            .unwrap();
+        store
+            .link_memory_to_room("dep-stats", "mem-d2", "bob", "participant")
+            .unwrap();
+
+        let stats = store.room_stats("dep-stats").unwrap().unwrap();
+        assert_eq!(stats.memory_count, 1, "deprecated memory should not count");
+        assert_eq!(
+            stats.participant_count, 1,
+            "only alice (author of active memory) should appear"
+        );
+        assert!(stats.participants.contains(&"alice".to_string()));
+        assert!(!stats.participants.contains(&"bob".to_string()));
     }
 
     // ── room_summary ────────────────────────────────────────────

@@ -431,17 +431,36 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                 .collect();
 
             if let Some(id) = params.get("id") {
-                // Validate UUID format
-                if uuid::Uuid::parse_str(id).is_err() {
-                    return ctx.error_response_for(req, 400, format!("Invalid UUID format: {id}"));
-                }
+                // Accept full UUID or short ID prefix (#794).
+                // `list` and `room_recall` display only 8-char prefixes, so
+                // `forget` must resolve them back to full UUIDs.
+                let resolved_id = if uuid::Uuid::parse_str(id).is_ok() {
+                    id.clone()
+                } else {
+                    match uteke.resolve_id_prefix(id) {
+                        Ok(Some(full)) => full,
+                        Ok(None) => {
+                            return ctx.error_response_for(
+                                req,
+                                404,
+                                format!("Memory not found: {id}"),
+                            );
+                        }
+                        Err(e) => {
+                            error!("Resolve error: {e}");
+                            return ctx.error_response_for(req, 400, e.to_string());
+                        }
+                    }
+                };
                 // Check existence before deleting (#762) — forget() silently
                 // returns Ok(()) even when the ID doesn't exist.
-                if uteke.get_by_id(id).ok().flatten().is_none() {
+                if uteke.get_by_id(&resolved_id).ok().flatten().is_none() {
                     return ctx.error_response_for(req, 404, format!("Memory not found: {id}"));
                 }
-                match uteke.forget(id) {
-                    Ok(()) => ctx.ok_response_for(req, &serde_json::json!({"forgotten": id})),
+                match uteke.forget(&resolved_id) {
+                    Ok(()) => {
+                        ctx.ok_response_for(req, &serde_json::json!({"forgotten": resolved_id}))
+                    }
                     Err(e) => {
                         error!("Internal error: {e}");
                         ctx.error_response_for(req, 500, "Internal server error")
@@ -960,33 +979,43 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
             }
         }
 
-        // ── Room Recall (semantic — requires non-empty query) ─────────────
+        // ── Room Recall (semantic with optional fallback to chronological) ──
         (Method::Post, "/room/recall") => match read_body::<RoomRecallRequest>(req.as_reader()) {
             Ok(req_data) => {
-                if req_data.query.trim().is_empty() {
-                    return ctx.error_response_for(
-                        req,
-                        400,
-                        "Empty query is not allowed. Use GET /room/memories for chronological listing.",
+                let query = req_data.query.as_deref().unwrap_or("").trim();
+                if query.is_empty() {
+                    // No query provided — fall back to chronological recall (#785)
+                    match uteke.recall_room(
+                        &req_data.room_id,
+                        req_data.author.as_deref(),
+                        req_data.limit,
+                    ) {
+                        Ok(memories) => ctx.ok_response_for(req, &memories),
+                        Err(e) => {
+                            error!("Internal error: {e}");
+                            ctx.error_response_for(req, 500, "Internal server error")
+                        }
+                    }
+                } else {
+                    // Semantic recall with query
+                    let min_score = req_data.min_score.unwrap_or(
+                        ctx.recall_config
+                            .as_ref()
+                            .and_then(|r| r.min_score)
+                            .unwrap_or(DEFAULT_MIN_SCORE as f64) as f32,
                     );
-                }
-                let min_score = req_data.min_score.unwrap_or(
-                    ctx.recall_config
-                        .as_ref()
-                        .and_then(|r| r.min_score)
-                        .unwrap_or(DEFAULT_MIN_SCORE as f64) as f32,
-                );
-                match uteke.recall_room_semantic(
-                    &req_data.room_id,
-                    &req_data.query,
-                    req_data.limit,
-                    req_data.author.as_deref(),
-                    min_score,
-                ) {
-                    Ok(results) => ctx.ok_response_for(req, &results),
-                    Err(e) => {
-                        error!("Internal error: {e}");
-                        ctx.error_response_for(req, 500, "Internal server error")
+                    match uteke.recall_room_semantic(
+                        &req_data.room_id,
+                        query,
+                        req_data.limit,
+                        req_data.author.as_deref(),
+                        min_score,
+                    ) {
+                        Ok(results) => ctx.ok_response_for(req, &results),
+                        Err(e) => {
+                            error!("Internal error: {e}");
+                            ctx.error_response_for(req, 500, "Internal server error")
+                        }
                     }
                 }
             }
@@ -1055,7 +1084,11 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                         ),
                         Err(e) => {
                             error!("room/remember error: {e}");
-                            ctx.error_response_for(req, 500, "Internal server error")
+                            let status = match e {
+                                uteke_core::Error::Validation(_) => 400,
+                                _ => 500,
+                            };
+                            ctx.error_response_for(req, status, e.to_string())
                         }
                     }
                 }

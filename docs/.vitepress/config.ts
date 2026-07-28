@@ -40,6 +40,7 @@ export default createConfig({
       text: 'Reference',
       items: [
         { text: 'CLI Reference', link: '/cli-reference' },
+        { text: 'HTTP API Reference', link: '/api-reference' },
         { text: 'Comparison', link: '/comparison' },
         { text: 'Architecture', link: '/architecture' },
         { text: 'Hermes Integration', link: '/integrations/hermes' },
