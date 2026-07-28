@@ -520,17 +520,16 @@ jobs:
 
       - name: Extract binaries for Docker context
         run: |
-          cd release-artifacts
-          mkdir -p binaries
-          AMD64=$(find . -name "uteke-x86_64-unknown-linux-gnu-${{ github.ref_name }}.tar.gz" | head -1)
-          ARM64=$(find . -name "uteke-aarch64-unknown-linux-gnu-${{ github.ref_name }}.tar.gz" | head -1)
+          # binaries/ MUST be at workspace root — Dockerfile copies it: COPY binaries/ ./
+          mkdir -p binaries binaries-amd64 binaries-arm64
+          AMD64=$(find release-artifacts -name "uteke-x86_64-unknown-linux-gnu-${{ github.ref_name }}.tar.gz" | head -1)
+          ARM64=$(find release-artifacts -name "uteke-aarch64-unknown-linux-gnu-${{ github.ref_name }}.tar.gz" | head -1)
           if [ -z "$AMD64" ] || [ -z "$ARM64" ]; then
             echo "::error::Linux binary artifacts not found"
-            echo "Available files:" && find . -type f | head -20
+            echo "Available files:" && find release-artifacts -type f | head -20
             exit 1
           fi
           # Extract amd64 → rename binaries, keep .so in amd64 subfolder
-          mkdir -p binaries-amd64
           tar xzf "$AMD64" -C binaries-amd64
           mv binaries-amd64/uteke binaries/uteke-amd64
           mv binaries-amd64/uteke-serve binaries/uteke-serve-amd64
@@ -539,7 +538,6 @@ jobs:
           mkdir -p binaries/ort-amd64
           cp binaries-amd64/libonnxruntime*.so* binaries/ort-amd64/ 2>/dev/null || true
           # Extract arm64 → same pattern
-          mkdir -p binaries-arm64
           tar xzf "$ARM64" -C binaries-arm64
           mv binaries-arm64/uteke binaries/uteke-arm64
           mv binaries-arm64/uteke-serve binaries/uteke-serve-arm64
