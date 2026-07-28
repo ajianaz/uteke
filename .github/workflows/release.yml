@@ -520,8 +520,8 @@ jobs:
 
       - name: Extract binaries for Docker context
         run: |
-          mkdir -p binaries
           cd release-artifacts
+          mkdir -p binaries
           AMD64=$(find . -name "uteke-x86_64-unknown-linux-gnu-${{ github.ref_name }}.tar.gz" | head -1)
           ARM64=$(find . -name "uteke-aarch64-unknown-linux-gnu-${{ github.ref_name }}.tar.gz" | head -1)
           if [ -z "$AMD64" ] || [ -z "$ARM64" ]; then
