@@ -269,7 +269,8 @@ jobs:
             -Donnxruntime_BUILD_OBJC=OFF ^
             -Donnxruntime_BUILD_CSHARP=OFF ^
             -DCMAKE_BUILD_TYPE=Release ^
-            -DCMAKE_INSTALL_PREFIX=onnxruntime-install
+            -DCMAKE_INSTALL_PREFIX=onnxruntime-install ^
+            "-DCMAKE_CXX_FLAGS=/wd4875"
           cmake --build onnxruntime-build --config Release --parallel %NUMBER_OF_PROCESSORS%
 
       - name: Package legacy ORT
@@ -516,7 +517,6 @@ jobs:
         with:
           pattern: uteke-*-${{ github.ref_name }}
           path: release-artifacts
-          merge-multiple: true
 
       - name: Extract binaries for Docker context
         run: |
