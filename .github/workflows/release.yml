@@ -16,6 +16,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ORT_VERSION: "1.24.4"
 
 jobs:
   verify-main:
@@ -41,6 +42,64 @@ jobs:
             echo "Merge develop → main via PR before tagging."
             exit 1
           fi
+
+  build-ort-legacy:
+    name: Build legacy ORT (SSE4.2, no AVX2)
+    needs: [verify-main]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout onnxruntime source
+        uses: actions/checkout@v7
+        with:
+          repository: microsoft/onnxruntime
+          ref: v${{ env.ORT_VERSION }}
+          path: onnxruntime-src
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential python3
+
+      - name: Cache legacy ORT build
+        id: cache-ort
+        uses: actions/cache@v4
+        with:
+          path: onnxruntime-build/lib/libonnxruntime.so*
+          key: ort-legacy-sse42-${{ env.ORT_VERSION }}-v1
+
+      - name: Build ONNX Runtime (SSE4.2 only)
+        if: steps.cache-ort.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p onnxruntime-build
+          cmake -S onnxruntime-src/cmake -B onnxruntime-build \
+            -Donnxruntime_BUILD_SHARED_LIB=ON \
+            -Donnxruntime_BUILD_UNIT_TESTS=OFF \
+            -Donnxruntime_ENABLE_PYTHON=OFF \
+            -Donnxruntime_ENABLE_CPUINFO=OFF \
+            -Donnxruntime_USE_AVX=OFF \
+            -Donnxruntime_USE_AVX2=OFF \
+            -Donnxruntime_USE_AVX512=OFF \
+            -Donnxruntime_BUILD_BENCHMARKS=OFF \
+            -Donnxruntime_BUILD_OBJC=OFF \
+            -Donnxruntime_BUILD_CSHARP=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=onnxruntime-install
+
+          cmake --build onnxruntime-build --config Release --parallel $(nproc)
+
+      - name: Package legacy ORT
+        run: |
+          mkdir -p ort-legacy
+          cp onnxruntime-build/lib/libonnxruntime.so* ort-legacy/ || true
+          # Also look for the sonamed lib
+          find onnxruntime-build -name 'libonnxruntime.so*' -type f -exec cp {} ort-legacy/ \;
+          ls -lh ort-legacy/
+
+      - name: Upload legacy ORT artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ort-legacy-linux-x64
+          path: ort-legacy/
 
   build-release:
     name: Build ${{ matrix.target }}
@@ -78,6 +137,43 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Download prebuilt ORT shared library
+        shell: bash
+        run: |
+          ORT_VER="${ORT_VERSION}"
+          case "${{ runner.os }}" in
+            Linux)
+              if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
+                ORT_PKG="onnxruntime-linux-x64-${ORT_VER}.tgz"
+              else
+                ORT_PKG="onnxruntime-linux-aarch64-${ORT_VER}.tgz"
+              fi
+              curl -sL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/${ORT_PKG}" | tar xz
+              mkdir -p ort-lib
+              # Copy actual .so files AND symlinks (needed for dlopen)
+              find onnxruntime-*/lib -name 'libonnxruntime.so*' \( -type f -o -type l \) -exec cp -a {} ort-lib/ \;
+              find onnxruntime-*/lib -name 'libonnxruntime_providers_shared.so*' \( -type f -o -type l \) -exec cp -a {} ort-lib/ \;
+              echo "ORT_LIB_DIR=ort-lib" >> $GITHUB_ENV
+              ;;
+            macOS)
+              ORT_PKG="onnxruntime-osx-arm64-${ORT_VER}.tgz"
+              curl -sL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/${ORT_PKG}" | tar xz
+              mkdir -p ort-lib
+              find onnxruntime-*/lib -name 'libonnxruntime*.dylib' \( -type f -o -type l \) -exec cp -a {} ort-lib/ \;
+              echo "ORT_LIB_DIR=ort-lib" >> $GITHUB_ENV
+              ;;
+            Windows)
+              ORT_PKG="onnxruntime-win-x64-${ORT_VER}.zip"
+              curl -sL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/${ORT_PKG}" -o ort.zip
+              mkdir -p ort-lib
+              unzip -j ort.zip 'onnxruntime-win-x64-*/lib/*.dll' -d ort-lib/ 2>/dev/null || true
+              unzip -j ort.zip 'onnxruntime-win-x64-*/lib/*.lib' -d ort-lib/ 2>/dev/null || true
+              echo "ORT_LIB_DIR=ort-lib" >> $GITHUB_ENV
+              ;;
+          esac
+          echo "Downloaded ORT libraries:"
+          ls -lh "${ORT_LIB_DIR:-ort-lib}/" || true
+
       - name: Build release binaries
         run: cargo build --release --target ${{ matrix.target }} -p uteke-cli -p uteke-server -p uteke-mcp
 
@@ -100,19 +196,33 @@ jobs:
           cp target/${{ matrix.target }}/release/uteke release/uteke
           cp target/${{ matrix.target }}/release/uteke-serve release/uteke-serve
           cp target/${{ matrix.target }}/release/uteke-mcp release/uteke-mcp
+          # Include ORT shared library
+          if [ -d "${ORT_LIB_DIR}" ]; then
+            cp -r "${ORT_LIB_DIR}"/* release/
+            echo "✅ ORT libraries included in package"
+          else
+            echo "⚠️ No ORT libraries found"
+          fi
           cd release
-          tar czf "${{ matrix.artifact }}-${{ steps.version.outputs.VERSION }}.${{ matrix.ext }}" uteke uteke-serve uteke-mcp
+          tar czf "${{ matrix.artifact }}-${{ steps.version.outputs.VERSION }}.${{ matrix.ext }}" *
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           mkdir release
-          cp target/${{ matrix.target }}/release/uteke.exe release/uteke.exe
-          cp target/${{ matrix.target }}/release/uteke-serve.exe release/uteke-serve.exe
-          cp target/${{ matrix.target }}/release/uteke-mcp.exe release/uteke-mcp.exe
+          Copy-Item "target/${{ matrix.target }}/release/uteke.exe" release/
+          Copy-Item "target/${{ matrix.target }}/release/uteke-serve.exe" release/
+          Copy-Item "target/${{ matrix.target }}/release/uteke-mcp.exe" release/
+          # Include ORT DLLs
+          if (Test-Path $env:ORT_LIB_DIR) {
+            Copy-Item "$env:ORT_LIB_DIR/*" release/
+            Write-Host "✅ ORT libraries included in package"
+          } else {
+            Write-Host "⚠️ No ORT libraries found"
+          }
           cd release
-          7z a "${{ matrix.artifact }}-${{ steps.version.outputs.VERSION }}.${{ matrix.ext }}" uteke.exe uteke-serve.exe uteke-mcp.exe
+          7z a "${{ matrix.artifact }}-${{ steps.version.outputs.VERSION }}.${{ matrix.ext }}" *
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -145,15 +255,66 @@ jobs:
         run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} -p uteke-server --allow-dirty
         continue-on-error: true
 
+  package-legacy:
+    name: Package Linux x64 legacy bundle
+    needs: [build-release, build-ort-legacy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Download standard Linux x64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: uteke-x86_64-unknown-linux-gnu-${{ steps.version.outputs.VERSION }}
+          path: standard-artifact
+
+      - name: Download legacy ORT artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ort-legacy-linux-x64
+          path: ort-legacy
+
+      - name: Create legacy bundle
+        run: |
+          mkdir -p legacy-release
+          tar xzf standard-artifact/uteke-x86_64-unknown-linux-gnu-${{ steps.version.outputs.VERSION }}.tar.gz -C legacy-release/
+          # Replace standard ORT with legacy ORT in ort-legacy/ subdirectory
+          mkdir -p legacy-release/ort-legacy
+          cp ort-legacy/libonnxruntime.so* legacy-release/ort-legacy/
+          # Verify
+          echo "Standard ORT libs:"
+          ls -lh legacy-release/libonnxruntime.so* 2>/dev/null || echo "  (none at root)"
+          echo "Legacy ORT libs:"
+          ls -lh legacy-release/ort-legacy/
+          echo ""
+          echo "Full bundle contents:"
+          ls -lh legacy-release/
+          cd legacy-release
+          tar czf "uteke-x86_64-unknown-linux-gnu-legacy-${{ steps.version.outputs.VERSION }}.tar.gz" *
+
+      - name: Upload legacy artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: uteke-x86_64-unknown-linux-gnu-legacy-${{ steps.version.outputs.VERSION }}
+          path: legacy-release/uteke-x86_64-unknown-linux-gnu-legacy-${{ steps.version.outputs.VERSION }}.tar.gz
+
   release:
     name: Create GitHub Release
-    needs: [build-release]
+    needs: [build-release, package-legacy]
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
       - uses: actions/checkout@v7
+
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -169,10 +330,6 @@ jobs:
           cd release-artifacts
           sha256sum * > checksums-sha256.txt
           cat checksums-sha256.txt
-
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Extract changelog for this version
         id: changelog
@@ -193,14 +350,16 @@ jobs:
           echo "" >> release-notes.md
           cat changelog-body.md >> release-notes.md
           echo "" >> release-notes.md
-          printf '### 📦 Binaries\n\nEach archive contains **three binaries**:\n- `uteke` — CLI tool\n- `uteke-serve` — HTTP server daemon\n- `uteke-mcp` — MCP server (stdio + HTTP)\n\n' >> release-notes.md
-          printf '| Platform | File |\n|----------|------|\n' >> release-notes.md
-          printf '| Linux (x86_64) | `uteke-x86_64-unknown-linux-gnu-%s.tar.gz` |\n' "${VER}" >> release-notes.md
-          printf '| Linux (ARM64) | `uteke-aarch64-unknown-linux-gnu-%s.tar.gz` |\n' "${VER}" >> release-notes.md
-          printf '| macOS (Apple Silicon) | `uteke-aarch64-apple-darwin-%s.tar.gz` |\n' "${VER}" >> release-notes.md
-          printf '| Windows (x86_64) | `uteke-x86_64-pc-windows-msvc-%s.zip` |\n\n' "${VER}" >> release-notes.md
-          printf '### 🚀 Quick Start\n\n```bash\n# Quick install (Linux / macOS)\ncurl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh | sh\n\n# Pin a specific version\nUTEKE_VERSION=%s curl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh | sh\n\n# Store a memory\nuteke remember "Important context" --tags project\n\n# Recall by meaning\nuteke recall "what was that context?"\n\n# Start server for fast AI agent access\nuteke-serve --port 8767\n```\n\n' >> release-notes.md
-          printf '**Full changelog:** https://github.com/codecoradev/uteke/blob/main/CHANGELOG.md\n' >> release-notes.md
+          printf '### 📦 Binaries\\n\\nEach archive contains **three binaries** + **ONNX Runtime shared library**:\\n- `uteke` — CLI tool\\n- `uteke-serve` — HTTP server daemon\\n- `uteke-mcp` — MCP server (stdio + HTTP)\\n- `libonnxruntime.so*` / `libonnxruntime*.dylib` / `onnxruntime*.dll` — ONNX Runtime\\n\\n' >> release-notes.md
+          printf '| Platform | File |\\n|----------|------|\\n' >> release-notes.md
+          printf '| Linux (x86_64, AVX2) | `uteke-x86_64-unknown-linux-gnu-%s.tar.gz` |\\n' "${VER}" >> release-notes.md
+          printf '| Linux (x86_64, legacy) | `uteke-x86_64-unknown-linux-gnu-legacy-%s.tar.gz` |\\n' "${VER}" >> release-notes.md
+          printf '| Linux (ARM64) | `uteke-aarch64-unknown-linux-gnu-%s.tar.gz` |\\n' "${VER}" >> release-notes.md
+          printf '| macOS (Apple Silicon) | `uteke-aarch64-apple-darwin-%s.tar.gz` |\\n' "${VER}" >> release-notes.md
+          printf '| Windows (x86_64) | `uteke-x86_64-pc-windows-msvc-%s.zip` |\\n\\n' "${VER}" >> release-notes.md
+          printf '### 🖥️ Linux Legacy Bundle\\n\\nThe **legacy** bundle includes a SSE4.2-only ONNX Runtime sidecar (`ort-legacy/`). Use this on older CPUs without AVX2 support (e.g., Intel Celeron J4125/N4020) to avoid SIGILL crashes.\\n\\n' >> release-notes.md
+          printf '### 🚀 Quick Start\\n\\n```bash\\n# Quick install (Linux / macOS)\\ncurl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh | sh\\n\\n# Pin a specific version\\nUTEKE_VERSION=%s curl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh | sh\\n\\n# Store a memory\\nuteke remember "Important context" --tags project\\n\\n# Recall by meaning\\nuteke recall "what was that context?"\\n\\n# Start server for fast AI agent access\\nuteke-serve --port 8767\\n```\\n\\n' >> release-notes.md
+          printf '**Full changelog:** https://github.com/codecoradev/uteke/blob/main/CHANGELOG.md\\n' >> release-notes.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -264,16 +423,28 @@ jobs:
             echo "Available files:" && find . -type f | head -20
             exit 1
           fi
-          tar xzf "$AMD64" -C ../binaries
-          mv ../binaries/uteke ../binaries/uteke-amd64
-          mv ../binaries/uteke-serve ../binaries/uteke-serve-amd64
-          mv ../binaries/uteke-mcp ../binaries/uteke-mcp-amd64
-          tar xzf "$ARM64" -C ../binaries
-          mv ../binaries/uteke ../binaries/uteke-arm64
-          mv ../binaries/uteke-serve ../binaries/uteke-serve-arm64
-          mv ../binaries/uteke-mcp ../binaries/uteke-mcp-arm64
-          chmod +x ../binaries/*
-          ls -lh ../binaries/
+          # Extract amd64 → rename binaries, keep .so in amd64 subfolder
+          mkdir -p binaries-amd64
+          tar xzf "$AMD64" -C binaries-amd64
+          mv binaries-amd64/uteke binaries/uteke-amd64
+          mv binaries-amd64/uteke-serve binaries/uteke-serve-amd64
+          mv binaries-amd64/uteke-mcp binaries/uteke-mcp-amd64
+          # Keep ORT .so files in arch-specific subfolder for Dockerfile
+          mkdir -p binaries/ort-amd64
+          cp binaries-amd64/libonnxruntime*.so* binaries/ort-amd64/ 2>/dev/null || true
+          # Extract arm64 → same pattern
+          mkdir -p binaries-arm64
+          tar xzf "$ARM64" -C binaries-arm64
+          mv binaries-arm64/uteke binaries/uteke-arm64
+          mv binaries-arm64/uteke-serve binaries/uteke-serve-arm64
+          mv binaries-arm64/uteke-mcp binaries/uteke-mcp-arm64
+          mkdir -p binaries/ort-arm64
+          cp binaries-arm64/libonnxruntime*.so* binaries/ort-arm64/ 2>/dev/null || true
+          chmod +x binaries/uteke-* binaries/uteke-serve-* binaries/uteke-mcp-*
+          echo "=== Docker context ==="
+          ls -lh binaries/
+          ls -lh binaries/ort-amd64/ 2>/dev/null || true
+          ls -lh binaries/ort-arm64/ 2>/dev/null || true
 
       - name: Docker meta
         id: meta

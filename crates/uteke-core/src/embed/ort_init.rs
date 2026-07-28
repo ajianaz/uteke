@@ -7,7 +7,8 @@
 //! 1. `ORT_LIB_PATH` env var — explicit override (for testing / custom setups).
 //! 2. If AVX2 is detected → `./libonnxruntime.so` (AVX2 build, ships in standard bundle).
 //! 3. If AVX2 is NOT detected → `./ort-legacy/libonnxruntime.so` (SSE4.2 build, sidecar).
-//! 4. If no library found → return error (caller can fall back to non-ORT embedder).
+//! 4. System lib paths: `/usr/local/lib`, `/usr/lib`, `/lib` (Docker / package installs).
+//! 5. If no library found → return error (caller can fall back to non-ORT embedder).
 
 use std::path::PathBuf;
 
@@ -130,6 +131,27 @@ pub fn resolve_ort_lib() -> Result<OrtLibInfo, String> {
             lib_path: legacy_path,
             has_avx2: false,
         });
+    }
+
+    // 4. Docker/system fallback: check standard system library paths.
+    // In Docker containers, binaries are in /usr/local/bin/ but .so is in /usr/local/lib/.
+    let system_paths: &[&str] = &[
+        "/usr/local/lib",
+        "/usr/lib",
+        "/lib",
+    ];
+    for dir in system_paths {
+        let system_path = std::path::Path::new(dir).join(ORT_LIB_NAME);
+        if system_path.exists() {
+            tracing::info!(
+                "ORT: Using system library at {}",
+                system_path.display()
+            );
+            return Ok(OrtLibInfo {
+                lib_path: system_path,
+                has_avx2: avx2,
+            });
+        }
     }
 
     Err(format!(
