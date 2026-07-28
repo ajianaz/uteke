@@ -60,3 +60,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --workspace
 
+  docs-check:
+    name: API Docs Fresh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run -p docgen
+      - name: Verify docs are up-to-date
+        run: |
+          if ! git diff --quiet docs/api-reference.md; then
+            echo "::error::docs/api-reference.md is stale. Run 'cargo run -p docgen' and commit the result."
+            git diff --stat docs/api-reference.md
+            exit 1
+          fi
+
