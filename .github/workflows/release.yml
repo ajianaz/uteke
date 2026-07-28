@@ -270,6 +270,8 @@ jobs:
             -Donnxruntime_BUILD_CSHARP=OFF ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DCMAKE_INSTALL_PREFIX=onnxruntime-install ^
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL ^
+            -DCMAKE_POLICY_DEFAULT_CMP0091=NEW ^
             "-DCMAKE_CXX_FLAGS=/wd4875"
           cmake --build onnxruntime-build --config Release --parallel %NUMBER_OF_PROCESSORS%
 
@@ -379,6 +381,7 @@ jobs:
         with:
           name: uteke-x86_64-pc-windows-msvc-${{ steps.version.outputs.VERSION }}
           path: standard-artifact
+          skip-decompress: true
 
       - name: Download legacy ORT artifact
         uses: actions/download-artifact@v4
@@ -517,6 +520,7 @@ jobs:
         with:
           pattern: uteke-*-${{ github.ref_name }}
           path: release-artifacts
+          skip-decompress: true
 
       - name: Extract binaries for Docker context
         run: |
