@@ -27,7 +27,9 @@ tracing = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 fs2 = "0.4"
 # ONNX-only dependencies (gated behind `onnx` feature)
-ort = { version = "2.0.0-rc.12", features = ["download-binaries"], optional = true }
+# NOTE: load-dynamic requires api-18+ to avoid pykeio/ort#547 (vitis EP compile error).
+# download-binaries is intentionally removed — ORT lib is shipped as a sidecar instead.
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["load-dynamic", "ndarray", "api-18"], optional = true }
 ndarray = { version = "0.17", optional = true }
 tokenizers = { version = "0.23", optional = true }
 sha2 = { version = "0.11", optional = true }

@@ -5,10 +5,11 @@ members = [
     "crates/uteke-cli",
     "crates/uteke-server",
     "crates/uteke-mcp",
+    "crates/docgen",
 ]
 
 [workspace.package]
-version = "0.10.1"
+version = "0.10.2"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/codecoradev/uteke"

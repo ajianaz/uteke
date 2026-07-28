@@ -7,6 +7,7 @@ use tiny_http::Header;
 
 // ── Document Types ──────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct DocCreateRequest {
     pub slug: String,
@@ -18,12 +19,14 @@ pub struct DocCreateRequest {
     pub parent: Option<String>,
 }
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct DocGetRequest {
     pub id: Option<String>,
     pub slug: Option<String>,
 }
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct DocListParams {
     #[serde(default = "default_doc_limit")]
@@ -34,6 +37,7 @@ pub struct DocListParams {
     pub parent: Option<String>,
 }
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct DocSearchRequest {
     pub query: String,
@@ -43,6 +47,7 @@ pub struct DocSearchRequest {
     pub mode: String,
 }
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct DocMoveRequest {
     pub id: Option<String>,
@@ -51,6 +56,7 @@ pub struct DocMoveRequest {
     pub new_parent: Option<String>,
 }
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct DocUpdateRequest {
     pub id: Option<String>,
@@ -164,6 +170,7 @@ pub fn to_v1_flat(result: &uteke_core::memory::types::UnifiedSearchResult) -> se
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct RememberRequest {
     pub content: String,
@@ -197,6 +204,7 @@ pub struct RememberRequest {
     pub source_type: Option<String>,
 }
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct RecallRequest {
     pub query: String,
@@ -231,6 +239,7 @@ pub struct RecallRequest {
     pub enrich: bool,
 }
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct SearchRequest {
     pub query: String,
@@ -242,6 +251,7 @@ pub struct SearchRequest {
     pub namespace: Option<String>,
 }
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct ListParams {
     #[serde(default)]
@@ -257,6 +267,7 @@ pub struct ListParams {
     pub at: Option<String>,
 }
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Serialize)]
 pub struct HealthResponse {
     pub status: &'static str,
@@ -273,6 +284,7 @@ pub struct HealthResponse {
     pub api_latest: Option<&'static str>,
 }
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Serialize)]
 pub struct ErrorResponse {
     pub error: String,
@@ -288,10 +300,14 @@ pub fn default_limit() -> usize {
 pub fn default_doc_limit() -> usize {
     1000
 }
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct RoomRecallRequest {
     pub room_id: String,
-    pub query: String,
+    /// Semantic search query. When `None` or empty, falls back to
+    /// chronological recall (equivalent to `GET /room/memories`) (#785).
+    #[serde(default)]
+    pub query: Option<String>,
     #[serde(default = "default_limit")]
     pub limit: usize,
     #[serde(default)]
@@ -383,6 +399,7 @@ pub fn ns(ns: &Option<String>) -> Option<&str> {
 
 // ── Config Types (shared across modules) ─────────────────────────────────────
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(serde::Deserialize, Default, Clone)]
 pub struct RecallFileSection {
     /// Minimum cosine similarity score for recall results.
@@ -402,6 +419,7 @@ pub const DEFAULT_MIN_SCORE: f32 = 0.0;
 
 // ── Tag Management Types ─────────────────────────────────────────────────
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct TagRenameRequest {
     pub old: String,
@@ -410,6 +428,7 @@ pub struct TagRenameRequest {
     pub new: String,
 }
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct TagDeleteRequest {
     pub tag: String,
@@ -419,6 +438,7 @@ pub struct TagDeleteRequest {
 
 // ── Memory Update Types (#659) ─────────────────────────────────────────────
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct MemoryUpdateRequest {
     /// UUID of the memory to update (required).
@@ -445,6 +465,7 @@ pub struct MemoryUpdateRequest {
 
 // ── Pin Types ─────────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct PinRequest {
     pub id: String,
@@ -452,12 +473,14 @@ pub struct PinRequest {
 
 // ── Memory Mutation Types (#660) ───────────────────────────────────────────
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct MemoryPinRequest {
     pub id: String,
     pub pinned: bool,
 }
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct MemoryImportanceRequest {
     pub id: String,
@@ -465,6 +488,7 @@ pub struct MemoryImportanceRequest {
 }
 
 /// Request for memory feedback / trust scoring (#718).
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct MemoryFeedbackRequest {
     pub id: String,
@@ -474,6 +498,7 @@ pub struct MemoryFeedbackRequest {
 
 // ── Graph Types ────────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct GraphEdgeRequest {
     pub source: String,
@@ -486,6 +511,7 @@ pub struct GraphEdgeRequest {
 
 // ── Extract Types ──────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct ExtractRequest {
     pub content: String,
@@ -505,6 +531,7 @@ pub struct ExtractRequest {
 
 // ── Import Types ──────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct ImportRequest {
     /// JSONL content to import.
@@ -518,6 +545,7 @@ pub struct ImportRequest {
 
 // ── Room Remember Types (#762) ────────────────────────────────────────
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct RoomRememberRequest {
     pub room_id: String,
@@ -537,6 +565,7 @@ pub struct RoomRememberRequest {
 
 // ── Maintenance Types (#607) ──────────────────────────────────────────────
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct PruneRequest {
     #[serde(default = "default_prune_ttl")]
@@ -551,6 +580,7 @@ fn default_prune_ttl() -> u32 {
     30
 }
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct ConsolidateRequest {
     #[serde(default = "default_consolidate_threshold")]
@@ -565,6 +595,7 @@ fn default_consolidate_threshold() -> f32 {
     0.9
 }
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct AgingRequest {
     #[serde(default = "default_aging_action")]
@@ -587,6 +618,7 @@ fn default_aging_action() -> String {
 
 // ── Monitoring Types (#608) ──────────────────────────────────────────────
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct ImportanceRequest {
     #[serde(default)]
@@ -594,6 +626,7 @@ pub struct ImportanceRequest {
     pub namespace: Option<String>,
 }
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct OrphansRequest {
     #[serde(default = "default_orphan_threshold")]
@@ -608,6 +641,7 @@ fn default_orphan_threshold() -> f64 {
     0.3
 }
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct RebuildBacklinksRequest {
     #[serde(default)]
