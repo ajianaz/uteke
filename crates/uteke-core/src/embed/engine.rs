@@ -55,15 +55,15 @@ impl OnnxEmbedder {
         // Session is created. The once_lock ensures we only init once per process.
         static ORT_INIT: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
         ORT_INIT
-            .get_or_init(|| {
-                ort_init::init_ort_environment().map(|_| ())
-            })
+            .get_or_init(|| ort_init::init_ort_environment().map(|_| ()))
             .as_ref()
-            .map_err(|e| Error::embed_msg(format!(
-                "ONNX Runtime initialization failed: {e}. \
+            .map_err(|e| {
+                Error::embed_msg(format!(
+                    "ONNX Runtime initialization failed: {e}. \
                  CPU may lack required SIMD support. Use the 'legacy' bundle \
                  (includes SSE4.2 ORT) or set ORT_LIB_PATH."
-            )))?;
+                ))
+            })?;
 
         let model_dir = Self::model_dir()?;
         std::fs::create_dir_all(&model_dir)
