@@ -420,7 +420,7 @@ jobs:
 
       - name: Extract binaries for Docker context
         run: |
-          mkdir -p binaries binaries-amd64 binaries-arm64
+          mkdir -p release-artifacts/binaries-amd64 release-artifacts/binaries-arm64 release-artifacts/binaries
           cd release-artifacts
           # download-artifact@v4 extracts artifacts into subdirectories named after the artifact.
           # Inside each is the uploaded .tar.gz file.
@@ -440,7 +440,7 @@ jobs:
           mv binaries-amd64/uteke-serve binaries/uteke-serve-amd64
           mv binaries-amd64/uteke-mcp binaries/uteke-mcp-amd64
           mv binaries-arm64/uteke binaries/uteke-arm64
-          mv binaries-arm64/uteke-serve binaries/uteke-serve-arm64
+          mv binaries-arm64/uteke-serve binaries/uteke-serve-armd64
           mv binaries-arm64/uteke-mcp binaries/uteke-mcp-arm64
           # ORT shared libraries in arch-specific subdirs
           mkdir -p binaries/ort-amd64 binaries/ort-arm64
