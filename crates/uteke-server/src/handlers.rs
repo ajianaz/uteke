@@ -431,17 +431,36 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                 .collect();
 
             if let Some(id) = params.get("id") {
-                // Validate UUID format
-                if uuid::Uuid::parse_str(id).is_err() {
-                    return ctx.error_response_for(req, 400, format!("Invalid UUID format: {id}"));
-                }
+                // Accept full UUID or short ID prefix (#794).
+                // `list` and `room_recall` display only 8-char prefixes, so
+                // `forget` must resolve them back to full UUIDs.
+                let resolved_id = if uuid::Uuid::parse_str(id).is_ok() {
+                    id.clone()
+                } else {
+                    match uteke.resolve_id_prefix(id) {
+                        Ok(Some(full)) => full,
+                        Ok(None) => {
+                            return ctx.error_response_for(
+                                req,
+                                404,
+                                format!("Memory not found: {id}"),
+                            );
+                        }
+                        Err(e) => {
+                            error!("Resolve error: {e}");
+                            return ctx.error_response_for(req, 400, e.to_string());
+                        }
+                    }
+                };
                 // Check existence before deleting (#762) — forget() silently
                 // returns Ok(()) even when the ID doesn't exist.
-                if uteke.get_by_id(id).ok().flatten().is_none() {
+                if uteke.get_by_id(&resolved_id).ok().flatten().is_none() {
                     return ctx.error_response_for(req, 404, format!("Memory not found: {id}"));
                 }
-                match uteke.forget(id) {
-                    Ok(()) => ctx.ok_response_for(req, &serde_json::json!({"forgotten": id})),
+                match uteke.forget(&resolved_id) {
+                    Ok(()) => {
+                        ctx.ok_response_for(req, &serde_json::json!({"forgotten": resolved_id}))
+                    }
                     Err(e) => {
                         error!("Internal error: {e}");
                         ctx.error_response_for(req, 500, "Internal server error")

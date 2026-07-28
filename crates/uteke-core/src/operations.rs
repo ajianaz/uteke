@@ -1109,6 +1109,14 @@ impl crate::Uteke {
         self.store.get_by_id(id)
     }
 
+    /// Resolve a short ID prefix (first 8 chars) to a full memory ID (#794).
+    ///
+    /// Returns `Ok(Some(id))` for exact match, `Ok(None)` if not found,
+    /// or `Err(Validation)` if ambiguous.
+    pub fn resolve_id_prefix(&self, prefix: &str) -> Result<Option<String>, Error> {
+        self.store.resolve_id_prefix(prefix)
+    }
+
     /// Update an existing memory with partial fields (#659).
     ///
     /// Only provided fields are changed. If `content` is changed, the
