@@ -1065,7 +1065,11 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                         ),
                         Err(e) => {
                             error!("room/remember error: {e}");
-                            ctx.error_response_for(req, 500, "Internal server error")
+                            let status = match e {
+                                uteke_core::Error::Validation(_) => 400,
+                                _ => 500,
+                            };
+                            ctx.error_response_for(req, status, e.to_string())
                         }
                     }
                 }
