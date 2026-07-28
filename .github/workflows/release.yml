@@ -250,7 +250,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: onnxruntime-build/Release/onnxruntime.dll
-          key: ort-legacy-win-sse42-${{ env.ORT_VERSION }}-v1
+          key: ort-legacy-win-sse42-${{ env.ORT_VERSION }}-v2
 
       - name: Build ONNX Runtime (SSE4.2 only)
         if: steps.cache-ort.outputs.cache-hit != 'true'
@@ -270,6 +270,7 @@ jobs:
             -Donnxruntime_BUILD_CSHARP=OFF ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DCMAKE_INSTALL_PREFIX=onnxruntime-install ^
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL ^
             "-DCMAKE_CXX_FLAGS=/wd4875"
           cmake --build onnxruntime-build --config Release --parallel %NUMBER_OF_PROCESSORS%
 
