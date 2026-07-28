@@ -3,6 +3,8 @@
 //! Keeps the embedding model loaded in RAM for <50ms recall.
 //! Usage: `uteke-serve [--port 8767] [--host 127.0.0.1] [--auth-token <TOKEN>]`
 
+#[cfg(feature = "docgen")]
+mod api_registry;
 mod context;
 mod handlers;
 mod types;

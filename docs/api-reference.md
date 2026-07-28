@@ -1,692 +1,659 @@
----
-title: HTTP API Reference
----
-
 # HTTP API Reference
 
-Complete reference for all uteke-server HTTP endpoints. Version **0.10.1**.
+Auto-generated from `uteke-server` route registry and type schemas. Do not edit manually — run `cargo run -p docgen` to regenerate.
 
-All endpoints accept and return JSON (`Content-Type: application/json`). POST/PUT/DELETE bodies are JSON; GET endpoints use query parameters.
+**Base URL**: `http://localhost:8767` (default)
 
-## Base URL
+**Auth**: Set `--auth-token <TOKEN>` to require `Authorization: Bearer <TOKEN>` header.
 
-```
-http://localhost:8767
-```
+## 🏷️ Tags
 
-Default port is `8767`. Override with `--port` flag or `UTEKE_PORT` env var.
+#### 🟢 `GET` `/tags`
 
-## API Versioning
+List all tags in a namespace. Accepts `?namespace=X` query param.
 
-All routes support optional `/api/v1` or `/api/v2` prefix for version negotiation ([#737](https://github.com/codecoradev/uteke/issues/737)):
-
-| Version | Format | Description |
-|---------|--------|-------------|
-| `v1` | Flat recall results | v0.7.x compatible (`[{id, content, score, ...}]`) |
-| `v2` | Wrapped `UnifiedSearchResult` | v0.8.x+ (unified search with metadata) |
-| *(none)* | Latest (`v2`) | Unversioned routes alias to latest |
-
-```bash
-# Versioned
-POST /api/v2/recall
-# Unversioned (aliases to v2)
-POST /recall
-```
-
----
-
-## Health & Stats
-
-### GET /health
-
-Server health check. Returns version, memory count, and supported API versions.
-
-**Response:**
-```json
-{
-  "status": "ok",
-  "version": "0.10.1",
-  "memories": 148,
-  "namespaces": 3,
-  "api_versions": ["v1", "v2"],
-  "api_latest": "v2"
-}
-```
-
-### GET /stats
-
-Global statistics (namespaces, memory counts, tag counts).
-
-**Response:**
-```json
-{
-  "namespaces": ["default", "cto", "cmo"],
-  "total_memories": 148,
-  "by_namespace": { "default": 50, "cto": 80, "cmo": 18 }
-}
-```
-
-### POST /stats
-
-Statistics for a specific namespace.
-
-**Request:**
-```json
-{ "namespace": "default" }
-```
-
----
-
-## Memory Operations
-
-### POST /remember
-
-Store a new memory with automatic embedding generation.
-
-**Request:**
-```json
-{
-  "content": "Uteke uses SQLite + ONNX embeddings",
-  "tags": ["architecture", "uteke"],
-  "namespace": "default",
-  "type": "fact",
-  "entity": "uteke",
-  "category": "architecture",
-  "metadata": { "project": "uteke" },
-  "source": "docs",
-  "source_type": "user",
-  "valid_from": "2026-01-01T00:00:00Z",
-  "valid_until": null,
-  "detect_contradiction": false
-}
-```
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `content` | string | ✅ | — | Memory content text |
-| `tags` | string[] | ❌ | `[]` | Tags for filtering |
-| `namespace` | string | ❌ | `default` | Namespace isolation |
-| `type` | string | ❌ | `null` | Memory type (fact, procedure, preference, decision, etc.) |
-| `entity` | string | ❌ | `null` | Entity name (stored as metadata) |
-| `category` | string | ❌ | `null` | Category (stored as metadata) |
-| `metadata` | object | ❌ | `null` | Extra key-value pairs |
-| `source` | string | ❌ | `null` | Source provenance |
-| `source_type` | string | ❌ | `user` | Source type |
-| `valid_from` | string | ❌ | `null` | RFC3339 timestamp |
-| `valid_until` | string | ❌ | `null` | RFC3339 timestamp |
-| `detect_contradiction` | bool | ❌ | `false` | Check for contradictions |
-
-### POST /recall
-
-Semantic recall — search memories by meaning using embeddings.
-
-**Request:**
-```json
-{
-  "query": "how does uteke store data",
-  "limit": 5,
-  "tags": [],
-  "namespace": "default",
-  "entity": null,
-  "category": null,
-  "min_score": 0.0,
-  "strict": false,
-  "at": null,
-  "search_type": "all",
-  "enrich": false
-}
-```
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `query` | string | ✅ | — | Semantic search query |
-| `limit` | int | ❌ | `5` | Max results |
-| `tags` | string[] | ❌ | `[]` | Filter by tags |
-| `namespace` | string | ❌ | `null` | Namespace filter |
-| `entity` | string | ❌ | `null` | Filter by entity metadata |
-| `category` | string | ❌ | `null` | Filter by category metadata |
-| `min_score` | float | ❌ | `0.0` | Minimum similarity score |
-| `strict` | bool | ❌ | `false` | Use strict threshold (0.5) |
-| `at` | string | ❌ | `null` | Time-travel: RFC3339 timestamp |
-| `search_type` | string | ❌ | `all` | `all`, `memory`, or `doc` |
-| `enrich` | bool | ❌ | `false` | Enrich with cross-entity links |
-
-### POST /search
-
-Fast keyword/FTS search (non-semantic).
-
-**Request:**
-```json
-{
-  "query": "sqlite",
-  "limit": 10,
-  "tags": [],
-  "namespace": "default"
-}
-```
-
-### POST /list
-
-List memories with pagination and optional tag filter.
-
-**Request:**
-```json
-{
-  "tag": "architecture",
-  "limit": 5,
-  "offset": 0,
-  "namespace": "default",
-  "at": null
-}
-```
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `tag` | string | ❌ | `null` | Filter by tag |
-| `limit` | int | ❌ | `5` | Page size |
-| `offset` | int | ❌ | `0` | Pagination offset |
-| `namespace` | string | ❌ | `null` | Namespace filter |
-| `at` | string | ❌ | `null` | Time-travel timestamp |
-
-### DELETE /forget
-
-Delete a memory by ID.
-
-**Query params:** `?id=<uuid>`
-
-```bash
-DELETE /forget?id=550e8400-e29b-41d4-a716-446655440000
-```
-
-### GET /memory
-
-Get a single memory by ID.
-
-**Query params:** `?id=<uuid>`
-
-### PUT /memory
-
-Update a memory ([#659](https://github.com/codecoradev/uteke/issues/659)). Triggers embedding regeneration if content changes.
-
-**Request:**
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "content": "updated content",
-  "tags": ["new-tag"],
-  "metadata": { "key": "value" },
-  "importance": 0.8,
-  "pinned": true,
-  "memory_type": "decision"
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | string | ✅ | Memory UUID |
-| `content` | string | ❌ | New content (triggers re-embedding) |
-| `tags` | string[] | ❌ | Replace tags |
-| `metadata` | object | ❌ | Replace metadata |
-| `importance` | float | ❌ | Importance score (0.0–1.0) |
-| `pinned` | bool | ❌ | Pinned state |
-| `memory_type` | string | ❌ | Memory type |
-
-### POST /memory/pin
-
-Set pinned state on a memory ([#660](https://github.com/codecoradev/uteke/issues/660)).
-
-**Request:**
-```json
-{ "id": "550e8400-...", "pinned": true }
-```
-
-### POST /memory/importance
-
-Set importance score on a memory.
-
-**Request:**
-```json
-{ "id": "550e8400-...", "importance": 0.9 }
-```
-
-### POST /memory/feedback
-
-Submit feedback for trust scoring ([#718](https://github.com/codecoradev/uteke/issues/718)).
-
-**Request:**
-```json
-{ "id": "550e8400-...", "feedback": "helpful" }
-```
-
-`feedback` must be `"helpful"` or `"unhelpful"`.
-
-### POST /memory/doc-refs
-
-Get document references linked to a memory ([#689](https://github.com/codecoradev/uteke/issues/689)).
-
-**Request:**
-```json
-{ "memory_id": "550e8400-..." }
-```
-
----
-
-## Pin Operations
-
-### POST /pin
-
-Pin a memory by ID.
-
-**Request:**
-```json
-{ "id": "550e8400-..." }
-```
-
-### POST /unpin
-
-Unpin a memory by ID.
-
-**Request:**
-```json
-{ "id": "550e8400-..." }
-```
-
----
-
-## Namespace & Tags
-
-### GET /namespaces
-
-List all namespaces.
-
-**Query params:** `?memory_count=true` (include memory counts per namespace)
-
-### GET /tags
-
-List all tags with usage counts.
-
-**Query params:** `?namespace=<name>`
-
-### POST /tags/rename
+#### 🟡 `POST` `/tags/rename`
 
 Rename a tag across all memories.
 
-**Request:**
-```json
-{ "old": "arch", "new": "architecture", "namespace": "default" }
-```
+**Request body**: [`TagRenameRequest`](#tagrenamerequest)
 
-### POST /tags/delete
+#### 🟡 `POST` `/tags/delete`
 
 Delete a tag from all memories.
 
-**Request:**
-```json
-{ "tag": "deprecated", "namespace": "default" }
-```
+**Request body**: [`TagDeleteRequest`](#tagdeleterequest)
 
----
 
-## Recent & Graph
+## 📌 Pin (Legacy)
 
-### GET /recent
+#### 🟡 `POST` `/pin`
 
-Get recently accessed memories.
+Pin a memory by ID (legacy — prefer /memory/pin).
 
-**Query params:** `?limit=10&namespace=default`
+**Request body**: [`PinRequest`](#pinrequest)
 
-### GET /graph
+#### 🟡 `POST` `/unpin`
 
-Get relationship graph for an entity.
+Unpin a memory by ID (legacy — prefer /memory/pin with pin=false).
 
-**Query params:** `?entity=<name>&depth=3`
+**Request body**: [`PinRequest`](#pinrequest)
 
-### POST /graph/edge
 
-Create a relationship edge between entities.
+## 📝 Other
 
-**Request:**
-```json
-{
-  "source": "uteke",
-  "target": "sqlite",
-  "edge_type": "uses",
-  "weight": 1.0
-}
-```
+#### 🟢 `GET` `/namespaces`
 
-### DELETE /graph/edge
+List all namespaces in the memory store
 
-Delete a relationship edge.
+#### 🟢 `GET` `/stats`
 
-**Query params:** `?source=<name>&target=<name>&edge_type=<type>`
+Get memory statistics (count, etc.) for a namespace. Accepts `?namespace=X` query param.
 
----
+#### 🟡 `POST` `/stats`
 
-## Rooms
+Get memory statistics via POST body. Accepts `{"namespace": "..."}`.
 
-Rooms are collaborative memory spaces for multi-agent discussions.
+**Request body**: JSON object (see handler source for fields)
 
-### POST /room/create
+*Related: `#786`*
 
-Create a new room.
+#### 🟢 `GET` `/memory`
 
-**Request:**
-```json
-{ "room_id": "project-discussion", "title": "Project Discussion", "namespace": "default" }
-```
+Get a single memory by ID. Accepts `?id=...` query param.
 
-### POST /room/remember
+**Response**: [`Memory`](#memory)
 
-Store a memory and link it to a room.
+#### 🔵 `PUT` `/memory`
 
-**Request:**
-```json
-{
-  "room_id": "project-discussion",
-  "content": "Decision: use SQLite for storage",
-  "author": "cto",
-  "tags": ["decision"],
-  "role": "lead"
-}
-```
+Update an existing memory's content and/or metadata.
 
-### GET /room/memories
+**Request body**: [`MemoryUpdateRequest`](#memoryupdaterequest)
 
-List memories in a room (chronological order).
+#### 🟢 `GET` `/graph`
 
-**Query params:** `?room_id=<id>&author=<name>&limit=10`
+Get graph edges for a memory. Accepts `?id=...` query param.
 
-### POST /room/recall
 
-Semantic recall within a room. Query is **optional** — when omitted or empty, falls back to chronological recall ([#785](https://github.com/codecoradev/uteke/issues/785)).
+## 📦 Import/Export
 
-**Request (semantic — with query):**
-```json
-{
-  "room_id": "project-discussion",
-  "query": "database decision",
-  "limit": 5,
-  "author": null,
-  "min_score": 0.0
-}
-```
+#### 🟡 `POST` `/import`
 
-**Request (chronological fallback — no query):**
-```json
-{
-  "room_id": "project-discussion",
-  "limit": 10,
-  "author": "cto"
-}
-```
+Import memories from a JSON array.
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `room_id` | string | ✅ | — | Room identifier |
-| `query` | string | ❌ | `null` | Semantic query. When empty/absent, falls back to chronological |
-| `limit` | int | ❌ | `5` | Max results |
-| `author` | string | ❌ | `null` | Filter by author |
-| `min_score` | float | ❌ | `0.0` | Minimum similarity (semantic mode only) |
+**Request body**: [`ImportRequest`](#importrequest)
 
-### POST /room/stats
+#### 🟢 `GET` `/export`
 
-Get room statistics (memory count, participant count, participants list, last activity). Excludes deprecated memories ([#784](https://github.com/codecoradev/uteke/issues/784)).
+Export all memories as JSON. Accepts `?namespace=...` query param.
 
-**Request:**
-```json
-{ "room_id": "project-discussion" }
-```
+#### 🟡 `POST` `/importance`
 
-**Response:**
-```json
-{
-  "memory_count": 12,
-  "participant_count": 3,
-  "participants": ["cto", "cmo", "coo"],
-  "last_activity": "2026-07-27T10:30:00Z"
-}
-```
+Recompute importance scores for all memories.
 
-### POST /room/summary
+**Request body**: [`ImportanceRequest`](#importancerequest)
 
-Get or generate a room summary.
 
-**Request:**
-```json
-{ "room_id": "project-discussion" }
-```
+## 🔧 Maintenance
 
-### POST /room/summary-document
+#### 🟡 `POST` `/prune`
 
-Get the summary document for a room.
+Remove orphaned memories (no room, no graph edges).
 
-**Request:**
-```json
-{ "room_id": "project-discussion" }
-```
+**Request body**: [`PruneRequest`](#prunerequest)
 
-### POST /room/document
+#### 🟡 `POST` `/consolidate`
 
-Get the document associated with a room.
+Merge similar/duplicate memories automatically.
 
-**Request:**
-```json
-{ "room_id": "project-discussion" }
-```
+**Request body**: [`ConsolidateRequest`](#consolidaterequest)
 
-### POST /room/document/list
+#### 🟡 `POST` `/aging`
 
-List documents linked to a room.
+Run aging cleanup — deprioritize or remove old/stale memories.
 
-**Request:**
-```json
-{ "room_id": "project-discussion" }
-```
+**Request body**: [`AgingRequest`](#agingrequest)
 
-### PUT /room/document/add
+#### 🟡 `POST` `/orphans`
 
-Link a document to a room.
+List orphaned memories (not in any room, no edges).
 
-**Request:**
-```json
-{ "room_id": "project-discussion", "doc_id": "doc-uuid" }
-```
+**Request body**: [`OrphansRequest`](#orphansrequest)
 
-### DELETE /room/document/remove
+#### 🟡 `POST` `/extract`
 
-Unlink a document from a room.
+Extract entities and relationships from memory content.
 
-**Query params:** `?room_id=<id>&doc_id=<uuid>`
+**Request body**: [`ExtractRequest`](#extractrequest)
 
-### POST /doc/room/list
+#### 🟡 `POST` `/rebuild-backlinks`
 
-List rooms linked to a document.
+Rebuild backlink indices for memory graph.
 
-**Request:**
-```json
-{ "doc_id": "doc-uuid" }
-```
 
-### GET /room/list
+## 🔴 Health & Info
+
+#### 🟢 `GET` `/health`
+
+Health check — returns server status and version
+
+**Response**: [`HealthResponse`](#healthresponse)
+
+
+## 🔵 Documents
+
+#### 🟡 `POST` `/doc/create`
+
+Create a new document with slug, title, content, tags.
+
+**Request body**: [`DocCreateRequest`](#doccreaterequest)
+
+#### 🟡 `POST` `/doc/get`
+
+Get a document by slug.
+
+**Request body**: [`DocGetRequest`](#docgetrequest)
+
+#### 🟡 `POST` `/doc/move`
+
+Move a document to a different parent.
+
+**Request body**: [`DocMoveRequest`](#docmoverequest)
+
+#### 🔴 `DELETE` `/doc/delete`
+
+Delete a document by slug or ID.
+
+#### 🟡 `POST` `/doc/mem-refs`
+
+Get memories that reference a specific document.
+
+**Request body**: JSON object (see handler source for fields)
+
+
+## 🟠 Graph
+
+#### 🟡 `POST` `/graph/edge`
+
+Add a directed edge between two memories.
+
+**Request body**: [`GraphEdgeRequest`](#graphedgerequest)
+
+#### 🔴 `DELETE` `/graph/edge`
+
+Remove an edge between two memories. Accepts `?from=...&to=...` query params.
+
+#### 🟢 `GET` `/edges`
+
+List edges for a memory (alias for /graph). Accepts `?id=...` query param.
+
+#### 🟢 `GET` `/timeline`
+
+Get timeline of memory events for a memory. Accepts `?id=...` query param.
+
+
+## 🟡 Core Memory
+
+#### 🟡 `POST` `/remember`
+
+Store a new memory. Accepts content, tags, namespace, type, metadata.
+
+**Request body**: [`RememberRequest`](#rememberrequest)
+
+**Response**: [`Memory`](#memory)
+
+#### 🟡 `POST` `/recall`
+
+Semantic search — recall memories by meaning. Returns ranked results.
+
+*Excludes deprecated memories from results.*
+
+**Request body**: [`RecallRequest`](#recallrequest)
+
+#### 🟡 `POST` `/search`
+
+Keyword search — find memories by matching words in content/tags.
+
+*Excludes deprecated memories from results.*
+
+**Request body**: [`SearchRequest`](#searchrequest)
+
+#### 🟡 `POST` `/list`
+
+List memories with optional filters (namespace, tags, sort, limit, offset).
+
+*Excludes deprecated memories from results.*
+
+**Request body**: [`ListParams`](#listparams)
+
+#### 🔴 `DELETE` `/forget`
+
+Deprecate a memory by ID. Returns 404 if ID doesn't exist.
+
+#### 🟢 `GET` `/recent`
+
+Get recently added memories. Accepts `?limit=N&namespace=X` query params.
+
+*Excludes deprecated memories from results.*
+
+
+## 🟢 Rooms
+
+#### 🟡 `POST` `/room/create`
+
+Create a new memory room. Accepts `{"name": "..."}`.
+
+**Request body**: JSON object (see handler source for fields)
+
+#### 🟡 `POST` `/room/remember`
+
+Store a memory linked to a room. Accepts room_id, content, tags, type, author.
+
+**Request body**: [`RoomRememberRequest`](#roomrememberrequest)
+
+**Response**: [`Memory`](#memory)
+
+*Related: `#789`*
+
+#### 🟡 `POST` `/room/recall`
+
+Semantic search within a room. Empty query returns all memories chronologically.
+
+*Excludes deprecated memories from results.*
+
+**Request body**: [`RoomRecallRequest`](#roomrecallrequest)
+
+*Related: `#785`*
+
+#### 🟡 `POST` `/room/summary`
+
+Get room summary with memory clusters and statistics.
+
+*Excludes deprecated memories from results.*
+
+**Request body**: JSON object (see handler source for fields)
+
+#### 🟡 `POST` `/room/summary-document`
+
+Get room summary focused on document-type memories.
+
+*Excludes deprecated memories from results.*
+
+**Request body**: JSON object (see handler source for fields)
+
+#### 🟢 `GET` `/room/list`
 
 List all rooms.
 
-**Query params:** `?namespace=<name>`
+#### 🟡 `POST` `/room/stats`
 
-### DELETE /room/delete
+Get memory count for a room. Includes deprecated memories (known discrepancy vs /room/summary).
 
-Delete a room. Cascades `room_memories` links (memories themselves survive).
+**Request body**: JSON object (see handler source for fields)
 
-**Query params:** `?room_id=<id>`
+*Related: `#784`*
 
----
+#### 🟢 `GET` `/room/memories`
 
-## Documents
+List all memories in a room (chronological). Accepts `?room_id=...` query param.
 
-Documents are structured content with hierarchical parent-child relationships.
+*Excludes deprecated memories from results.*
 
-### POST /doc/create
+#### 🔴 `DELETE` `/room/delete`
 
-Create a new document.
+Delete a room and all its memories. Accepts `?room_id=...` query param.
 
-**Request:**
-```json
-{
-  "slug": "architecture-overview",
-  "title": "Architecture Overview",
-  "content": "# Architecture\n\n...",
-  "tags": ["architecture"],
-  "parent": null
-}
-```
+#### 🟡 `POST` `/room/document`
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `slug` | string | ✅ | — | URL-safe identifier |
-| `title` | string | ❌ | `null` | Display title |
-| `content` | string | ✅ | — | Document content (markdown) |
-| `tags` | string[] | ❌ | `[]` | Tags |
-| `parent` | string | ❌ | `null` | Parent doc slug (for hierarchy) |
+Store a reference document in a room (large content >500 chars).
 
-### POST /doc/get
+**Request body**: JSON object (see handler source for fields)
 
-Get a document by ID or slug.
+#### 🟡 `POST` `/room/document/list`
 
-**Request:**
-```json
-{ "id": "uuid-or-null", "slug": "architecture-overview" }
-```
+List documents in a room.
 
-Provide either `id` or `slug`.
+**Request body**: JSON object (see handler source for fields)
 
-### POST /doc/update
+#### 🔵 `PUT` `/room/document/add`
 
-Update a document.
+Add a reference to an existing document in a room.
 
-**Request:**
-```json
-{
-  "id": null,
-  "slug": "architecture-overview",
-  "title": "Updated Title",
-  "content": "updated content",
-  "tags": ["architecture", "updated"],
-  "metadata": null
-}
-```
+**Request body**: JSON object (see handler source for fields)
 
-### POST /doc/list
+#### 🔴 `DELETE` `/room/document/remove`
 
-List documents.
+Remove a document reference from a room.
 
-**Request:**
-```json
-{ "limit": 1000, "roots_only": false, "parent": null }
-```
+**Request body**: JSON object (see handler source for fields)
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `limit` | int | `1000` | Max results (high default for full tree) |
-| `roots_only` | bool | `false` | Only top-level docs (no parent) |
-| `parent` | string | `null` | Filter by parent slug |
+#### 🟡 `POST` `/doc/room/list`
 
-### POST /doc/search
+List rooms that reference a specific document.
 
-Search documents.
+**Request body**: JSON object (see handler source for fields)
 
-**Request:**
-```json
-{ "query": "storage", "limit": 5, "mode": "hybrid" }
-```
 
-`mode`: `hybrid` (default), `fts`, or `semantic`.
+## 🟣 Memory Management
 
-### POST /doc/move
+#### 🟡 `POST` `/memory/pin`
 
-Move a document to a new parent.
+Pin a memory so it won't be removed by aging/cleanup operations.
 
-**Request:**
-```json
-{ "id": null, "slug": "child-doc", "new_parent": "new-parent-slug" }
-```
+**Request body**: [`MemoryPinRequest`](#memorypinrequest)
 
-### DELETE /doc/delete
+#### 🟡 `POST` `/memory/importance`
 
-Delete a document.
+Get or set the importance score of a memory.
 
-**Query params:** `?id=<uuid>` or `?slug=<slug>`
+**Request body**: [`MemoryImportanceRequest`](#memoryimportancerequest)
 
-### POST /doc/mem-refs
+#### 🟡 `POST` `/memory/feedback`
 
-Get memory references linked to a document ([#689](https://github.com/codecoradev/uteke/issues/689)).
+Submit positive/negative feedback on a memory for ranking signals.
 
-**Request:**
-```json
-{ "doc_id": "doc-uuid" }
-```
+**Request body**: [`MemoryFeedbackRequest`](#memoryfeedbackrequest)
 
----
+#### 🟡 `POST` `/memory/doc-refs`
 
-## Advanced
+Get documents that reference a specific memory.
 
-### POST /context
+**Request body**: JSON object (see handler source for fields)
 
-Get contextual memories for a given input.
 
-**Request:** Arbitrary JSON object.
+## 🤖 AI Integration
 
-### POST /dream
+#### 🟡 `POST` `/context`
 
-Trigger dream/consolidation process.
+Get context window for a query (for LLM prompt enrichment).
 
-**Request:** Arbitrary JSON object.
+**Request body**: JSON object (see handler source for fields)
 
-### POST /mcp
+#### 🟡 `POST` `/dream`
 
-MCP (Model Context Protocol) JSON-RPC endpoint. See [MCP Server docs](/mcp) for details.
+Generate new memories/insights from existing memory corpus.
 
----
+**Request body**: JSON object (see handler source for fields)
 
-## Error Responses
+#### 🟡 `POST` `/mcp`
 
-All errors return HTTP 4xx/5xx with a JSON error body:
+MCP (Model Context Protocol) bridge endpoint for AI agent tool calls.
 
-```json
-{ "error": "Description of what went wrong" }
-```
+**Request body**: JSON object (see handler source for fields)
 
-| Status | Meaning |
-|--------|---------|
-| 400 | Bad request — invalid JSON, missing required field, validation error |
-| 401 | Unauthorized — missing or invalid API key |
-| 404 | Not found — resource doesn't exist |
-| 413 | Payload too large — exceeds `MAX_PAYLOAD_SIZE` |
-| 500 | Internal server error — unexpected failure |
 
----
+## Request/Response Schemas
 
-## Authentication
+Detailed field definitions for each request type.
 
-If `UTEKE_API_KEY` is set, all endpoints require an `Authorization: Bearer <key>` header. When unset, the server runs in open mode (no auth).
+### `AgingRequest`
 
-```bash
-# With auth
-curl -H "Authorization: Bearer your-secret-key" http://localhost:8767/stats
-```
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `action` | `string` | No |  |
+| `dry_run` | `boolean` | No |  |
+| `max_access_count` | any | No | Max access count threshold for preview/cleanup (default: 1). |
+| `namespace` | any | No |  |
+| `older_than_days` | any | No | Days threshold for preview/cleanup (default: warm_days from config, fallback 90). |
 
----
 
-## CORS
+### `ConsolidateRequest`
 
-All responses include CORS headers (`Access-Control-Allow-Origin: *`) for browser-based clients. Preflight `OPTIONS` requests are handled automatically.
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `dry_run` | `boolean` | No |  |
+| `namespace` | any | No |  |
+| `threshold` | `number` | No |  |
 
----
 
-## See Also
+### `DocCreateRequest`
 
-- [CLI Reference](/cli-reference) — uteke CLI commands
-- [Configuration](/configuration) — server configuration options
-- [Rooms](/rooms) — room feature guide
-- [MCP Server](/mcp) — MCP protocol integration
-- [TLS & Reverse Proxy](/tls) — production deployment
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `content` | `string` | Yes |  |
+| `parent` | any | No |  |
+| `slug` | `string` | Yes |  |
+| `tags` | ``string``[] | No |  |
+| `title` | any | No |  |
+
+
+### `DocGetRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | any | No |  |
+| `slug` | any | No |  |
+
+
+### `DocMoveRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | any | No |  |
+| `new_parent` | any | No |  |
+| `slug` | any | No |  |
+
+
+### `ErrorResponse`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `error` | `string` | Yes |  |
+
+
+### `ExtractRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `content` | `string` | Yes |  |
+| `max_facts` | any | No | Override max facts per document. |
+| `model` | any | No | Override extraction model (else config default). |
+| `namespace` | any | No |  |
+| `tags` | ``string``[] | No |  |
+| `type` | any | No |  |
+
+
+### `GraphEdgeRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `edge_type` | any | No |  |
+| `source` | `string` | Yes |  |
+| `target` | `string` | Yes |  |
+| `weight` | any | No |  |
+
+
+### `HealthResponse`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `api_latest` | any | No | Latest API version (#737). |
+| `api_versions` | any | No | Supported API versions (#737). |
+| `memories` | `integer` | Yes |  |
+| `namespaces` | `integer` | Yes |  |
+| `status` | `string` | Yes |  |
+| `version` | `string` | Yes | Server version (uteke-server crate version), so HTTP clients can gate
+features on the actual server capability rather than a local CLI probe. |
+
+
+### `ImportRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `content` | `string` | Yes | JSONL content to import. |
+| `namespace` | any | No |  |
+| `tags` | ``string``[] | No |  |
+
+
+### `ImportanceRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `namespace` | any | No |  |
+
+
+### `ListParams`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `at` | any | No | Time-travel: list memories that existed at this RFC3339 timestamp. |
+| `limit` | `integer` | No |  |
+| `namespace` | any | No |  |
+| `offset` | `integer` | No |  |
+| `tag` | any | No |  |
+
+
+### `MemoryFeedbackRequest`
+
+Request for memory feedback / trust scoring (#718).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `feedback` | `string` | Yes | "helpful" or "unhelpful" |
+| `id` | `string` | Yes |  |
+
+
+### `MemoryImportanceRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | `string` | Yes |  |
+| `importance` | `number` | Yes |  |
+
+
+### `MemoryPinRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | `string` | Yes |  |
+| `pinned` | `boolean` | Yes |  |
+
+
+### `MemoryUpdateRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `content` | any | No | New content. Triggers embedding regeneration. |
+| `id` | `string` | Yes | UUID of the memory to update (required). |
+| `importance` | any | No | Set importance score (0.0–1.0). |
+| `memory_type` | any | No | Set memory type (fact, procedure, preference, decision, context, note, insight, reference, event). |
+| `metadata` | any | No | Replace metadata entirely with this object. |
+| `pinned` | any | No | Set pinned state. |
+| `tags` | any | No | Replace tags entirely with this list. |
+
+
+### `OrphansRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `limit` | `integer` | No |  |
+| `namespace` | any | No |  |
+| `threshold` | `number` | No |  |
+
+
+### `PinRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | `string` | Yes |  |
+
+
+### `PruneRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `dry_run` | `boolean` | No |  |
+| `namespace` | any | No |  |
+| `ttl_days` | `integer` | No |  |
+
+
+### `RecallRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `at` | any | No | Time-travel: query memories that existed at this RFC3339 timestamp. |
+| `category` | any | No | Filter by category metadata. |
+| `enrich` | `boolean` | No | Enrich results with cross-entity links (doc↔memory) (#689).
+When true, populates `linked_doc_slugs` on memory results and
+`linked_memory_ids` on document results. |
+| `entity` | any | No | Filter by entity metadata. |
+| `limit` | `integer` | No |  |
+| `min_score` | any | No | Minimum similarity score. Results below are filtered. |
+| `namespace` | any | No |  |
+| `query` | `string` | Yes |  |
+| `search_type` | any | No | Search type filter: "all" (default, unified), "memory", or "doc" (#531). |
+| `strict` | `boolean` | No | Use strict threshold (defaults to 0.5 if min_score not set). |
+| `tags` | ``string``[] | No |  |
+
+
+### `RememberRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `category` | any | No | Category — stored as metadata key "category". |
+| `content` | `string` | Yes |  |
+| `detect_contradiction` | `boolean` | No |  |
+| `entity` | any | No | Entity name — stored as metadata key "entity". |
+| `metadata` | any | No | Extra metadata key=value pairs, merged into the metadata map.
+Accepts an object (e.g. {"project": "uteke"}). |
+| `namespace` | any | No |  |
+| `source` | any | No | Source provenance — set via set_source() after storage. |
+| `source_type` | any | No | Source type (defaults to "user"). |
+| `tags` | ``string``[] | No |  |
+| `type` | any | No |  |
+| `valid_from` | any | No |  |
+| `valid_until` | any | No |  |
+
+
+### `RoomRecallRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `author` | any | No |  |
+| `limit` | `integer` | No |  |
+| `min_score` | any | No |  |
+| `query` | any | No | Semantic search query. When `None` or empty, falls back to
+chronological recall (equivalent to `GET /room/memories`) (#785). |
+| `room_id` | `string` | Yes |  |
+
+
+### `RoomRememberRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `author` | any | No | Author — stored as participant role in room link. |
+| `content` | `string` | Yes |  |
+| `metadata` | any | No |  |
+| `namespace` | any | No |  |
+| `room_id` | `string` | Yes |  |
+| `tags` | ``string``[] | No |  |
+| `type` | any | No |  |
+
+
+### `SearchRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `limit` | `integer` | No |  |
+| `namespace` | any | No |  |
+| `query` | `string` | Yes |  |
+| `tags` | ``string``[] | No |  |
+
+
+### `TagDeleteRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `namespace` | any | No |  |
+| `tag` | `string` | Yes |  |
+
+
+### `TagRenameRequest`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `namespace` | any | No |  |
+| `new` | `string` | Yes |  |
+| `old` | `string` | Yes |  |
+
+
