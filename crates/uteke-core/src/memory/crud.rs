@@ -125,6 +125,37 @@ impl super::Store {
         Ok(result)
     }
 
+    /// Resolve a short ID (prefix) to a full memory ID.
+    ///
+    /// `list` and `room_recall` display only the first 8 chars of each UUID.
+    /// This method resolves that prefix back to the full ID so `forget` can
+    /// accept what `list` shows (#794).
+    ///
+    /// Returns `Ok(Some(id))` if exactly one match, `Ok(None)` if zero,
+    /// or `Err` if multiple matches (ambiguous prefix).
+    pub fn resolve_id_prefix(&self, prefix: &str) -> Result<Option<String>, Error> {
+        let pattern = format!("{prefix}%");
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM memories WHERE id LIKE ?1")
+            .map_err(|e| Error::db("Failed to prepare statement for resolve_id_prefix", e))?;
+
+        let ids: Vec<String> = stmt
+            .query_map(params![pattern], |row| row.get(0))
+            .map_err(|e| Error::db("Failed to query id prefix", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        match ids.len() {
+            0 => Ok(None),
+            1 => Ok(Some(ids[0].clone())),
+            _ => Err(Error::Validation(format!(
+                "Ambiguous ID prefix '{prefix}' — matches {} memories. Use a longer prefix.",
+                ids.len()
+            ))),
+        }
+    }
+
     /// Get a memory by its ID, only if it belongs to `namespace`.
     ///
     /// Used by edge auto-wiring (#346) to enforce namespace isolation on
