@@ -60,8 +60,7 @@ impl OnnxEmbedder {
             .map_err(|e| {
                 Error::embed_msg(format!(
                     "ONNX Runtime initialization failed: {e}. \
-                 CPU may lack required SIMD support. Use the 'legacy' bundle \
-                 (includes SSE4.2 ORT) or set ORT_LIB_PATH."
+                     Set ORT_LIB_PATH to the library file, or use the standard release bundle."
                 ))
             })?;
 
