@@ -1,3 +1,18 @@
+## [0.10.3] — 2026-08-01
+
+### Fixed
+- **ORT init AVX2 early-return skips system fallback (#820)** — `resolve_ort_lib()` no longer returns `Err` when AVX2 library is found but fails to load. Falls through to standard/SSE4.2 system paths with a warning.
+- **Misleading "CPU may lack SIMD" error message (#821)** — Error now accurately states "Set ORT_LIB_PATH" or "use the 'legacy' feature" instead of blaming CPU SIMD support.
+- **ONNX init retried on every request after failure (#822)** — Embedder init errors are now cached: ONNX failures cached permanently, network backend failures (OpenAI/Ollama) auto-retry after 60s TTL.
+
+### Dependencies
+- Bump `thiserror` 2.0.18 → 2.0.19
+- Bump `serde_json` 1.0.150 → 1.0.151
+- Bump `clap` 4.6.1 → 4.6.4
+- Bump `which` 7.0.3 → 8.0.5
+- Bump `uuid` 1.23 → 1.24
+- Bump `actions/cache` 4 → 6
+
 ## [0.10.2] — 2026-07-28
 
 ### Fixed
