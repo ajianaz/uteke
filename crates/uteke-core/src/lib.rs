@@ -400,11 +400,12 @@ pub struct Uteke {
     store: Store,
     index: RwLock<VectorIndex>,
     embedder: Mutex<Option<Box<dyn Embedder>>>,
-    /// Cached initialization error message (#822). Set once on the first
-    /// `ensure_embedder` failure so subsequent calls return immediately
-    /// instead of retrying the expensive ORT/model load on every request.
-    /// Stored as String because our Error type is not Clone (contains io::Error).
-    embedder_init_error: Mutex<Option<String>>,
+    /// Cached initialization error (#822). `(message, cached_at, is_permanent)`.
+    /// Permanent failures (missing ORT lib, feature disabled) are cached forever.
+    /// Transient network failures (OpenAI/Ollama unreachable) use a 60s TTL so
+    /// they auto-retry after the outage passes. Stored as String because Error
+    /// is not Clone (contains io::Error).
+    embedder_init_error: Mutex<Option<(String, std::time::Instant, bool)>>,
     /// Embedding backend name ("onnx", "openai", "ollama", "custom"). Used by lazy init.
     embedder_backend: String,
     /// Caller-supplied embedding settings (from uteke.toml). Env vars still
@@ -643,17 +644,31 @@ impl Uteke {
     /// request (which causes log spam and CPU waste in Docker environments).
     fn ensure_embedder(&self) -> Result<(), Error> {
         // #822: Short-circuit — return cached init error if we already failed.
-        if let Ok(cached) = self.embedder_init_error.lock() {
-            if let Some(ref msg) = *cached {
-                return Err(Error::embed_msg(format!(
-                    "Embedder initialization previously failed (cached): {msg}"
-                )));
+        // Permanent failures (ORT lib missing) are cached forever.
+        // Transient network failures use a 60s TTL.
+        if let Ok(mut cached) = self.embedder_init_error.lock() {
+            if let Some((ref msg, cached_at, is_permanent)) = *cached {
+                if is_permanent || cached_at.elapsed() < std::time::Duration::from_secs(60) {
+                    return Err(Error::embed_msg(format!(
+                        "Embedder initialization previously failed (cached): {msg}"
+                    )));
+                }
+                // TTL expired — clear and retry
+                tracing::info!("Embedder init error cache expired (60s TTL), retrying...");
+                *cached = None;
             }
         }
 
         // #822: Helper to cache an init error message.
-        fn cache_init_err(slot: &Mutex<Option<String>>, e: &Error) {
-            let _ = slot.lock().map(|mut g| *g = Some(e.to_string()));
+        // is_permanent: true for local failures (missing lib), false for network (transient).
+        fn cache_init_err(
+            slot: &Mutex<Option<(String, std::time::Instant, bool)>>,
+            e: &Error,
+            is_permanent: bool,
+        ) {
+            let _ = slot
+                .lock()
+                .map(|mut g| *g = Some((e.to_string(), std::time::Instant::now(), is_permanent)));
         }
 
         let mut guard = self
@@ -670,7 +685,7 @@ impl Uteke {
                     match r {
                         Ok(e) => Box::new(e),
                         Err(err) => {
-                            cache_init_err(&self.embedder_init_error, &err);
+                            cache_init_err(&self.embedder_init_error, &err, true);
                             return Err(err);
                         }
                     }
@@ -679,7 +694,7 @@ impl Uteke {
                 "onnx" | "" => {
                     return Err(Error::embed_msg(
                         "ONNX embedding backend requested but 'onnx' feature is disabled at compile time. \
-                         Rebuild with --features onnx or use openai/ollama backend."
+                         Rebuild with --features onnx or use openai/ollama backend.",
                     ));
                 }
                 "custom" => {
@@ -714,7 +729,7 @@ impl Uteke {
                     match r {
                         Ok(e) => Box::new(e),
                         Err(err) => {
-                            cache_init_err(&self.embedder_init_error, &err);
+                            cache_init_err(&self.embedder_init_error, &err, false);
                             return Err(err);
                         }
                     }
@@ -740,7 +755,7 @@ impl Uteke {
                     match r {
                         Ok(e) => Box::new(e),
                         Err(err) => {
-                            cache_init_err(&self.embedder_init_error, &err);
+                            cache_init_err(&self.embedder_init_error, &err, false);
                             return Err(err);
                         }
                     }
