@@ -62,7 +62,7 @@ jobs:
 
       - name: Cache legacy ORT build
         id: cache-ort
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: onnxruntime-build/lib/libonnxruntime.so*
           key: ort-legacy-sse42-${{ env.ORT_VERSION }}-v1
