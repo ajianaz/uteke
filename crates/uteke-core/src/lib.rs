@@ -400,6 +400,11 @@ pub struct Uteke {
     store: Store,
     index: RwLock<VectorIndex>,
     embedder: Mutex<Option<Box<dyn Embedder>>>,
+    /// Cached initialization error message (#822). Set once on the first
+    /// `ensure_embedder` failure so subsequent calls return immediately
+    /// instead of retrying the expensive ORT/model load on every request.
+    /// Stored as String because our Error type is not Clone (contains io::Error).
+    embedder_init_error: Mutex<Option<String>>,
     /// Embedding backend name ("onnx", "openai", "ollama", "custom"). Used by lazy init.
     embedder_backend: String,
     /// Caller-supplied embedding settings (from uteke.toml). Env vars still
@@ -566,6 +571,7 @@ impl Uteke {
             store,
             index: RwLock::new(index),
             embedder: Mutex::new(embedder),
+            embedder_init_error: Mutex::new(None),
             embedder_backend,
             embedding_settings,
             fallback_settings: FallbackSettings::default(),
@@ -631,7 +637,25 @@ impl Uteke {
     /// Commands that don't need embedding (list, get, stats, tags, namespace,
     /// aging, export, forget) never trigger this, making them instant (~1ms)
     /// instead of waiting for model load (~2.5s).
+    ///
+    /// On failure, the error is cached (#822) so subsequent calls return
+    /// immediately instead of retrying the expensive ORT/model init on every
+    /// request (which causes log spam and CPU waste in Docker environments).
     fn ensure_embedder(&self) -> Result<(), Error> {
+        // #822: Short-circuit — return cached init error if we already failed.
+        if let Ok(cached) = self.embedder_init_error.lock() {
+            if let Some(ref msg) = *cached {
+                return Err(Error::embed_msg(format!(
+                    "Embedder initialization previously failed (cached): {msg}"
+                )));
+            }
+        }
+
+        // #822: Helper to cache an init error message.
+        fn cache_init_err(slot: &Mutex<Option<String>>, e: &Error) {
+            let _ = slot.lock().map(|mut g| *g = Some(e.to_string()));
+        }
+
         let mut guard = self
             .embedder
             .lock()
@@ -641,7 +665,23 @@ impl Uteke {
             let backend = self.embedder_backend.as_str();
             let embedder: Box<dyn crate::embed::Embedder> = match backend {
                 #[cfg(feature = "onnx")]
-                "onnx" | "" => Box::new(crate::embed::OnnxEmbedder::new()?),
+                "onnx" | "" => {
+                    let r = crate::embed::OnnxEmbedder::new();
+                    match r {
+                        Ok(e) => Box::new(e),
+                        Err(err) => {
+                            cache_init_err(&self.embedder_init_error, &err);
+                            return Err(err);
+                        }
+                    }
+                }
+                #[cfg(not(feature = "onnx"))]
+                "onnx" | "" => {
+                    return Err(Error::embed_msg(
+                        "ONNX embedding backend requested but 'onnx' feature is disabled at compile time. \
+                         Rebuild with --features onnx or use openai/ollama backend."
+                    ));
+                }
                 "custom" => {
                     return Err(Error::generic(
                         "Custom embedder backend set but no embedder was provided",
@@ -664,13 +704,20 @@ impl Uteke {
                     } else {
                         cfg.dims
                     };
-                    Box::new(crate::embed::OpenAiEmbedder::new(
+                    let r = crate::embed::OpenAiEmbedder::new(
                         &cfg.api_key,
                         &model,
                         &base_url,
                         &cfg.endpoint_path,
                         dims,
-                    )?)
+                    );
+                    match r {
+                        Ok(e) => Box::new(e),
+                        Err(err) => {
+                            cache_init_err(&self.embedder_init_error, &err);
+                            return Err(err);
+                        }
+                    }
                 }
                 "ollama" => {
                     let cfg = EmbeddingSettings::resolve_with_defaults(&self.embedding_settings);
@@ -689,7 +736,14 @@ impl Uteke {
                     } else {
                         cfg.dims
                     };
-                    Box::new(crate::embed::OllamaEmbedder::new(&base_url, &model, dims)?)
+                    let r = crate::embed::OllamaEmbedder::new(&base_url, &model, dims);
+                    match r {
+                        Ok(e) => Box::new(e),
+                        Err(err) => {
+                            cache_init_err(&self.embedder_init_error, &err);
+                            return Err(err);
+                        }
+                    }
                 }
                 other => {
                     return Err(Error::Validation(format!(

@@ -5,10 +5,11 @@
 //!
 //! Resolution order:
 //! 1. `ORT_LIB_PATH` env var — explicit override (for testing / custom setups).
-//! 2. If AVX2 is detected → `./libonnxruntime.so` (AVX2 build, ships in standard bundle).
-//! 3. If AVX2 is NOT detected → `./ort-legacy/libonnxruntime.so` (SSE4.2 build, sidecar).
+//! 2. If AVX2 is detected → `<exe_dir>/libonnxruntime.so` (AVX2 build, ships in standard bundle).
+//!    If not found, falls through to step 4 (does NOT error immediately).
+//! 3. If AVX2 is NOT detected → `<exe_dir>/ort-legacy/libonnxruntime.so` (SSE4.2 build, sidecar).
 //! 4. System lib paths: `/usr/local/lib`, `/usr/lib`, `/lib` (Docker / package installs).
-//! 5. If no library found → return error (caller can fall back to non-ORT embedder).
+//! 5. If no library found → return error with all searched locations.
 
 use std::path::PathBuf;
 
@@ -65,7 +66,10 @@ pub fn has_avx2() -> bool {
 /// Search order:
 /// 1. `ORT_LIB_PATH` environment variable (explicit override).
 /// 2. AVX2 detected → `<exe_dir>/libonnxruntime.so` (standard bundle).
+///    If not found, falls through to step 4.
 /// 3. No AVX2 → `<exe_dir>/ort-legacy/libonnxruntime.so` (legacy sidecar).
+/// 4. Unix system paths: `/usr/local/lib`, `/usr/lib`, `/lib`.
+/// 5. Error with all searched locations.
 ///
 /// # Errors
 ///
@@ -93,8 +97,8 @@ pub fn resolve_ort_lib() -> Result<OrtLibInfo, String> {
     let exe_dir = exe_dir()?;
     let avx2 = has_avx2();
 
+    // 2. AVX2 CPU → try standard library next to binary
     if avx2 {
-        // 2. AVX2 CPU → use standard library next to binary
         let standard_path = exe_dir.join(ORT_LIB_NAME);
         if standard_path.exists() {
             tracing::info!(
@@ -106,23 +110,19 @@ pub fn resolve_ort_lib() -> Result<OrtLibInfo, String> {
                 has_avx2: true,
             });
         }
-        // Standard lib not found — this is fine during development (cargo run)
-        // The error will be caught when ort::init_from() is called.
-        tracing::warn!(
-            "ORT: AVX2 detected but no standard library found at {}. \
-             If running from source, set ORT_LIB_PATH or build with download-binaries.",
+        // Standard lib not found in exe_dir — fall through to system paths.
+        // This is common in Docker where binary is in /usr/local/bin/ but .so
+        // is in /usr/local/lib/.
+        tracing::debug!(
+            "ORT: AVX2 detected but no standard library at {}. \
+             Falling through to system path search.",
             standard_path.display()
         );
-        return Err(format!(
-            "AVX2 detected but ONNX Runtime library not found at '{}'. \
-             Set ORT_LIB_PATH or use the standard release bundle.",
-            standard_path.display()
-        ));
     }
 
     // 3. No AVX2 → look for legacy sidecar
     let legacy_path = exe_dir.join(LEGACY_ORT_DIR).join(ORT_LIB_NAME);
-    if legacy_path.exists() {
+    if !avx2 && legacy_path.exists() {
         tracing::info!(
             "ORT: No AVX2 detected, using legacy (SSE4.2) library: {}",
             legacy_path.display()
@@ -151,11 +151,22 @@ pub fn resolve_ort_lib() -> Result<OrtLibInfo, String> {
         }
     }
 
-    Err(format!(
-        "CPU lacks AVX2 and legacy ORT library not found at '{}'. \
-         Use the 'legacy' release bundle which includes the ort-legacy/ sidecar.",
-        legacy_path.display()
-    ))
+    // 5. No library found anywhere — build a descriptive error.
+    if avx2 {
+        Err(format!(
+            "ONNX Runtime library not found. Searched:\n\
+             - {} (exe directory)\n\
+             - /usr/local/lib, /usr/lib, /lib (system paths)\n\
+             Set ORT_LIB_PATH to the library file, or use the standard release bundle.",
+            exe_dir.join(ORT_LIB_NAME).display()
+        ))
+    } else {
+        Err(format!(
+            "No AVX2 support and legacy ORT library not found at '{}'. \
+             Use the 'legacy' release bundle which includes the ort-legacy/ sidecar.",
+            legacy_path.display()
+        ))
+    }
 }
 
 /// Get the directory containing the running executable.
