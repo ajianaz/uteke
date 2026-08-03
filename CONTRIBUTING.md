@@ -260,6 +260,12 @@ A: If the change is still relevant and reasonably small, yes. Large stale PRs ma
 
 Don't file them as public issues. See [SECURITY.md](SECURITY.md).
 
+## Deep-dive guides
+
+Detailed contributor and maintainer guides live in [`docs/contributing/`](docs/contributing/):
+
+- [Testing guide](docs/contributing/testing.md) — testing contract, subsystem invariants, what makes a good test
+
 ## Code of Conduct
 
 See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
