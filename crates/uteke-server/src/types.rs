@@ -49,7 +49,6 @@ pub struct DocSearchRequest {
 
 #[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct DocMoveRequest {
     pub id: Option<String>,
     pub slug: Option<String>,
@@ -584,10 +583,7 @@ fn default_prune_ttl() -> u32 {
 #[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 pub struct ConsolidateRequest {
-    #[serde(
-        default = "default_consolidate_threshold",
-        deserialize_with = "flex_f32"
-    )]
+    #[serde(default = "default_consolidate_threshold")]
     pub threshold: f32,
     #[serde(default)]
     pub dry_run: bool,
@@ -597,40 +593,6 @@ pub struct ConsolidateRequest {
 
 fn default_consolidate_threshold() -> f32 {
     0.9
-}
-
-/// Deserialize an `f32` from either a number or a JSON string.
-/// Some MCP layers (e.g. Hermes) serialize all parameters as strings,
-/// so accepting `"0.95"` in addition to `0.95` avoids 400 errors
-/// from downstream integrations.
-fn flex_f32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
-    use serde::de::{self, Visitor};
-    use std::fmt;
-
-    struct FlexF32;
-
-    impl Visitor<'_> for FlexF32 {
-        type Value = f32;
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("an f32 or a string representation of an f32")
-        }
-
-        fn visit_f32<E: de::Error>(self, v: f32) -> Result<f32, E> {
-            Ok(v)
-        }
-
-        fn visit_f64<E: de::Error>(self, v: f64) -> Result<f32, E> {
-            Ok(v as f32)
-        }
-
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<f32, E> {
-            v.parse::<f32>()
-                .map_err(|_| de::Error::custom(format!("cannot parse \"{v}\" as f32")))
-        }
-    }
-
-    d.deserialize_any(FlexF32)
 }
 
 #[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
