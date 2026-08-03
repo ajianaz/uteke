@@ -154,24 +154,6 @@ Get a document by slug.
 
 **Request body**: [`DocGetRequest`](#docgetrequest)
 
-#### 🟡 `POST` `/doc/list`
-
-List documents with optional namespace/limit/roots_only/parent filters.
-
-**Request body**: [`DocListParams`](#doclistparams)
-
-#### 🟡 `POST` `/doc/search`
-
-Search documents by query with optional mode/namespace/limit.
-
-**Request body**: [`DocSearchRequest`](#docsearchrequest)
-
-#### 🟡 `POST` `/doc/update`
-
-Update an existing document (content, title, tags, parent).
-
-**Request body**: [`DocUpdateRequest`](#docupdaterequest)
-
 #### 🟡 `POST` `/doc/move`
 
 Move a document to a different parent.
