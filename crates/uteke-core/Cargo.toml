@@ -1,0 +1,39 @@
+[package]
+name = "uteke-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+rust-version.workspace = true
+keywords = ["memory", "ai", "embedding", "vector-search", "semantic"]
+categories = ["science", "data-structures"]
+readme = "../../README.md"
+
+[features]
+default = ["onnx"]
+onnx = ["dep:ort", "dep:ndarray", "dep:tokenizers", "dep:sha2"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.40", features = ["bundled"] }
+usearch = "2"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
+thiserror = "2"
+dirs = "6"
+tracing = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
+fs2 = "0.4"
+# ONNX-only dependencies (gated behind `onnx` feature)
+# NOTE: load-dynamic requires api-18+ to avoid pykeio/ort#547 (vitis EP compile error).
+# download-binaries is intentionally removed — ORT lib is shipped as a sidecar instead.
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["load-dynamic", "ndarray", "api-18"], optional = true }
+ndarray = { version = "0.17", optional = true }
+tokenizers = { version = "0.23", optional = true }
+sha2 = { version = "0.11", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+serial_test = "3"

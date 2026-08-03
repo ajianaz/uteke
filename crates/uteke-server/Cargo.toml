@@ -1,0 +1,36 @@
+[package]
+name = "uteke-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "HTTP server for uteke — persistent warm memory for AI agents"
+keywords = ["server", "memory", "ai", "http", "embedding"]
+categories = ["web-programming::http-server", "development-tools"]
+
+[features]
+docgen = ["dep:schemars"]
+
+[lib]
+name = "uteke_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "uteke-serve"
+path = "src/main.rs"
+
+[dependencies]
+uteke-core = { path = "../uteke-core", version = "0.10.0", features = ["onnx"] }
+uteke-mcp = { path = "../uteke-mcp", version = "0.10.0" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "1", optional = true }
+toml = "1"
+tiny_http = "0.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.1", features = ["env-filter"] }
+ctrlc = "3"
+uuid = "1"
+sha2 = "0.11"
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }

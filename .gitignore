@@ -1,0 +1,18 @@
+/target/
+*.swp
+*.swo
+*~
+.DS_Store
+.idea/
+.vscode/
+*.pdb
+__pycache__/
+milestone*.md
+
+# Runtime index files
+uteke_index.keys
+uteke_index.usearch
+.fusion/
+progress.md
+.cora/
+scripts/demo-record.sh

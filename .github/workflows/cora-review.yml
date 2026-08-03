@@ -1,0 +1,35 @@
+name: Cora AI Code Review
+
+on:
+  pull_request:
+    branches: [develop, main]
+    types: [opened, synchronize, ready_for_review, reopened]
+
+concurrency:
+  group: cora-review-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+jobs:
+  cora-review:
+    name: Cora Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run Cora AI Code Review
+        uses: codecoradev/cora-review-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cora-api-key: ${{ secrets.CORA_API_KEY }}
+          cora-base-url: ${{ secrets.CORA_BASE_URL }}
+          cora-model: ${{ secrets.CORA_MODEL }}

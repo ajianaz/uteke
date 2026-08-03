@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/uteke-core",
+    "crates/uteke-cli",
+    "crates/uteke-server",
+    "crates/uteke-mcp",
+    "crates/docgen",
+]
+
+[workspace.package]
+version = "0.10.3"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/codecoradev/uteke"
+description = "The Brain for Your AI — persistent memory and smart context management"
+rust-version = "1.85"
+keywords = ["memory", "ai", "embedding", "vector-search", "semantic"]
+categories = ["command-line-utilities", "science"]
+readme = "README.md"
+homepage = "https://uteke.dev"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.bench]
+opt-level = 3
+lto = true
