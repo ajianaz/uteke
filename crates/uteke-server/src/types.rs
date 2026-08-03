@@ -49,6 +49,7 @@ pub struct DocSearchRequest {
 
 #[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DocMoveRequest {
     pub id: Option<String>,
     pub slug: Option<String>,

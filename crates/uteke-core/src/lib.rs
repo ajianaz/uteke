@@ -1276,17 +1276,24 @@ impl Uteke {
         id_or_slug: &str,
         new_parent_slug: Option<&str>,
     ) -> Result<usize, Error> {
-        let doc = self
-            .store
-            .get_document_by_slug(id_or_slug)?
-            .or_else(|| self.store.get_document(id_or_slug).unwrap_or(None))
-            .ok_or_else(|| Error::validation("document not found for move"))?;
+        // Resolve by slug first, fall back to UUID lookup (#833).
+        let doc = match self.store.get_document_by_slug(id_or_slug)? {
+            Some(d) => d,
+            None => self
+                .store
+                .get_document(id_or_slug)?
+                .ok_or_else(|| Error::validation("document not found for move"))?,
+        };
 
         let new_parent_id = match new_parent_slug {
             Some(ps) => {
-                let parent = self.store.get_document_by_slug(ps)?.ok_or_else(|| {
-                    Error::validation(format!("parent document '{ps}' not found"))
-                })?;
+                // Resolve by slug first, fall back to UUID lookup (#833).
+                let parent = match self.store.get_document_by_slug(ps)? {
+                    Some(d) => d,
+                    None => self.store.get_document(ps)?.ok_or_else(|| {
+                        Error::validation(format!("parent document '{ps}' not found"))
+                    })?,
+                };
                 Some(parent.id)
             }
             None => None,
