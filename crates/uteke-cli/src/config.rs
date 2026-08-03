@@ -756,7 +756,9 @@ impl Config {
 
     /// Ensure the global uteke directory exists and return its path.
     pub fn ensure_dirs() -> PathBuf {
-        let base = uteke_core::uteke_home().expect("Cannot determine uteke home directory");
+        let base = dirs::home_dir()
+            .expect("Cannot determine home directory")
+            .join(".uteke");
         std::fs::create_dir_all(&base).ok();
         std::fs::create_dir_all(base.join("models")).ok();
         base
@@ -861,9 +863,8 @@ impl Config {
     /// Set the default namespace in the global config file.
     /// Creates or updates the `[store]` section's `namespace` key.
     pub fn set_default_namespace(name: &str) -> Result<(), String> {
-        // Must be the same file `load()` reads via global_config_path(), or the write
-        // lands in a file nothing consults and the command is a silent no-op.
-        let config_path = global_config_path().ok_or("Cannot determine uteke home directory")?;
+        let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+        let config_path = home.join(".uteke").join("uteke.toml");
 
         // Read existing config or start fresh
         let content = if config_path.exists() {
@@ -893,10 +894,11 @@ fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
 }
 
 fn migrate_legacy_global() {
-    let base = match uteke_core::uteke_home() {
-        Ok(b) => b,
-        Err(_) => return,
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return,
     };
+    let base = home.join(".uteke");
     let legacy = base.join("config.toml");
     let modern = base.join("uteke.toml");
 
