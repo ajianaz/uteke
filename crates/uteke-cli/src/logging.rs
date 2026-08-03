@@ -9,8 +9,8 @@ use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::Subscribe
 /// Initialize logging. Returns a guard that must stay alive for the
 /// file writer to continue flushing.
 pub fn init(verbose: bool) -> Box<dyn std::any::Any + Send> {
-    let log_dir = dirs::home_dir()
-        .map(|h| h.join(".uteke"))
+    let log_dir = uteke_core::uteke_home()
+        .ok()
         .filter(|d| d.is_dir() || std::fs::create_dir_all(d).is_ok())
         .unwrap_or_else(|| {
             // Fallback to temp dir instead of cwd

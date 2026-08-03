@@ -369,6 +369,33 @@ pub const ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         method: "POST",
+        path: "/doc/list",
+        description: "List documents with optional namespace/limit/roots_only/parent filters.",
+        request_type: Some("DocListParams"),
+        response_type: None,
+        excludes_deprecated: false,
+        issues: &[],
+    },
+    Endpoint {
+        method: "POST",
+        path: "/doc/search",
+        description: "Search documents by query with optional mode/namespace/limit.",
+        request_type: Some("DocSearchRequest"),
+        response_type: None,
+        excludes_deprecated: false,
+        issues: &[],
+    },
+    Endpoint {
+        method: "POST",
+        path: "/doc/update",
+        description: "Update an existing document (content, title, tags, parent).",
+        request_type: Some("DocUpdateRequest"),
+        response_type: None,
+        excludes_deprecated: false,
+        issues: &[],
+    },
+    Endpoint {
+        method: "POST",
         path: "/doc/move",
         description: "Move a document to a different parent.",
         request_type: Some("DocMoveRequest"),
@@ -566,16 +593,38 @@ pub const ENDPOINTS: &[Endpoint] = &[
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     #[test]
-    fn endpoints_count_matches_handlers() {
-        // This test enforces that the registry stays in sync with handlers.rs.
-        // If you add/remove a handler, update ENDPOINTS above.
-        // Current count: derived from handlers.rs route matches.
+    fn registry_covers_handler_routes() {
+        let handler_source = include_str!("handlers.rs");
+        let handler_paths = handler_source
+            .lines()
+            .filter_map(|line| {
+                let method_start = line.find("(Method::")?;
+                let path_start = line[method_start..].find(", \"")? + method_start + 3;
+                let path_end = line[path_start..].find('"')? + path_start;
+                Some(&line[path_start..path_end])
+            })
+            .collect::<BTreeSet<_>>();
+        let registered_paths = ENDPOINTS
+            .iter()
+            .map(|endpoint| endpoint.path)
+            .collect::<BTreeSet<_>>();
+
+        let missing = handler_paths
+            .difference(&registered_paths)
+            .copied()
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "Handler routes missing from API registry: {missing:?}"
+        );
+
         assert!(!ENDPOINTS.is_empty(), "Endpoint registry must not be empty");
-        // Spot-check: we should have at least the core endpoints
-        let paths: Vec<&str> = ENDPOINTS.iter().map(|e| e.path).collect();
+        let paths = registered_paths;
         assert!(paths.contains(&"/health"), "Missing /health");
         assert!(paths.contains(&"/remember"), "Missing /remember");
         assert!(paths.contains(&"/recall"), "Missing /recall");
