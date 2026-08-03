@@ -13,8 +13,15 @@ jobs:
       - name: Check branch name
         env:
           HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           echo "Checking branch: $HEAD_REF"
+
+          # Skip check for merge PRs from protected branches (develop → main)
+          if echo "$HEAD_REF" | grep -qE "^(develop|main)$"; then
+            echo "⏭️ Skipping branch naming check for protected branch: $HEAD_REF"
+            exit 0
+          fi
 
           # Allowed prefixes (kebab-case)
           ALLOWED="^(feat|fix|docs|chore|perf|security|refactor|test|build|ci)/"
