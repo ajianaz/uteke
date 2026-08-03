@@ -1276,24 +1276,17 @@ impl Uteke {
         id_or_slug: &str,
         new_parent_slug: Option<&str>,
     ) -> Result<usize, Error> {
-        // Resolve by slug first, fall back to UUID lookup (#833).
-        let doc = match self.store.get_document_by_slug(id_or_slug)? {
-            Some(d) => d,
-            None => self
-                .store
-                .get_document(id_or_slug)?
-                .ok_or_else(|| Error::validation("document not found for move"))?,
-        };
+        let doc = self
+            .store
+            .get_document_by_slug(id_or_slug)?
+            .or_else(|| self.store.get_document(id_or_slug).unwrap_or(None))
+            .ok_or_else(|| Error::validation("document not found for move"))?;
 
         let new_parent_id = match new_parent_slug {
             Some(ps) => {
-                // Resolve by slug first, fall back to UUID lookup (#833).
-                let parent = match self.store.get_document_by_slug(ps)? {
-                    Some(d) => d,
-                    None => self.store.get_document(ps)?.ok_or_else(|| {
-                        Error::validation(format!("parent document '{ps}' not found"))
-                    })?,
-                };
+                let parent = self.store.get_document_by_slug(ps)?.ok_or_else(|| {
+                    Error::validation(format!("parent document '{ps}' not found"))
+                })?;
                 Some(parent.id)
             }
             None => None,
@@ -1800,25 +1793,16 @@ impl Uteke {
         // Max possible RRF: 1/(k+1) when rank=0 in a single source.
         let max_rrf = 1.0 / (RRF_K as f64 + 1.0);
 
-        // RRF decides the ORDER; it must not decide the reported score. Normalizing the
-        // RRF sum yields (k+1)/(k+1+rank) — a pure function of rank, identical for every
-        // query — so a query matching nothing still reports 1.000 and `min_score` can
-        // never filter. Memories carry a real cosine, so report that.
-        //
-        // Documents keep the normalized RRF for now: `DocumentSearchResult::score` means
-        // three different things by mode (cosine from doc_search_semantic, 1/(i+1) rank
-        // from doc_search_fts, an RRF sum from doc_search_hybrid), and an FTS-only hit has
-        // no similarity to report at all. Putting documents on the same scale requires
-        // unifying that first — a separate change.
         let results: Vec<UnifiedSearchResult> = scored
             .into_iter()
             .take(limit)
-            .map(|(key, rrf_sum)| {
+            .map(|(key, score)| {
+                let normalized = (score / max_rrf).clamp(0.0, 1.0) as f32;
                 if let Some(sr) = mem_map.remove(&key) {
                     let m = &sr.memory;
                     UnifiedSearchResult {
                         result_type: SearchResultType::Memory,
-                        score: sr.score,
+                        score: normalized,
                         content: m.content.clone(),
                         memory_id: Some(m.id.clone()),
                         tags: m.tags.clone(),
@@ -1843,7 +1827,7 @@ impl Uteke {
                 } else if let Some(dr) = doc_map.remove(&key) {
                     UnifiedSearchResult {
                         result_type: SearchResultType::Document,
-                        score: (rrf_sum / max_rrf).clamp(0.0, 1.0) as f32,
+                        score: normalized,
                         content: if dr.chunk_snippet.is_empty() {
                             dr.document.title.clone()
                         } else {
@@ -2328,55 +2312,6 @@ mod tests {
                 r.score
             );
         }
-    }
-
-    #[test]
-    #[ignore]
-    fn test_unified_recall_reports_similarity_not_rrf_rank() {
-        // A real directory, not ":memory:" — the usearch index is derived from the SQLite
-        // path, so an in-memory store has no vector index and every recall returns empty.
-        let dir = tempfile::tempdir().unwrap();
-        let uteke = Uteke::open(dir.path().join("uteke.db")).unwrap();
-        uteke
-            .remember(
-                "Rust is a systems programming language focused on memory safety",
-                &[],
-                None,
-                None,
-            )
-            .unwrap();
-        uteke
-            .remember(
-                "The cat sat on the mat in the afternoon sun",
-                &[],
-                None,
-                None,
-            )
-            .unwrap();
-
-        let recall = |q: &str| {
-            uteke
-                .recall_unified(q, 2, None, None, 0.0, SearchType::All, None, None, false)
-                .unwrap()
-        };
-        let matching = recall("rust memory safety");
-        let unrelated = recall("quarterly dividend tax filing deadline");
-
-        // Normalizing the RRF sum yields (k+1)/(k+1+rank) — a pure function of rank.
-        // Every query's top hit would score exactly 1.0 and its runner-up exactly
-        // 61/62, so both assertions below fail if rank leaks back into the score.
-        assert!(
-            matching[0].score < 1.0,
-            "top score {} is the normalized RRF constant, not a similarity",
-            matching[0].score
-        );
-        assert!(
-            matching[0].score > unrelated[0].score,
-            "a matching query ({}) must outscore an unrelated one ({}); \
-             equal scores mean the score is rank, not relevance",
-            matching[0].score,
-            unrelated[0].score
-        );
     }
 
     #[test]

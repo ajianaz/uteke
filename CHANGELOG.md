@@ -1,24 +1,3 @@
-## [0.11.0] — 2026-08-03
-
-### Fixed
-- **`POST /doc/move` silent data loss on unknown fields (#833)** — Added `#[serde(deny_unknown_fields)]` to `DocMoveRequest`. Consumers sending wrong field names (e.g. `parent_slug` instead of `new_parent`) now get HTTP 400 instead of doc being moved to root with no error.
-- **`doc_move()` UUID fallback for parent resolution (#833)** — `doc_move()` now tries slug lookup first, then UUID lookup for `new_parent`. Consistent with source doc resolution and `doc_delete()` behavior.
-- **DB error propagation in doc_move (#833)** — Replaced `.unwrap_or(None)` with proper `?` + `match` pattern. Transient DB errors now propagate correctly instead of being silently swallowed.
-- **Recall score reports RRF rank instead of similarity (#831)** — `recall_unified_all` now reports cosine similarity scores instead of rank-derived RRF values when results appear in only one store.
-- **MCP/CLI store mismatch — hardcoded `~/.uteke` paths (#830)** — Four call sites hardcoded the old data directory. `uteke-mcp` opened a separate store from the CLI/server. All paths now resolve through `uteke_home()`.
-- **`POST /consolidate` rejects string threshold (#826)** — Added `flex_f32` deserializer accepting both numeric and string JSON values for `threshold` parameter. Fixes MCP layers that stringify all parameters.
-
-### Added
-- **API route drift guard test (#829)** — Source-backed test extracts handler paths from `handlers.rs` and asserts every handler route is registered in the API registry. 46 handler paths, 57 registered paths, 0 missing.
-- **Missing doc endpoints in API reference (#827)** — Registered `/doc/list`, `/doc/search`, `/doc/update` in the docgen registry. Auto-generated `api-reference.md` now covers all document endpoints.
-
-### Changed
-- **Open-source governance docs (#834)** — Added `CODE_OF_CONDUCT.md`, rewrote `CONTRIBUTING.md` (solo maintainer context, branch naming convention, test requirements), upgraded PR template (What/Why/How/Testing), replaced `.md` issue templates with YAML forms, added `pr-checks.yml` CI workflow.
-- **API reference updated** — 3 new document endpoints documented.
-
-### Contributors
-- [@ajianaz](https://github.com/ajianaz) — doc_move fixes, store path resolution, recall score fix, API docs
-
 ## [0.10.3] — 2026-08-01
 
 ### Fixed
