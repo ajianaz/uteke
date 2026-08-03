@@ -27,14 +27,10 @@ fn main() {
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
 
-    // Open uteke store. Must go through uteke_home() — the canonical resolver the CLI
-    // uses (UTEKE_HOME override, ~/.codecora/uteke, legacy ~/.uteke auto-migration).
-    // Hardcoding ~/.uteke here pinned the MCP server to the pre-move legacy path, so it
-    // silently opened an empty second store and never saw anything the CLI had written.
-    let store_path = uteke_core::uteke_home().unwrap_or_else(|e| {
-        eprintln!("Cannot determine uteke store path: {e}");
-        std::process::exit(1);
-    });
+    // Open uteke store
+    let store_path = dirs::home_dir()
+        .map(|h| h.join(".uteke"))
+        .expect("Cannot determine home directory");
 
     let uteke = match Uteke::open(&store_path) {
         Ok(u) => u,
