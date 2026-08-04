@@ -1091,7 +1091,18 @@ impl crate::Uteke {
 
     /// Delete a tag from all memories in a namespace.
     pub fn delete_tag(&self, tag: &str, namespace: Option<&str>) -> Result<usize, Error> {
-        self.store.delete_tag(tag, namespace)
+        let deleted = self.store.delete_tag(tag, namespace)?;
+        if deleted > 0 {
+            // Invalidate recall cache to prevent stale search results (#844).
+            // If namespace is specified, invalidate only that namespace.
+            // Cross-namespace delete requires full cache flush.
+            if let Some(ns) = namespace {
+                self.recall_cache.invalidate_namespace(ns);
+            } else {
+                self.recall_cache.clear();
+            }
+        }
+        Ok(deleted)
     }
 
     /// Count memories by tag in a namespace.
