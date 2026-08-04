@@ -61,8 +61,12 @@ fn main() {
         // Delegate to the shared handler (#381).
         // None = notification (no response per JSON-RPC 2.0 §4.1).
         if let Some(response) = uteke_mcp::handle_jsonrpc(&uteke, &line) {
-            let _ = writeln!(stdout, "{response}");
-            let _ = stdout.flush();
+            // Detect broken pipe: if the parent process has disconnected,
+            // writes to stdout will fail. Exit cleanly instead of hanging (#843).
+            if writeln!(stdout, "{response}").is_err() || stdout.flush().is_err() {
+                eprintln!("stdout write failed — parent process disconnected. Exiting.");
+                break;
+            }
         }
     }
 }
