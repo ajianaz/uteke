@@ -695,6 +695,14 @@ impl crate::Uteke {
             }
         };
 
+        // Pre-compute min-max normalization of BM25 ranks.
+        // BM25 rank: negative values, more negative = more relevant.
+        // Normalize to 0.0..1.0 so min_score filter is meaningful.
+        let ranks: Vec<f64> = fts_results.iter().map(|(_, r)| *r).collect();
+        let best = ranks.iter().copied().fold(f64::INFINITY, f64::min); // most negative
+        let worst = ranks.iter().copied().fold(f64::NEG_INFINITY, f64::max); // least negative
+        let range = best - worst;
+
         let results: Vec<SearchResult> = fts_results
             .into_iter()
             .filter(|(memory, _)| {
@@ -715,13 +723,15 @@ impl crate::Uteke {
                 }
                 true
             })
-            .map(|(memory, _rank)| {
-                // Convert FTS5 BM25 rank to 0..1 score.
-                // BM25 returns negative values (more negative = worse relevance).
-                // We use rank-based scoring instead of raw BM25 since
-                // BM25 magnitudes vary by query and aren't normalized.
-                // Score is assigned by position in the result list.
-                let score = 1.0f32; // Placeholder — actual ranking done by RRF in hybrid
+            .map(|(memory, rank)| {
+                // Convert FTS5 BM25 rank to 0..1 score via min-max normalization.
+                // BM25 returns negative values (more negative = better match).
+                // After normalization: best match = 1.0, worst match = 0.0.
+                let score = if range.abs() < f64::EPSILON {
+                    1.0f32 // single result or all same rank
+                } else {
+                    (((rank - worst) / range).clamp(0.0, 1.0)) as f32
+                };
                 SearchResult { memory, score }
             })
             .take(limit)
@@ -1086,7 +1096,17 @@ impl crate::Uteke {
         new: &str,
         namespace: Option<&str>,
     ) -> Result<usize, Error> {
-        self.store.rename_tag(old, new, namespace)
+        let renamed = self.store.rename_tag(old, new, namespace)?;
+        if renamed > 0 {
+            // Invalidate recall cache — tag filters may reference the old
+            // tag name, so cached results are now stale (#849).
+            if let Some(ns) = namespace {
+                self.recall_cache.invalidate_namespace(ns);
+            } else {
+                self.recall_cache.clear();
+            }
+        }
+        Ok(renamed)
     }
 
     /// Delete a tag from all memories in a namespace.

@@ -137,10 +137,15 @@ impl RecallCache {
         }
     }
 
-    /// Invalidate all cached entries for a namespace (e.g., after remember/forget).
+    /// Invalidate cached entries for a namespace (e.g., after remember/forget).
+    ///
+    /// Also flushes "all" entries because namespace-scoped mutations affect
+    /// cross-namespace queries. Without this, `recall(namespace=None)` would
+    /// return stale results after a `remember` or `forget` in a specific
+    /// namespace (#849).
     pub fn invalidate_namespace(&self, namespace: &str) {
         if let Ok(mut entries) = self.entries.lock() {
-            entries.retain(|k, _| k.namespace != namespace);
+            entries.retain(|k, _| k.namespace != namespace && k.namespace != "all");
         }
     }
 
