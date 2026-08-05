@@ -1098,12 +1098,13 @@ impl Uteke {
             has_children: false,
         };
 
-        let doc_id = self.store.upsert_document(&doc)?;
-
-        // Delete old chunks on update (re-chunking).
+        // Capture old chunk IDs BEFORE upsert (upsert_document deletes chunks
+        // internally as part of its transaction, so querying after returns empty).
         let old_chunk_ids = self
             .store
-            .delete_chunks_for_documents(std::slice::from_ref(&doc_id))?;
+            .get_chunk_ids_for_documents(std::slice::from_ref(&doc.id))?;
+
+        let doc_id = self.store.upsert_document(&doc)?;
 
         // Chunk and embed the content.
         self.ensure_embedder()?;
