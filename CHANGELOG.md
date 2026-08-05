@@ -9,12 +9,15 @@
 
 ### Added
 - **MCP + CLI room-document junction tools (#859)** — The HTTP API had 4 junction endpoints (`/room/add-document`, `/room/remove-document`, `/room/list-documents`, `/doc/list-rooms`) but these were not exposed via MCP or CLI. Added 4 new MCP tools (`uteke_room_add_document`, `uteke_room_remove_document`, `uteke_room_list_documents`, `uteke_doc_list_rooms`) and 4 CLI subcommands (`room add-document`, `room remove-document`, `room list-documents`, `room list-rooms`). MCP and CLI clients can now manage room↔document links without HTTP.
+- **Windows PowerShell installer (#779)** — Added `install.ps1` for native Windows installation via PowerShell. Mirrors the bash installer (`install.sh`) — auto-detects latest release, downloads binary, adds to PATH.
 
 ### Changed
 - **FTS5 documents index now includes content body (#860)** — The `documents_fts` virtual table previously indexed only `title` and `slug` columns. Now also indexes `content`, enabling full-text search across document bodies. Schema migration auto-detects old FTS tables (missing `content` column via `pragma_table_info`) and recreates with full indexing + backfill. Fresh databases get 3-column FTS5 from initial schema.
 
 ### Contributors
 - [@ajianaz](https://github.com/ajianaz) — all fixes, features, and FTS5 migration
+- [@KazamiHazaki](https://github.com/KazamiHazaki) — Windows PowerShell installer (#779)
+- [@dependabot](https://github.com/apps/dependabot) — dependency updates (toml, clap, clap_complete, serde)
 
 ## [0.11.0] — 2026-08-03
 
@@ -35,7 +38,9 @@
 - **API reference updated** — 3 new document endpoints documented.
 
 ### Contributors
-- [@ajianaz](https://github.com/ajianaz) — doc_move fixes, store path resolution, recall score fix, API docs
+- [@ajianaz](https://github.com/ajianaz) — doc_move fixes, recall score fix, API docs, governance docs
+- [@themiguelamador](https://github.com/themiguelamador) — store path resolution via `uteke_home()`, recall similarity reporting (#830, #831)
+- [@tomatotomata](https://github.com/tomatotomata) — API route drift guard test (#829)
 
 ## [0.10.3] — 2026-08-01
 
