@@ -120,6 +120,7 @@ pub(crate) fn run_recall(
                 None,
                 None,
                 enrich,
+                resolved_strategy,
             )
             .map_err(|e| format!("Failed to recall: {e}"))?;
 

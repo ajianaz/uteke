@@ -289,6 +289,22 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                             );
                         }
                     };
+                    // Parse strategy (#900)
+                    let strategy = match req_data.strategy.as_deref() {
+                        Some("fts5") => uteke_core::RecallStrategy::Fts5,
+                        Some("hybrid") => uteke_core::RecallStrategy::Hybrid,
+                        Some("graph") => uteke_core::RecallStrategy::Graph,
+                        Some("vector") | None => uteke_core::RecallStrategy::Vector,
+                        Some(other) => {
+                            return ctx.error_response_for(
+                                req,
+                                400,
+                                format!(
+                                    "Invalid strategy: '{other}'. Use 'vector', 'fts5', 'hybrid', or 'graph'."
+                                ),
+                            );
+                        }
+                    };
                     Some(uteke.recall_unified(
                         &req_data.query,
                         req_data.limit,
@@ -299,6 +315,7 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                         entity_filter,
                         category_filter,
                         req_data.enrich,
+                        strategy,
                     ))
                 } else {
                     None
