@@ -12,7 +12,6 @@ export default createConfig({
     ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
   ],
   ignoreDeadLinks: true,
-  srcExclude: ['**/launch/**', '**/plans/**'],
   sidebar: [
     {
       text: 'Getting Started',
@@ -47,6 +46,7 @@ export default createConfig({
         { text: 'Pi Extension', link: '/extensions' },
         { text: 'TLS & Reverse Proxy', link: '/tls' },
         { text: 'Roadmap', link: '/roadmap' },
+        { text: 'Contributing', link: '/contributing/' },
       ],
     },
   ],

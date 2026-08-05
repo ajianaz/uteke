@@ -330,13 +330,9 @@ Contributions welcome! Read [CONTRIBUTING.md](CONTRIBUTING.md) for the full guid
 
 ## ⭐ Star History
 
-<a href="https://www.star-history.com/?repos=codecoradev%2Futeke&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=codecoradev/uteke&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=codecoradev/uteke&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=codecoradev/uteke&type=date&legend=top-left" />
- </picture>
-</a>
+<p align="center">
+  <img src="https://s3.ajianaz.dev/hermes/codecoradev/uteke/star-history.png" alt="Uteke Star History" width="720" />
+</p>
 
 ---
 

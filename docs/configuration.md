@@ -30,7 +30,7 @@ namespace = "default"
 
 [logging]
 # Log level: trace, debug, info, warn, error
-level = "info"
+level = "warn"
 
 # Optional log file path. Empty = stderr only.
 # file = ""
@@ -134,22 +134,22 @@ unconfigured, no cloud calls are made.
 
 ```toml
 [embed_fallback]
-enabled = false               # opt-in: must be true to activate
-base_url = ""                 # e.g. "https://api.openai.com/v1"
 api_key = ""                  # or use UTEKE_EMBED_FALLBACK_API_KEY
+base_url = ""                 # e.g. "https://api.openai.com/v1"
+endpoint_path = ""            # path appended to base_url. Empty = "/embeddings"
 model = ""                    # e.g. "text-embedding-3-small"
-dims = 0                      # 0 = use fallback model default
 ```
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `enabled` | `false` | Must be explicitly enabled — no surprise cloud calls |
-| `base_url` | `""` | Fallback API endpoint (OpenAI-compatible) |
 | `api_key` | `""` | API key for the fallback endpoint |
+| `base_url` | `""` | Fallback API endpoint (OpenAI-compatible) |
+| `endpoint_path` | `""` | Path appended to `base_url`. Empty = `/embeddings` |
 | `model` | `""` | Fallback embedding model |
-| `dims` | `0` | Fallback dimensions (0 = model default) |
 
-**Environment variables** take precedence: `UTEKE_EMBED_FALLBACK_ENABLED`, `UTEKE_EMBED_FALLBACK_BASE_URL`, `UTEKE_EMBED_FALLBACK_API_KEY`, `UTEKE_EMBED_FALLBACK_MODEL`, `UTEKE_EMBED_FALLBACK_DIMS`.
+Fallback is **active** when all three of `api_key`, `base_url`, and `model` are non-empty. No `enabled` flag needed — empty fields mean inactive.
+
+**Environment variables** take precedence: `UTEKE_EMBED_FALLBACK_API_KEY`, `UTEKE_EMBED_FALLBACK_BASE_URL`, `UTEKE_EMBED_FALLBACK_ENDPOINT_PATH`, `UTEKE_EMBED_FALLBACK_MODEL`.
 
 **Dimension validation** — if the fallback produces different dimensions than the primary, uteke rejects it at startup with a clear error. Both backends must produce vectors of the same dimensionality.
 
@@ -231,12 +231,11 @@ Opt-in per query via `--salience` / `--recency` CLI flags. The `dream` cycle's `
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `salience_weight` | 0.0 | Salience boost weight (0 = off, 0.15 recommended) |
-| `recency_weight` | 0.0 | Recency boost weight (0 = off, 0.15 recommended) |
+| `salience_weight` | 0.15 | Salience boost weight (0 = disable) |
+| `recency_weight` | 0.15 | Recency boost weight (0 = disable) |
+| `jaccard_weight` | 0.0 | Jaccard token-overlap reranking weight (0 = disable) |
 
-Default is off (0.0) to preserve backward-compatible ranking. Enable via CLI flags or API.
-
-Use `--strict` flag, `--min <score>`, or `--strategy <name>` to override per-query.
+Enabled by default (0.15). Override per-query with `--strict`, `--min <score>`, or `--strategy <name>`.
 
 ## Environment Variables
 
@@ -411,3 +410,62 @@ UTEKE_AUTH_TOKEN=admin-secret UTEKE_READ_ONLY_TOKEN=viewer-key uteke-serve
 
 Read-only tokens can only access GET endpoints (recall, search, list, stats, graph, health).
 POST/DELETE operations return `403 Forbidden`.
+
+## Aging (#247)
+
+Controls automatic memory lifecycle management. Disabled by default — opt-in for long-running stores.
+
+```toml
+[aging]
+enabled = false             # Set true to enable automatic cleanup
+max_age_days = 365          # Prune memories older than this
+max_access_count = 10       # Only prune if accessed fewer than this many times
+max_cold_count = 1000       # Max cold memories to keep before triggering cleanup
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enabled` | false | Enable automatic aging |
+| `max_age_days` | 365 | Maximum age in days before pruning |
+| `max_access_count` | 10 | Max access count to be considered "cold" |
+| `max_cold_count` | 1000 | Max cold memories before cleanup triggers |
+
+## Maintenance Daemon (#442)
+
+Controls auto-aging and auto-dream background tasks when running in server mode.
+
+```toml
+[maintenance]
+auto_aging_enabled = false       # Periodically clean up cold, stale memories
+auto_aging_interval_hours = 24   # How often to run aging
+auto_dream_enabled = true        # Periodically run dream cycle (lint → dedup → orphans)
+auto_dream_interval_days = 7     # How often to dream
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `auto_aging_enabled` | false | Enable auto-aging in server mode |
+| `auto_aging_interval_hours` | 24 | Aging check interval |
+| `auto_dream_enabled` | true | Enable auto-dream in server mode |
+| `auto_dream_interval_days` | 7 | Dream cycle interval |
+
+## Dream Pipeline Thresholds (#731)
+
+Configurable thresholds for the dream maintenance pipeline (contradiction scan, dedup, orphan detection). All values were hardcoded before v0.9.0.
+
+```toml
+[dream]
+contradict_similarity_threshold = 0.6    # Above this cosine = NOT a contradiction
+contradict_tag_jaccard_min = 0.4         # Min tag overlap to consider contradiction
+contradict_max_memories = 200            # Max memories for O(n²) scan
+dedup_threshold = 0.92                   # Cosine above this = merge candidate
+orphan_importance_threshold = 0.15       # Below this + no edges = orphan
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `contradict_similarity_threshold` | 0.6 | Cosine threshold for contradiction detection |
+| `contradict_tag_jaccard_min` | 0.4 | Min Jaccard tag overlap for contradiction |
+| `contradict_max_memories` | 200 | Max memories loaded for contradiction scan |
+| `dedup_threshold` | 0.92 | Cosine threshold for dedup merging |
+| `orphan_importance_threshold` | 0.15 | Importance threshold for orphan flagging |
