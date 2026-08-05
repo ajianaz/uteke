@@ -90,10 +90,12 @@ impl crate::Uteke {
         let id_set: std::collections::HashSet<String> = room_ids.into_iter().collect();
 
         // 2. Over-fetch via hybrid recall (no namespace filter — rooms are cross-ns).
-        // Cap at 200 to prevent unbounded searches for large rooms (#546).
-        // limit=0 means "return all" — use a generous fetch limit (#623).
-        let effective_limit = if limit == 0 { 1000 } else { limit };
-        let fetch_limit = (effective_limit * 5).min(200).max(effective_limit);
+        //
+        // Fetch ALL memories so post-filter to room IDs has complete coverage.
+        // HNSW vector search is O(log N), so fetching 2K+ results is still fast.
+        // The old fixed cap of 200 (#546) caused small rooms to return zero (#894).
+        let total_memories = self.store.count_all_memories()?;
+        let fetch_limit = total_memories;
         let results = self.recall_hybrid(
             query,
             fetch_limit,
@@ -296,6 +298,82 @@ mod tests {
     fn room_document_nonexistent_returns_none() {
         let uteke = open_in_memory();
         assert!(uteke.room_summary_document("nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn count_all_memories_empty() {
+        let uteke = open_in_memory();
+        assert_eq!(uteke.store.count_all_memories().unwrap(), 0);
+    }
+
+    #[test]
+    #[ignore = "requires ONNX embedder (model download) in CI"]
+    fn count_all_memories_with_data() {
+        let uteke = open_in_memory();
+        uteke
+            .remember_in_room("Fact one", &[], None, None, "fact", "r", "a")
+            .unwrap();
+        uteke
+            .remember_in_room("Fact two", &[], None, None, "fact", "r", "a")
+            .unwrap();
+        assert_eq!(uteke.store.count_all_memories().unwrap(), 2);
+    }
+
+    /// Regression test for #894: semantic room recall must return results
+    /// even when the room has few memories in a large database.
+    /// The old fixed cap of 200 caused small rooms to return zero.
+    #[test]
+    #[ignore = "requires ONNX embedder (model download) in CI"]
+    fn recall_room_semantic_small_room_large_db() {
+        let uteke = open_in_memory();
+
+        // Fill DB with 30+ unrelated memories to ensure the room's memories
+        // are a small fraction of the total. The old fixed cap of 200 would
+        // miss them; the new dynamic fetch_limit scales to total_memories.
+        for i in 0..30 {
+            uteke
+                .remember(
+                    &format!("Noise memory number {i} about weather and cooking"),
+                    &[],
+                    None,
+                    Some("noise-ns"),
+                )
+                .unwrap();
+        }
+
+        // Create a small room with 2 memories
+        uteke
+            .remember_in_room(
+                "Rust is a systems programming language",
+                &[],
+                None,
+                None,
+                "fact",
+                "small-room",
+                "alice",
+            )
+            .unwrap();
+        uteke
+            .remember_in_room(
+                "Rust uses ownership for memory safety",
+                &[],
+                None,
+                None,
+                "fact",
+                "small-room",
+                "alice",
+            )
+            .unwrap();
+
+        // Semantic recall must find room memories despite small room size
+        let results = uteke
+            .recall_room_semantic("small-room", "Rust programming", 10, None, 0.0)
+            .unwrap();
+        assert!(
+            !results.is_empty(),
+            "small room must return semantic results (#894)"
+        );
+        assert!(results.iter().any(|r| r.memory.content.contains("Rust")));
     }
 
     // ── Room ↔ Document junction ──────────────────────────────────

@@ -110,6 +110,19 @@ impl super::Store {
         Ok(())
     }
 
+    /// Count all active (non-deprecated) memories across all namespaces.
+    /// Used by room recall to set a dynamic fetch limit (#894).
+    pub fn count_all_memories(&self) -> Result<usize, Error> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM memories WHERE deprecated = 0",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c as usize)
+            .map_err(|e| Error::db("count_all_memories", e))
+    }
+
     /// Get a memory by its ID.
     pub fn get_by_id(&self, id: &str) -> Result<Option<Memory>, Error> {
         let mut stmt = self
