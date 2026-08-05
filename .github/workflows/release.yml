@@ -347,11 +347,22 @@ jobs:
       - name: Generate release notes
         run: |
           VER="${{ steps.version.outputs.VERSION }}"
-          echo "## What's New in ${VER}" > release-notes.md
-          echo "" >> release-notes.md
-          cat changelog-body.md >> release-notes.md
-          echo "" >> release-notes.md
-          cat >> release-notes.md << RELEASEEOF
+          # Prefer committed RELEASE_NOTES.md (copywriting quality, manual curation)
+          if [ -f RELEASE_NOTES.md ]; then
+            # Guard: reject template with unresolved placeholders
+            if grep -qE 'vX\.Y\.Z|#NNN|N (bug|new|passing)|@user' RELEASE_NOTES.md; then
+              echo "::error::RELEASE_NOTES.md contains unresolved placeholders (vX.Y.Z, #NNN, etc). Edit it before tagging, or delete the file to use auto-generation."
+              exit 1
+            fi
+            echo "Using committed RELEASE_NOTES.md"
+            cp RELEASE_NOTES.md release-notes.md
+          else
+            echo "::notice::No RELEASE_NOTES.md found, auto-generating from CHANGELOG"
+            echo "## What's New in ${VER}" > release-notes.md
+            echo "" >> release-notes.md
+            cat changelog-body.md >> release-notes.md
+            echo "" >> release-notes.md
+            cat >> release-notes.md << RELEASEEOF
 
           ### 📦 Downloads
 
@@ -395,12 +406,13 @@ jobs:
 
           **Full changelog:** https://github.com/codecoradev/uteke/blob/main/CHANGELOG.md
           RELEASEEOF
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.VERSION }}
-          name: Release ${{ steps.version.outputs.VERSION }}
+          name: ${{ steps.version.outputs.VERSION }}
           body_path: release-notes.md
           files: release-artifacts/*
           draft: false
