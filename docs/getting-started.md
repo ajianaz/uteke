@@ -180,7 +180,7 @@ Copy the entire folder to back up or transfer to another machine.
 ## Next Steps
 
 - [Installation](/install) — all install methods
-- [Rooms](/rooms) — group memories by context
+- [Rooms](/rooms) — **multi-agent shared memory with author attribution**
 - [Time-Travel Queries](/time-travel) — recall memories at any point in time
 - [Smart Decay](/smart-decay) — pinning, importance scoring, aging
 - [Relationship Graph](/relationship-graph) — link and traverse memories
