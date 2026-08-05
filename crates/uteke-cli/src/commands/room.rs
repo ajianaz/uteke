@@ -249,7 +249,7 @@ pub(crate) fn run(
         }
         RoomCommands::AddDocument { room_id, doc_slug } => {
             uteke
-                .room_add_document(room_id, &doc_slug)
+                .room_add_document(room_id, doc_slug)
                 .map_err(|e| format!("Failed to link document: {e}"))?;
             if cli.json {
                 println!(
@@ -267,7 +267,7 @@ pub(crate) fn run(
         }
         RoomCommands::RemoveDocument { room_id, doc_slug } => {
             uteke
-                .room_remove_document(room_id, &doc_slug)
+                .room_remove_document(room_id, doc_slug)
                 .map_err(|e| format!("Failed to unlink document: {e}"))?;
             if cli.json {
                 println!(
@@ -307,7 +307,7 @@ pub(crate) fn run(
         }
         RoomCommands::ListRooms { doc_slug } => {
             let rooms = uteke
-                .document_list_rooms(&doc_slug)
+                .document_list_rooms(doc_slug)
                 .map_err(|e| format!("Failed to list rooms: {e}"))?;
             if cli.json {
                 println!(
