@@ -600,6 +600,7 @@ When true, populates `linked_doc_slugs` on memory results and
 | `namespace` | any | No |  |
 | `query` | `string` | Yes |  |
 | `search_type` | any | No | Search type filter: "all" (default, unified), "memory", or "doc" (#531). |
+| `strategy` | any | No | Recall strategy: "vector" (default), "fts5", "hybrid", or "graph" (#900). |
 | `strict` | `boolean` | No | Use strict threshold (defaults to 0.5 if min_score not set). |
 | `tags` | ``string``[] | No |  |
 
