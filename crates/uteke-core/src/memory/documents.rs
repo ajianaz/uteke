@@ -898,6 +898,33 @@ impl super::Store {
 
     /// Delete chunks belonging to a set of document IDs.
     ///
+    /// Get chunk IDs for a list of document IDs, WITHOUT deleting them.
+    /// Used to capture old chunk IDs before an upsert that deletes chunks internally.
+    pub fn get_chunk_ids_for_documents(&self, doc_ids: &[String]) -> Result<Vec<String>, Error> {
+        if doc_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders: String = doc_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT id FROM document_chunks WHERE document_id IN ({})",
+            placeholders
+        );
+        let params: Vec<&dyn rusqlite::types::ToSql> = doc_ids
+            .iter()
+            .map(|s| s as &dyn rusqlite::types::ToSql)
+            .collect();
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| Error::db("prepare select chunk ids (no-delete)", e))?;
+        let ids: Vec<String> = stmt
+            .query_map(params.as_slice(), |row| row.get::<_, String>(0))
+            .map_err(|e| Error::db("select chunk ids (no-delete)", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(ids)
+    }
+
     /// Used during document update to clear old chunks before re-chunking.
     /// Returns the IDs of deleted chunks (for usearch cleanup).
     pub fn delete_chunks_for_documents(&self, doc_ids: &[String]) -> Result<Vec<String>, Error> {
