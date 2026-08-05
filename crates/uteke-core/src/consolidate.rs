@@ -294,6 +294,14 @@ impl crate::Uteke {
             kept_ids.push(to_keep.clone());
             already_removed.insert(to_remove.clone());
         }
+        // Invalidate recall cache — deleted memories affect search results.
+        if !removed_ids.is_empty() {
+            if let Some(ns) = namespace {
+                self.recall_cache.invalidate_namespace(ns);
+            } else {
+                self.recall_cache.clear();
+            }
+        }
         Ok(crate::memory::types::ConsolidationResult {
             duplicates_found: pairs.len(),
             merged: removed_ids.len(),
