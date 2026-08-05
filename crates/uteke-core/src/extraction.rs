@@ -40,13 +40,18 @@ Rules:\n\
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(default)]
 pub struct ExtractionConfig {
-    /// Chat-completions model (e.g. "gpt-4o-mini").
+    /// Extraction mode: "offline" (rule-based, default), "llm" (API-based), or "" (unconfigured).
+    ///
+    /// When "offline" or "", extraction uses pattern matching with no network calls.
+    /// When "llm", extraction sends text to an OpenAI-compatible chat completions endpoint.
+    pub mode: String,
+    /// Chat-completions model (e.g. "gpt-4o-mini"). Only used when mode = "llm".
     pub model: String,
-    /// API key for the extraction endpoint.
+    /// API key for the extraction endpoint. Only used when mode = "llm".
     pub api_key: String,
-    /// Base URL of the OpenAI-compatible endpoint.
+    /// Base URL of the OpenAI-compatible endpoint. Only used when mode = "llm".
     pub base_url: String,
-    /// Endpoint path appended to base_url.
+    /// Endpoint path appended to base_url. Only used when mode = "llm".
     pub endpoint_path: String,
     /// Maximum facts to keep per document. 0 = default.
     pub max_facts: usize,
@@ -312,6 +317,7 @@ mod tests {
 
     fn default_config() -> ExtractionConfig {
         ExtractionConfig {
+            mode: "llm".into(),
             api_key: "test-key".into(),
             model: String::new(),
             base_url: String::new(),
@@ -342,6 +348,7 @@ mod tests {
     #[test]
     fn endpoint_path_without_slash_normalized() {
         let cfg = ExtractionConfig {
+            mode: "llm".into(),
             api_key: "k".into(),
             model: "m".into(),
             base_url: "https://gw.example.com/v1".into(),

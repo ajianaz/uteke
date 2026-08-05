@@ -1948,6 +1948,7 @@ fn resolve_extraction_config(
 ) -> uteke_core::extraction::ExtractionConfig {
     let base = ctx.extraction_config.clone().unwrap_or_default();
     uteke_core::extraction::ExtractionConfig {
+        mode: base.mode,
         model: req_model.map(String::from).unwrap_or(base.model),
         api_key: req_api_key.map(String::from).unwrap_or(base.api_key),
         base_url: base.base_url,
