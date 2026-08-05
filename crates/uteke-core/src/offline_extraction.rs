@@ -266,16 +266,52 @@ fn segment_sentences(text: &str) -> Vec<String> {
             continue;
         }
 
+        // Skip markdown headers (#895: header-only facts are noise)
+        if trimmed.starts_with('#') {
+            continue;
+        }
+
+        // Skip markdown list/code/bold markers that are just formatting
+        if trimmed.starts_with("```") || trimmed.starts_with("---") {
+            continue;
+        }
+
         // Split each line on sentence boundaries
         let mut current = String::new();
-        for ch in trimmed.chars() {
+        let mut paren_depth: i32 = 0; // track () balance (#895)
+        let chars: Vec<char> = trimmed.chars().collect();
+
+        for (i, &ch) in chars.iter().enumerate() {
+            // Track parenthesis depth — don't split inside parens
+            if ch == '(' {
+                paren_depth += 1;
+            } else if ch == ')' {
+                paren_depth = paren_depth.saturating_sub(1);
+            }
+
             current.push(ch);
+
             if ch == '.' || ch == '!' || ch == '?' {
+                // Don't split on decimal/version numbers: digit . digit (#895)
+                if ch == '.' && paren_depth == 0 {
+                    let prev_is_digit = i > 0 && chars[i - 1].is_ascii_digit();
+                    let next_is_digit = i + 1 < chars.len() && chars[i + 1].is_ascii_digit();
+                    if prev_is_digit && next_is_digit {
+                        continue; // e.g. "1.23", "v0.12.0"
+                    }
+                }
+
+                // Don't split inside parentheses (#895)
+                if paren_depth > 0 {
+                    continue;
+                }
+
                 let s = current.trim();
                 if !s.is_empty() {
                     sentences.push(s.to_string());
                 }
                 current.clear();
+                paren_depth = 0;
             }
         }
 
@@ -549,6 +585,91 @@ User: I work at Acme Corp as a backend engineer.
         assert_eq!(
             clean_fact("• Saya tinggal di Jakarta"),
             "Saya tinggal di Jakarta."
+        );
+    }
+
+    // ── #895 regression tests ──────────────────────────────────────
+
+    #[test]
+    fn test_version_number_not_split() {
+        // "Go 1.23" should stay as one sentence, not split into "Go 1." + "23"
+        let sentences = segment_sentences("Backend uses Go 1.23 with Axum framework.");
+        assert!(
+            sentences.iter().any(|s| s.contains("1.23")),
+            "Version number 1.23 should not be split, got: {:?}",
+            sentences
+        );
+        assert!(
+            !sentences
+                .iter()
+                .any(|s| s.trim() == "Go 1." || s.trim() == "23"),
+            "Should not produce broken version fragments"
+        );
+    }
+
+    #[test]
+    fn test_multi_version_not_split() {
+        // Multi-segment version like "v0.12.0" should stay intact
+        let sentences = segment_sentences("Updated to v0.12.0 today.");
+        assert!(
+            sentences.iter().any(|s| s.contains("0.12.0")),
+            "Version 0.12.0 should not be split, got: {:?}",
+            sentences
+        );
+    }
+
+    #[test]
+    fn test_markdown_header_skipped() {
+        // Headers like "## Decisions" should not become facts
+        let sentences = segment_sentences("## Decisions\nWe chose Rust for performance.");
+        assert!(
+            !sentences
+                .iter()
+                .any(|s| s.contains("## Decisions") || s == "Decisions"),
+            "Markdown header should be skipped, got: {:?}",
+            sentences
+        );
+        assert!(
+            sentences.iter().any(|s| s.contains("Rust")),
+            "Content after header should still be extracted"
+        );
+    }
+
+    #[test]
+    fn test_paren_not_truncated() {
+        // Sentence with parenthetical should not be split at period inside parens
+        let sentences =
+            segment_sentences("The deploy uses blue-green strategy (v2.1.0) for safety.");
+        assert!(
+            sentences
+                .iter()
+                .any(|s| s.contains("blue-green") && s.contains("v2.1.0")),
+            "Parenthetical content should stay with sentence, got: {:?}",
+            sentences
+        );
+    }
+
+    #[test]
+    fn test_decimal_in_sentence() {
+        // Decimal numbers should not trigger sentence split
+        let sentences = segment_sentences("The uptime is 99.9 percent this quarter.");
+        assert!(
+            sentences.iter().any(|s| s.contains("99.9")),
+            "Decimal 99.9 should not be split, got: {:?}",
+            sentences
+        );
+    }
+
+    #[test]
+    fn test_nested_parentheses() {
+        // Nested parens should not cause premature splitting
+        let sentences = segment_sentences("Used the new config (from PR #42 (hotfix)) yesterday.");
+        assert!(
+            sentences
+                .iter()
+                .any(|s| s.contains("hotfix") && s.contains("PR #42")),
+            "Nested parens should stay together, got: {:?}",
+            sentences
         );
     }
 }
