@@ -1692,8 +1692,24 @@ impl Uteke {
         // fts5/hybrid/graph is honoured on the unified path (#900).
         // entity_filter and category_filter are not natively supported by
         // recall_hybrid, so we apply them as post-filters here (#900 cora review).
-        let results =
-            self.recall_hybrid(query, limit, tags_filter, namespace, strategy, min_score)?;
+        //
+        // Over-fetch when post-filtering to compensate for rows that will be
+        // discarded by entity/category filters (CodeCora alert). A 3× multiplier
+        // is a pragmatic heuristic — it covers most selective filters without
+        // excessive DB load for small result sets.
+        let fetch_limit = if entity_filter.is_some() || category_filter.is_some() {
+            (limit.saturating_mul(3)).max(limit + 10)
+        } else {
+            limit
+        };
+        let results = self.recall_hybrid(
+            query,
+            fetch_limit,
+            tags_filter,
+            namespace,
+            strategy,
+            min_score,
+        )?;
         let results = results
             .into_iter()
             .filter(|sr| {
@@ -1748,6 +1764,7 @@ impl Uteke {
                     linked_memory_ids: None,
                 }
             })
+            .take(limit)
             .collect();
         Ok(results)
     }
