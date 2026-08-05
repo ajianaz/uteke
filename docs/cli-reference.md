@@ -19,13 +19,13 @@ Config file path is auto-resolved (`~/.codecora/uteke/uteke.toml` + `.uteke/utek
 
 ## uteke onboard
 
-Interactive onboarding wizard — guides new users from zero to productive. Detects install, picks agent, toggles features, writes config, installs agent integration, and shows a feature showcase.
+Interactive onboarding wizard — guides new users from zero to productive. Detects install, picks agent, configures extraction mode, toggles features, writes config, installs agent integration, runs a memory test, and introduces Rooms.
 
 ```bash
 # Interactive (recommended for first-time users)
 uteke onboard
 
-# Non-interactive (defaults: agent=hermes, namespace=default, tool mode)
+# Non-interactive (defaults: agent=hermes, namespace=default, tool mode, offline extraction)
 uteke onboard --yes
 
 # Pre-select agent and namespace
