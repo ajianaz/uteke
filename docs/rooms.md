@@ -14,8 +14,16 @@ uteke room create "project-kickoff" --title "Project Kickoff"
 
 ## Add Memories to a Room
 
+Memories are added to a room via the HTTP API or by using `--room` when storing:
+
 ```bash
-uteke room add "project-kickoff" <memory-id> --author alice
+# Via HTTP API
+curl -X POST http://127.0.0.1:8767/room/remember \
+  -H "Content-Type: application/json" \
+  -d '{"room_id": "project-kickoff", "content": "Decided on PostgreSQL", "author": "alice"}'
+
+# Or store normally, then link via room document
+uteke room summary "project-kickoff"
 ```
 
 ## Semantic Recall Within a Room

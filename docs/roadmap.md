@@ -6,6 +6,65 @@ title: Roadmap
 
 Demand-gated — we build what people actually use. Track progress on [GitHub Issues](https://github.com/codecoradev/uteke/issues).
 
+## v0.12.0 — Full-text Doc Search, Junction Tools, Windows Installer `✓ Released 2026-07-22`
+
+- FTS5 indexes full document content body — every word searchable, not just titles (#783)
+- Room↔Document junction in CLI & MCP — `uteke room doc add/remove/list`, 4 new MCP tools (#789)
+- Renamed MCP tool: `uteke_room_document` → `uteke_room_summary_document` (#735)
+- Windows PowerShell installer (`install.ps1`) + `.zip` binary release (#781)
+- `POST /memory/feedback` trust scoring endpoint (#718)
+- Bug fixes: deprecated memory leak in vector search, doc search scope
+
+## v0.11.0 — Hardening & Governance `✓ Released 2026-07-10`
+
+- `POST /doc/move` `#[serde(deny_unknown_fields)]` — silent data loss fix (#833)
+- Recall score reports cosine similarity instead of RRF rank (#831)
+- MCP/CLI store mismatch — hardcoded `~/.uteke` paths fixed (#830)
+- `POST /consolidate` accepts string threshold via `flex_f32` (#826)
+- API route drift guard test — 46 handler paths verified (#829)
+- Open-source governance docs — Code of Conduct, PR template, YAML issue forms (#834)
+
+## v0.10.0 — Rust Edition 2024 `✓ Released 2026-07-05`
+
+- Rust edition 2021 → 2024 — minimum Rust 1.85 (#755)
+- `POST /room/remember` endpoint — store + link to room in one call (#762)
+- `DELETE /forget` returns 404 for non-existent IDs (#762)
+- Clippy lints after edition upgrade
+
+## v0.9.0 — Onboarding Wizard & API Versioning `✓ Released 2026-06-30`
+
+- `uteke onboard` — interactive onboarding wizard (#743)
+- API URL versioning `/api/v1` and `/api/v2` (#741)
+- Configurable dream pipeline thresholds (#742)
+- `SECURITY.md` and PR template (#746)
+- Deprecated memory leak in vector search fix (#748)
+- Windows ERROR_LOCK_VIOLATION fix (#747)
+- Embedding model streaming download (#740)
+- Contributors: @webhop123, @gnoviawan
+
+## v0.8.0 — Trust Scoring & Cross-Entity Linking `✓ Released 2026-06-29`
+
+- `PUT /memory` — partial memory updates with embedding regen (#676)
+- Room↔Document junction table — schema v15 (#689)
+- Memory↔Document linking via `[[doc-slug]]` wikilinks (#691)
+- Trust scoring — `uteke feedback helpful/unhelpful` (#718)
+- Jaccard token similarity reranking (#719)
+- Auto-contradiction scan as Dream pipeline Phase 4 (#720)
+- Cross-entity enrichment in recall (`--enrich`) (#703)
+- FTS5 indexes `memory_type` — schema v14 (#662)
+
+## v0.7.0 — HTTP API Expansion & Global Documents `✓ Released 2026-06-28`
+
+- Project-aware memory tagging (#616)
+- OpenCode init support (#612)
+- Maintenance HTTP endpoints — `/prune`, `/consolidate`, `/aging` (#607)
+- Monitoring HTTP endpoints — `/importance`, `/orphans`, `/rebuild-backlinks` (#608)
+- Extract/Import/Export HTTP endpoints (#604–#606)
+- Document partial update CLI + HTTP (#589)
+- MCP: pin/unpin, 6 room tools, tag management, doc update+move tools
+- `uteke upgrade` command (renamed from `uteke update`) (#603)
+- Documents now global — no namespace isolation, schema v13 (#614)
+
 ## v0.5.0 — LLM Extraction & Hermes Integration `✓ Released 2026-06-27`
 
 - [#46 LLM fact extraction on import](https://github.com/codecoradev/uteke/issues/46) `✓ Done`
