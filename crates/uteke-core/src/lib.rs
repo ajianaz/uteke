@@ -821,17 +821,29 @@ impl Uteke {
 
     /// Pin a memory so it never decays.
     pub fn pin(&self, id: &str) -> Result<bool, Error> {
-        self.store.pin(id)
+        let pinned = self.store.pin(id)?;
+        if pinned {
+            self.invalidate_cache_for_id(id);
+        }
+        Ok(pinned)
     }
 
     /// Unpin a memory.
     pub fn unpin(&self, id: &str) -> Result<bool, Error> {
-        self.store.unpin(id)
+        let unpinned = self.store.unpin(id)?;
+        if unpinned {
+            self.invalidate_cache_for_id(id);
+        }
+        Ok(unpinned)
     }
 
     /// Set a memory's importance score directly (0.0-1.0).
     pub fn set_importance(&self, id: &str, importance: f64) -> Result<bool, Error> {
-        self.store.set_importance(id, importance)
+        let updated = self.store.set_importance(id, importance)?;
+        if updated {
+            self.invalidate_cache_for_id(id);
+        }
+        Ok(updated)
     }
 
     /// Record positive feedback: boost importance (#718).
@@ -867,7 +879,27 @@ impl Uteke {
 
         let new_importance = (current + delta).clamp(0.0, 1.0);
         self.store.set_importance(id, new_importance)?;
+        // Invalidate cache — importance affects ranking.
+        self.invalidate_cache_for_id(id);
         Ok(new_importance)
+    }
+
+    /// Invalidate recall cache for a specific memory's namespace.
+    ///
+    /// Helper for single-memory mutations (pin, unpin, set_importance,
+    /// feedback) where we need to look up the namespace before flushing.
+    fn invalidate_cache_for_id(&self, id: &str) {
+        match self.store.get_by_id(id) {
+            Ok(Some(memory)) => self.recall_cache.invalidate_namespace(&memory.namespace),
+            Ok(None) => {
+                // Memory not found — flush all as safety measure.
+                self.recall_cache.clear();
+            }
+            Err(e) => {
+                tracing::warn!("Failed to look up namespace for cache invalidation ({id}): {e}");
+                self.recall_cache.clear();
+            }
+        }
     }
 
     /// Set source provenance on a memory (#348).
@@ -882,7 +914,12 @@ impl Uteke {
 
     /// Recalculate importance scores for all memories.
     pub fn recompute_importance(&self) -> Result<usize, Error> {
-        self.store.recompute_importance()
+        let updated = self.store.recompute_importance()?;
+        if updated > 0 {
+            // Importance affects ranking — flush all cached results.
+            self.recall_cache.clear();
+        }
+        Ok(updated)
     }
 
     /// Get a reference to the raw connection for graph operations.
@@ -1061,12 +1098,13 @@ impl Uteke {
             has_children: false,
         };
 
-        let doc_id = self.store.upsert_document(&doc)?;
-
-        // Delete old chunks on update (re-chunking).
+        // Capture old chunk IDs BEFORE upsert (upsert_document deletes chunks
+        // internally as part of its transaction, so querying after returns empty).
         let old_chunk_ids = self
             .store
-            .delete_chunks_for_documents(std::slice::from_ref(&doc_id))?;
+            .get_chunk_ids_for_documents(std::slice::from_ref(&doc.id))?;
+
+        let doc_id = self.store.upsert_document(&doc)?;
 
         // Chunk and embed the content.
         self.ensure_embedder()?;

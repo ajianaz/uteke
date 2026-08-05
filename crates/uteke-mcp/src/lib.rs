@@ -165,6 +165,10 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 tool_room_stats(),
                 tool_room_summary(),
                 tool_room_document(),
+                tool_room_add_document(),
+                tool_room_remove_document(),
+                tool_room_list_documents(),
+                tool_doc_list_rooms(),
                 tool_tags_list(),
                 tool_tags_rename(),
                 tool_tags_delete(),
@@ -207,7 +211,13 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 "uteke_room_memories" => exec_room_memories(uteke, &arguments)?,
                 "uteke_room_stats" => exec_room_stats(uteke, &arguments)?,
                 "uteke_room_summary" => exec_room_summary(uteke, &arguments)?,
-                "uteke_room_document" => exec_room_document(uteke, &arguments)?,
+                "uteke_room_summary_document" | "uteke_room_document" => {
+                    exec_room_document(uteke, &arguments)?
+                }
+                "uteke_room_add_document" => exec_room_add_document(uteke, &arguments)?,
+                "uteke_room_remove_document" => exec_room_remove_document(uteke, &arguments)?,
+                "uteke_room_list_documents" => exec_room_list_documents(uteke, &arguments)?,
+                "uteke_doc_list_rooms" => exec_doc_list_rooms(uteke, &arguments)?,
                 "uteke_tags_list" => exec_tags_list(uteke, &arguments)?,
                 "uteke_tags_rename" => exec_tags_rename(uteke, &arguments)?,
                 "uteke_tags_delete" => exec_tags_delete(uteke, &arguments)?,
@@ -579,7 +589,7 @@ fn tool_room_summary() -> Value {
 
 fn tool_room_document() -> Value {
     serde_json::json!({
-        "name": "uteke_room_document",
+        "name": "uteke_room_summary_document",
         "description": "Generate a structured document from room memories, grouped by memory type (decisions, facts, procedures, preferences, etc.). Useful for producing meeting minutes or decision records.",
         "inputSchema": {
             "type": "object",
@@ -587,6 +597,64 @@ fn tool_room_document() -> Value {
                 "room_id": { "type": "string", "description": "Room identifier" }
             },
             "required": ["room_id"]
+        }
+    })
+}
+
+fn tool_room_add_document() -> Value {
+    serde_json::json!({
+        "name": "uteke_room_add_document",
+        "description": "Link a document to a room. The document must already exist (use uteke_doc_upsert first).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "room_id": { "type": "string", "description": "Room identifier" },
+                "doc_slug": { "type": "string", "description": "Document slug to link" }
+            },
+            "required": ["room_id", "doc_slug"]
+        }
+    })
+}
+
+fn tool_room_remove_document() -> Value {
+    serde_json::json!({
+        "name": "uteke_room_remove_document",
+        "description": "Unlink a document from a room. Does not delete the document itself.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "room_id": { "type": "string", "description": "Room identifier" },
+                "doc_slug": { "type": "string", "description": "Document slug to unlink" }
+            },
+            "required": ["room_id", "doc_slug"]
+        }
+    })
+}
+
+fn tool_room_list_documents() -> Value {
+    serde_json::json!({
+        "name": "uteke_room_list_documents",
+        "description": "List all document slugs linked to a room.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "room_id": { "type": "string", "description": "Room identifier" }
+            },
+            "required": ["room_id"]
+        }
+    })
+}
+
+fn tool_doc_list_rooms() -> Value {
+    serde_json::json!({
+        "name": "uteke_doc_list_rooms",
+        "description": "List all rooms that reference a specific document.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "doc_slug": { "type": "string", "description": "Document slug to look up" }
+            },
+            "required": ["doc_slug"]
         }
     })
 }
@@ -1597,6 +1665,99 @@ fn exec_room_document(uteke: &Uteke, args: &Value) -> Result<ToolResult, String>
         content: vec![McpContent::Text {
             r#type: "text".to_string(),
             text: lines.join("\n"),
+        }],
+        is_error: false,
+    })
+}
+
+fn exec_room_add_document(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let room_id = args["room_id"].as_str().ok_or("Missing 'room_id'")?;
+    let doc_slug = args["doc_slug"].as_str().ok_or("Missing 'doc_slug'")?;
+
+    uteke
+        .room_add_document(room_id, doc_slug)
+        .map_err(|e| format!("Failed: {e}"))?;
+
+    Ok(ToolResult {
+        content: vec![McpContent::Text {
+            r#type: "text".to_string(),
+            text: format!("Linked document '{doc_slug}' to room '{room_id}'."),
+        }],
+        is_error: false,
+    })
+}
+
+fn exec_room_remove_document(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let room_id = args["room_id"].as_str().ok_or("Missing 'room_id'")?;
+    let doc_slug = args["doc_slug"].as_str().ok_or("Missing 'doc_slug'")?;
+
+    uteke
+        .room_remove_document(room_id, doc_slug)
+        .map_err(|e| format!("Failed: {e}"))?;
+
+    Ok(ToolResult {
+        content: vec![McpContent::Text {
+            r#type: "text".to_string(),
+            text: format!("Unlinked document '{doc_slug}' from room '{room_id}'."),
+        }],
+        is_error: false,
+    })
+}
+
+fn exec_room_list_documents(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let room_id = args["room_id"].as_str().ok_or("Missing 'room_id'")?;
+
+    let docs = uteke
+        .room_list_documents(room_id)
+        .map_err(|e| format!("Failed: {e}"))?;
+
+    let text = if docs.is_empty() {
+        format!("No documents linked to room '{room_id}'.")
+    } else {
+        format!(
+            "Documents linked to room '{}':\n{}",
+            room_id,
+            docs.iter()
+                .map(|s| format!("  • {s}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
+
+    Ok(ToolResult {
+        content: vec![McpContent::Text {
+            r#type: "text".to_string(),
+            text,
+        }],
+        is_error: false,
+    })
+}
+
+fn exec_doc_list_rooms(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let doc_slug = args["doc_slug"].as_str().ok_or("Missing 'doc_slug'")?;
+
+    let rooms = uteke
+        .document_list_rooms(doc_slug)
+        .map_err(|e| format!("Failed: {e}"))?;
+
+    let text = if rooms.is_empty() {
+        format!("No rooms reference document '{doc_slug}'.")
+    } else {
+        format!(
+            "Rooms referencing document '{}':\n{}",
+            doc_slug,
+            rooms
+                .iter()
+                .map(|s| format!("  • {s}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
+
+    Ok(ToolResult {
+        content: vec![McpContent::Text {
+            r#type: "text".to_string(),
+            text,
         }],
         is_error: false,
     })

@@ -55,7 +55,7 @@ curl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh |
 Pin a specific version with `UTEKE_VERSION`:
 
 ```bash
-UTEKE_VERSION=v0.11.0 curl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh | sh
+UTEKE_VERSION=v0.12.0 curl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh | sh
 ```
 
 ### Windows Setup

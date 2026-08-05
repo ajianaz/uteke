@@ -695,7 +695,10 @@ impl crate::Uteke {
             }
         };
 
-        let results: Vec<SearchResult> = fts_results
+        // Filter first, then normalize — otherwise the range is computed
+        // from items that get filtered out (e.g. namespace mismatch),
+        // producing skewed scores (#854 cora review).
+        let filtered: Vec<(Memory, f64)> = fts_results
             .into_iter()
             .filter(|(memory, _)| {
                 // Namespace filter (None = ALL, #448)
@@ -715,13 +718,28 @@ impl crate::Uteke {
                 }
                 true
             })
-            .map(|(memory, _rank)| {
-                // Convert FTS5 BM25 rank to 0..1 score.
-                // BM25 returns negative values (more negative = worse relevance).
-                // We use rank-based scoring instead of raw BM25 since
-                // BM25 magnitudes vary by query and aren't normalized.
-                // Score is assigned by position in the result list.
-                let score = 1.0f32; // Placeholder — actual ranking done by RRF in hybrid
+            .collect();
+
+        // Compute min-max from SURVIVING results only.
+        // BM25 rank: negative values, more negative = more relevant.
+        let best = filtered
+            .iter()
+            .map(|(_, r)| *r)
+            .fold(f64::INFINITY, f64::min);
+        let worst = filtered
+            .iter()
+            .map(|(_, r)| *r)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let range = best - worst;
+
+        let results: Vec<SearchResult> = filtered
+            .into_iter()
+            .map(|(memory, rank)| {
+                let score = if range.abs() < f64::EPSILON {
+                    1.0f32 // single result or all same rank
+                } else {
+                    (((rank - worst) / range).clamp(0.0, 1.0)) as f32
+                };
                 SearchResult { memory, score }
             })
             .take(limit)
@@ -1086,12 +1104,33 @@ impl crate::Uteke {
         new: &str,
         namespace: Option<&str>,
     ) -> Result<usize, Error> {
-        self.store.rename_tag(old, new, namespace)
+        let renamed = self.store.rename_tag(old, new, namespace)?;
+        if renamed > 0 {
+            // Invalidate recall cache — tag filters may reference the old
+            // tag name, so cached results are now stale (#849).
+            if let Some(ns) = namespace {
+                self.recall_cache.invalidate_namespace(ns);
+            } else {
+                self.recall_cache.clear();
+            }
+        }
+        Ok(renamed)
     }
 
     /// Delete a tag from all memories in a namespace.
     pub fn delete_tag(&self, tag: &str, namespace: Option<&str>) -> Result<usize, Error> {
-        self.store.delete_tag(tag, namespace)
+        let deleted = self.store.delete_tag(tag, namespace)?;
+        if deleted > 0 {
+            // Invalidate recall cache to prevent stale search results (#844).
+            // If namespace is specified, invalidate only that namespace.
+            // Cross-namespace delete requires full cache flush.
+            if let Some(ns) = namespace {
+                self.recall_cache.invalidate_namespace(ns);
+            } else {
+                self.recall_cache.clear();
+            }
+        }
+        Ok(deleted)
     }
 
     /// Count memories by tag in a namespace.

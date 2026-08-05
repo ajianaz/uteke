@@ -448,10 +448,17 @@ fn main() {
         });
     }
 
-    // Graceful shutdown
-    info!("Saving index and closing DB...");
-    if let Err(e) = uteke.lock().expect("shutdown lock").shutdown() {
-        error!("Shutdown error: {e}");
+    // Graceful shutdown — save dirty index to disk.
+    // Handle poisoned mutex gracefully instead of panicking (#845).
+    match uteke.lock() {
+        Ok(u) => {
+            if let Err(e) = u.shutdown() {
+                error!("Shutdown error: {e}");
+            }
+        }
+        Err(_) => {
+            error!("Shutdown: mutex poisoned, forcing exit without index save");
+        }
     }
 
     info!("Goodbye.");

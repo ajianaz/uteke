@@ -171,6 +171,15 @@ impl crate::Uteke {
             .filter(|r| r.status == PhaseStatus::Error)
             .count();
 
+        // Invalidate recall cache if any phase made changes.
+        if !dry_run && total_changes > 0 {
+            if let Some(ns) = namespace {
+                self.recall_cache.invalidate_namespace(ns);
+            } else {
+                self.recall_cache.clear();
+            }
+        }
+
         Ok(DreamReport {
             phases: results,
             total_changes,

@@ -247,5 +247,85 @@ pub(crate) fn run(
             }
             Ok(())
         }
+        RoomCommands::AddDocument { room_id, doc_slug } => {
+            uteke
+                .room_add_document(room_id, doc_slug)
+                .map_err(|e| format!("Failed to link document: {e}"))?;
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "room_id": room_id,
+                        "doc_slug": doc_slug,
+                        "linked": true
+                    })
+                );
+            } else {
+                println!("Linked document '{doc_slug}' to room '{room_id}'.");
+            }
+            Ok(())
+        }
+        RoomCommands::RemoveDocument { room_id, doc_slug } => {
+            uteke
+                .room_remove_document(room_id, doc_slug)
+                .map_err(|e| format!("Failed to unlink document: {e}"))?;
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "room_id": room_id,
+                        "doc_slug": doc_slug,
+                        "linked": false
+                    })
+                );
+            } else {
+                println!("Unlinked document '{doc_slug}' from room '{room_id}'.");
+            }
+            Ok(())
+        }
+        RoomCommands::ListDocuments { room_id } => {
+            let docs = uteke
+                .room_list_documents(room_id)
+                .map_err(|e| format!("Failed to list documents: {e}"))?;
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "room_id": room_id,
+                        "documents": docs
+                    })
+                );
+            } else if docs.is_empty() {
+                println!("No documents linked to room '{room_id}'.");
+            } else {
+                println!("Documents linked to room '{room_id}':");
+                for slug in &docs {
+                    println!("  • {slug}");
+                }
+            }
+            Ok(())
+        }
+        RoomCommands::ListRooms { doc_slug } => {
+            let rooms = uteke
+                .document_list_rooms(doc_slug)
+                .map_err(|e| format!("Failed to list rooms: {e}"))?;
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "doc_slug": doc_slug,
+                        "rooms": rooms
+                    })
+                );
+            } else if rooms.is_empty() {
+                println!("No rooms reference document '{doc_slug}'.");
+            } else {
+                println!("Rooms referencing document '{doc_slug}':");
+                for room_id in &rooms {
+                    println!("  • {room_id}");
+                }
+            }
+            Ok(())
+        }
     }
 }
