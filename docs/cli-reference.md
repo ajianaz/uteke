@@ -158,6 +158,7 @@ uteke list --tag deploy --offset 10 --json
 uteke list --entity staging-server --json
 uteke list --category infrastructure --limit 10
 uteke list --namespace hermes
+uteke list --at 2026-06-01T12:00:00Z   # Time-travel: list at point in time
 ```
 
 | Flag | Description |
@@ -167,6 +168,7 @@ uteke list --namespace hermes
 | `--category <cat>` | Filter by category |
 | `--limit <n>` | Max results (default: 20) |
 | `--offset <n>` | Skip first N results |
+| `--at <timestamp>` | Query memories at point in time (RFC3339) |
 | `--json` | Output as JSON |
 
 ## uteke forget
@@ -259,9 +261,9 @@ uteke tags rename old-tag new-tag
 uteke tags delete unused-tag
 ```
 
-## uteke recall (enhanced)
+## uteke recall — Advanced Flags
 
-Semantic search with new flags:
+Additional flags not shown in the basic example above:
 
 ```bash
 # Minimum similarity score filter
@@ -303,7 +305,9 @@ UTEKE_GRAPH_AUTHORITY_WEIGHT=0.3 uteke recall "architecture" --strategy graph
 Cold start (no edges yet): `graph` behaves identically to `hybrid` — the
 boost is zero when there are no signals.
 
-# AI-context formatted output
+### AI-context output
+
+```bash
 uteke recall "api design" --context
 ```
 
@@ -315,16 +319,9 @@ uteke recall "api design" --context
 | `--related` | Follow relationship edges |
 | `--depth <n>` | Traversal depth for --related |
 | `--context` | AI-prompt formatted output |
-| `--salience` | Enable salience boost (default: on, weight 0.1). Use `--no-salience` to disable |
-| `--recency` | Enable recency boost (default: on, weight 0.1). Use `--no-recency` to disable |
+| `--salience` | Enable salience boost (default: on, weight 0.15). Use `--no-salience` to disable |
+| `--recency` | Enable recency boost (default: on, weight 0.15). Use `--no-recency` to disable |
 | `--jaccard` | Enable Jaccard token reranking signal (default: off, requires `jaccard_weight` > 0 in config) |
-
-## uteke list (enhanced)
-
-```bash
-# Time-travel list
-uteke list --at 2026-06-01T12:00:00Z
-```
 
 ## uteke room
 
@@ -752,64 +749,7 @@ When `[server] enabled = true` is set in config, the CLI auto-routes commands th
 
 ### HTTP Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Health check |
-| POST | `/remember` | Store a memory |
-| POST | `/recall` | Semantic search |
-| POST | `/search` | Keyword search |
-| POST | `/list` | List memories |
-| DELETE | `/forget` | Delete memory |
-| GET | `/stats` | Store statistics (supports `?namespace=`) |
-| POST | `/stats` | Store statistics (body params) |
-| GET | `/namespaces` | List all namespaces |
-| GET | `/memory?id=` | Get single memory |
-| PUT | `/memory` | Partial memory update (content, tags, metadata, importance, pinned, memory_type) (#676) |
-| POST | `/memory/pin` | Pin or unpin a memory by ID (#660) |
-| POST | `/memory/importance` | Set importance score (0.0–1.0) for a memory (#660) |
-| POST | `/room/create` | Create a room |
-| GET | `/room/list` | List rooms (supports `?namespace=`) |
-| POST | `/room/recall` | Recall from a room |
-| POST | `/room/summary` | Room summary |
-| POST | `/room/summary-document` | Generate summary document from room (#735) |
-| POST | `/room/stats` | Room statistics |
-| DELETE | `/room/delete` | Delete a room |
-| POST | `/room/document/list` | List documents linked to a room (#689) |
-| PUT | `/room/document/add` | Link a document to a room (#689) |
-| DELETE | `/room/document/remove` | Unlink a document from a room (#689) |
-| POST | `/doc/create` | Create/upsert document (#438) |
-| POST | `/doc/get` | Get document by id or slug |
-| POST | `/doc/list` | List documents (roots_only, parent filter) |
-| POST | `/doc/search` | Hybrid/semantic/FTS document search (#440) |
-| POST | `/doc/move` | Move document to new parent (#438) |
-| DELETE | `/doc/delete?id=` | Delete document with cascade |
-| POST | `/doc/update` | Partial document update with chunk rebuild (#589) |
-| POST | `/doc/room/list` | List rooms linked to a document (#689) |
-| POST | `/memory/doc-refs` | Get document slugs referenced by a memory (#691) |
-| POST | `/doc/mem-refs` | Get memory IDs that reference a document (#691) |
-| GET | `/export` | JSONL export (optional `?namespace=` filter) (#606) |
-| POST | `/extract` | LLM fact extraction + auto-store (1MB limit) (#610) |
-| POST | `/import` | JSONL import with re-embedding (5MB limit) (#610) |
-| POST | `/prune` | TTL-based deprecated memory cleanup (#611) |
-| POST | `/consolidate` | Near-duplicate merging (#611) |
-| POST | `/aging` | Memory lifecycle: status, preview, cleanup (#611) |
-| POST | `/importance` | Recalculate importance scores (#611) |
-| POST | `/orphans` | Find disconnected low-importance memories (read-only) (#611) |
-| POST | `/rebuild-backlinks` | Rebuild referenced_by from forward edges (#611) |
-| GET | `/recent` | Recent memories (supports `?namespace=`, `?limit=`, `?offset=`) (#528) |
-| GET | `/tags` | List all tags with counts (#566) |
-| POST | `/tags/rename` | Rename a tag across all memories (#566) |
-| POST | `/tags/delete` | Delete a tag from all memories (#566) |
-| POST | `/pin` | Pin a memory (prevent decay) (#566) |
-| POST | `/unpin` | Unpin a memory (#566) |
-| GET | `/timeline` | Timeline events for a memory (#566) |
-| GET | `/edges` | List edges for a memory (#566) |
-| GET | `/room/memories` | List memories in a room (#569) |
-| GET | `/graph` | Graph visualization — nodes, edges, stats (#408) |
-| POST | `/graph/edge` | Create a typed edge between two memories (#542) |
-| DELETE | `/graph/edge` | Remove an edge by ID (#542) |
-| POST | `/mcp` | MCP JSON-RPC endpoint (#381) |
-| POST | `/memory/feedback` | Record helpful/unhelpful feedback on a memory. Body: `{ id, feedback: 'helpful'|'unhelpful' }`. Returns updated importance. (#718) |
+See the [HTTP API Reference](/api-reference) for the complete list of 50+ endpoints, request/response schemas, and examples.
 
 ### MCP Server
 
