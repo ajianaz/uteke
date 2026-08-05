@@ -211,7 +211,9 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 "uteke_room_memories" => exec_room_memories(uteke, &arguments)?,
                 "uteke_room_stats" => exec_room_stats(uteke, &arguments)?,
                 "uteke_room_summary" => exec_room_summary(uteke, &arguments)?,
-                "uteke_room_document" => exec_room_document(uteke, &arguments)?,
+                "uteke_room_summary_document" | "uteke_room_document" => {
+                    exec_room_document(uteke, &arguments)?
+                }
                 "uteke_room_add_document" => exec_room_add_document(uteke, &arguments)?,
                 "uteke_room_remove_document" => exec_room_remove_document(uteke, &arguments)?,
                 "uteke_room_list_documents" => exec_room_list_documents(uteke, &arguments)?,
@@ -587,7 +589,7 @@ fn tool_room_summary() -> Value {
 
 fn tool_room_document() -> Value {
     serde_json::json!({
-        "name": "uteke_room_document",
+        "name": "uteke_room_summary_document",
         "description": "Generate a structured document from room memories, grouped by memory type (decisions, facts, procedures, preferences, etc.). Useful for producing meeting minutes or decision records.",
         "inputSchema": {
             "type": "object",
