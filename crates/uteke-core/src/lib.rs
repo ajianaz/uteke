@@ -1690,13 +1690,37 @@ impl Uteke {
     ) -> Result<Vec<UnifiedSearchResult>, Error> {
         // Use recall_hybrid with the caller's strategy so that --strategy
         // fts5/hybrid/graph is honoured on the unified path (#900).
-        // entity_filter and category_filter are not supported by recall_hybrid;
-        // they are applied as post-filters by the CLI caller (recall.rs).
-        let _ = (entity_filter, category_filter); // acknowledged, applied by caller
+        // entity_filter and category_filter are not natively supported by
+        // recall_hybrid, so we apply them as post-filters here (#900 cora review).
         let results =
             self.recall_hybrid(query, limit, tags_filter, namespace, strategy, min_score)?;
-        Ok(results
+        let results = results
             .into_iter()
+            .filter(|sr| {
+                if let Some(ent) = entity_filter {
+                    let matches = sr
+                        .memory
+                        .metadata
+                        .get("entity")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|e| e == ent);
+                    if !matches {
+                        return false;
+                    }
+                }
+                if let Some(cat) = category_filter {
+                    let matches = sr
+                        .memory
+                        .metadata
+                        .get("category")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|c| c == cat);
+                    if !matches {
+                        return false;
+                    }
+                }
+                true
+            })
             .map(|sr| {
                 let m = &sr.memory;
                 UnifiedSearchResult {
@@ -1724,7 +1748,8 @@ impl Uteke {
                     linked_memory_ids: None,
                 }
             })
-            .collect())
+            .collect();
+        Ok(results)
     }
 
     /// Unified search — documents only.
