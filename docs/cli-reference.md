@@ -355,6 +355,18 @@ uteke room remove "project-kickoff" <memory-id>
 
 # Delete room
 uteke room delete "project-kickoff"
+
+# Link a document to a room (#859)
+uteke room add-document "project-kickoff" --slug "architecture-spec"
+
+# Unlink a document from a room (#859)
+uteke room remove-document "project-kickoff" --slug "architecture-spec"
+
+# List documents linked to a room (#859)
+uteke room list-documents "project-kickoff"
+
+# List rooms that reference a document (#859)
+uteke room list-rooms --slug "architecture-spec"
 ```
 
 ## uteke bench
