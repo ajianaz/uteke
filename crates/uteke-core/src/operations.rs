@@ -722,8 +722,14 @@ impl crate::Uteke {
 
         // Compute min-max from SURVIVING results only.
         // BM25 rank: negative values, more negative = more relevant.
-        let best = filtered.iter().map(|(_, r)| *r).fold(f64::INFINITY, f64::min);
-        let worst = filtered.iter().map(|(_, r)| *r).fold(f64::NEG_INFINITY, f64::max);
+        let best = filtered
+            .iter()
+            .map(|(_, r)| *r)
+            .fold(f64::INFINITY, f64::min);
+        let worst = filtered
+            .iter()
+            .map(|(_, r)| *r)
+            .fold(f64::NEG_INFINITY, f64::max);
         let range = best - worst;
 
         let results: Vec<SearchResult> = filtered
