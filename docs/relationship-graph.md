@@ -17,7 +17,7 @@ Supported relationship types:
 | `rel:supersedes` | This memory replaces an older one |
 | `rel:contradicts` | This memory contradicts another |
 | `rel:references` | This memory references another |
-| `rel:derived-from` | This memory was derived from another |
+| `rel:part_of` | This memory is part of another (component, sub-item) |
 
 ## Linking Memories
 

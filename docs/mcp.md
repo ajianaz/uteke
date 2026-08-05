@@ -132,7 +132,7 @@ uteke init --agent hermes  # Installs pre_llm_call hook
 
 ## Available Tools
 
-Both transports expose the same 29 tools (MCP protocol version `2025-06-18`):
+Both transports expose the same 35 tools (MCP protocol version `2025-06-18`):
 
 | Tool | Description |
 |------|-------------|

@@ -78,7 +78,7 @@ See [LongMemEval retrieval harness](https://github.com/codecoradev/uteke/tree/de
 | OS | Linux 6.8.0 (aarch64) |
 | Rust | 1.85+ |
 | Embedding | EmbeddingGemma Q4, 768d, ONNX Runtime CPU |
-| Uteke | v0.7.2 |
+| Uteke | v0.12.0 |
 
 ## Methodology
 

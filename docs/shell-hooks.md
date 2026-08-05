@@ -8,8 +8,19 @@ Auto-load project-scoped memory when you cd into a project directory.
 
 ## Installation
 
+The `uteke hook` command prints a shell script to **stdout** — you redirect or `eval` it into your shell config.
+
+### bash / zsh
+
 ```bash
-uteke hook install bash   # or zsh, fish
+# Add to ~/.bashrc (or ~/.zshrc):
+eval "$(uteke hook bash)"
+```
+
+### fish
+
+```bash
+uteke hook fish >> ~/.config/fish/conf.d/uteke.fish
 ```
 
 ## How It Works

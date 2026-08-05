@@ -4,7 +4,7 @@ title: CLI Reference
 
 # CLI Reference
 
-Complete reference for all uteke commands. Version **0.8.0**.
+Complete reference for all uteke commands. Version **0.12.0**.
 
 ## Global Flags
 
@@ -338,8 +338,8 @@ uteke room create "project-kickoff" --title "Project Kickoff"
 uteke room list
 uteke room list --namespace my-agent  # scoped
 
-# Add memory to room
-uteke room add "project-kickoff" <memory-id> --author cto
+# Show room stats and participants
+uteke room stats "project-kickoff"
 
 # Recall within a room (semantic)
 uteke room recall "project-kickoff" --query "database decision"
@@ -350,23 +350,20 @@ uteke room document "project-kickoff"
 # Room summary (LLM-free, tag clustering)
 uteke room summary "project-kickoff"
 
-# Remove memory from room
-uteke room remove "project-kickoff" <memory-id>
+# Delete room (memories are NOT deleted, only room links)
+uteke room delete "project-kickoff" --confirm
 
-# Delete room
-uteke room delete "project-kickoff"
-
-# Link a document to a room (#859)
-uteke room add-document "project-kickoff" --slug "architecture-spec"
+# Link a document to a room (#859, positional slug)
+uteke room add-document "project-kickoff" "architecture-spec"
 
 # Unlink a document from a room (#859)
-uteke room remove-document "project-kickoff" --slug "architecture-spec"
+uteke room remove-document "project-kickoff" "architecture-spec"
 
 # List documents linked to a room (#859)
 uteke room list-documents "project-kickoff"
 
-# List rooms that reference a document (#859)
-uteke room list-rooms --slug "architecture-spec"
+# List rooms that reference a document (#859, positional slug)
+uteke room list-rooms "architecture-spec"
 ```
 
 ## uteke bench
