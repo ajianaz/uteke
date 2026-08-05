@@ -708,6 +708,30 @@ pub enum RoomCommands {
         /// Room ID
         room_id: String,
     },
+    /// Link a document to a room
+    AddDocument {
+        /// Room ID
+        room_id: String,
+        /// Document slug
+        doc_slug: String,
+    },
+    /// Unlink a document from a room
+    RemoveDocument {
+        /// Room ID
+        room_id: String,
+        /// Document slug
+        doc_slug: String,
+    },
+    /// List documents linked to a room
+    ListDocuments {
+        /// Room ID
+        room_id: String,
+    },
+    /// List rooms that reference a document
+    ListRooms {
+        /// Document slug
+        doc_slug: String,
+    },
 }
 
 /// Subcommands for memory aging operations.
