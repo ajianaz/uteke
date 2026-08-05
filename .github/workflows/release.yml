@@ -347,11 +347,17 @@ jobs:
       - name: Generate release notes
         run: |
           VER="${{ steps.version.outputs.VERSION }}"
-          echo "## What's New in ${VER}" > release-notes.md
-          echo "" >> release-notes.md
-          cat changelog-body.md >> release-notes.md
-          echo "" >> release-notes.md
-          cat >> release-notes.md << RELEASEEOF
+          # Prefer committed RELEASE_NOTES.md (copywriting quality, manual curation)
+          if [ -f RELEASE_NOTES.md ]; then
+            echo "Using committed RELEASE_NOTES.md"
+            cp RELEASE_NOTES.md release-notes.md
+          else
+            echo "::notice::No RELEASE_NOTES.md found, auto-generating from CHANGELOG"
+            echo "## What's New in ${VER}" > release-notes.md
+            echo "" >> release-notes.md
+            cat changelog-body.md >> release-notes.md
+            echo "" >> release-notes.md
+            cat >> release-notes.md << RELEASEEOF
 
           ### 📦 Downloads
 
@@ -395,12 +401,13 @@ jobs:
 
           **Full changelog:** https://github.com/codecoradev/uteke/blob/main/CHANGELOG.md
           RELEASEEOF
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.VERSION }}
-          name: Release ${{ steps.version.outputs.VERSION }}
+          name: ${{ steps.version.outputs.VERSION }}
           body_path: release-notes.md
           files: release-artifacts/*
           draft: false
