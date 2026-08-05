@@ -695,15 +695,10 @@ impl crate::Uteke {
             }
         };
 
-        // Pre-compute min-max normalization of BM25 ranks.
-        // BM25 rank: negative values, more negative = more relevant.
-        // Normalize to 0.0..1.0 so min_score filter is meaningful.
-        let ranks: Vec<f64> = fts_results.iter().map(|(_, r)| *r).collect();
-        let best = ranks.iter().copied().fold(f64::INFINITY, f64::min); // most negative
-        let worst = ranks.iter().copied().fold(f64::NEG_INFINITY, f64::max); // least negative
-        let range = best - worst;
-
-        let results: Vec<SearchResult> = fts_results
+        // Filter first, then normalize — otherwise the range is computed
+        // from items that get filtered out (e.g. namespace mismatch),
+        // producing skewed scores (#854 cora review).
+        let filtered: Vec<(Memory, f64)> = fts_results
             .into_iter()
             .filter(|(memory, _)| {
                 // Namespace filter (None = ALL, #448)
@@ -723,10 +718,23 @@ impl crate::Uteke {
                 }
                 true
             })
+            .collect();
+
+        // Compute min-max from SURVIVING results only.
+        // BM25 rank: negative values, more negative = more relevant.
+        let best = filtered
+            .iter()
+            .map(|(_, r)| *r)
+            .fold(f64::INFINITY, f64::min);
+        let worst = filtered
+            .iter()
+            .map(|(_, r)| *r)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let range = best - worst;
+
+        let results: Vec<SearchResult> = filtered
+            .into_iter()
             .map(|(memory, rank)| {
-                // Convert FTS5 BM25 rank to 0..1 score via min-max normalization.
-                // BM25 returns negative values (more negative = better match).
-                // After normalization: best match = 1.0, worst match = 0.0.
                 let score = if range.abs() < f64::EPSILON {
                     1.0f32 // single result or all same rank
                 } else {
