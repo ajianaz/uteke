@@ -226,11 +226,15 @@ pub(crate) fn run_import(
 }
 
 /// Resolve extraction settings (CLI flag > env-merged config > built-in
-/// default), call the LLM to distill facts, and store each fact as a memory.
+/// default), dispatch to offline or LLM extractor, and store each fact.
 ///
-/// API-key resolution falls back to the embedding/OpenAI key so users who
-/// already configured an OpenAI-compatible setup for embeddings don't have to
-/// duplicate the credential.
+/// When config `mode` is "offline" (or empty/unconfigured), uses the
+/// zero-dependency rule-based extractor. When `mode` is "llm" and an API
+/// key is available, uses the OpenAI-compatible LLM extractor.
+///
+/// API-key resolution for LLM mode falls back to the embedding/OpenAI key
+/// so users who already configured an OpenAI-compatible setup for embeddings
+/// don't have to duplicate the credential.
 fn import_with_extraction(
     uteke: &Uteke,
     content: &str,
@@ -241,37 +245,63 @@ fn import_with_extraction(
     use uteke_core::ImportResult;
 
     let cfg = opts.cfg;
-    let model = opts
-        .model
-        .clone()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| cfg.model.clone());
-    let base_url = opts
-        .base_url
-        .clone()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| cfg.base_url.clone());
-    let api_key = opts
-        .api_key
-        .clone()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| cfg.api_key.clone());
+    let mode = cfg.mode.as_str();
     let max_facts = opts.max_facts.unwrap_or(cfg.max_facts);
 
-    let ext_config = uteke_core::extraction::ExtractionConfig {
-        model,
-        api_key,
-        base_url,
-        endpoint_path: cfg.endpoint_path.clone(),
-        max_facts,
+    // Determine extraction mode: explicit mode in config, or infer from
+    // whether an API key is available.
+    let use_llm = if mode == "llm" {
+        true
+    } else if mode == "offline" {
+        false
+    } else {
+        // Unconfigured — try LLM if API key available, else offline.
+        let api_key = opts
+            .api_key
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| cfg.api_key.clone());
+        !api_key.is_empty()
     };
 
-    let extractor = uteke_core::extraction::Extractor::new(&ext_config)
-        .map_err(|e| format!("Failed to initialize extractor: {e}"))?;
+    let facts = if use_llm {
+        // LLM extraction path
+        let model = opts
+            .model
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| cfg.model.clone());
+        let base_url = opts
+            .base_url
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| cfg.base_url.clone());
+        let api_key = opts
+            .api_key
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| cfg.api_key.clone());
 
-    let facts = extractor
-        .extract(content)
-        .map_err(|e| format!("Extraction failed: {e}"))?;
+        let ext_config = uteke_core::extraction::ExtractionConfig {
+            mode: "llm".to_string(),
+            model,
+            api_key,
+            base_url,
+            endpoint_path: cfg.endpoint_path.clone(),
+            max_facts,
+        };
+
+        let extractor = uteke_core::extraction::Extractor::new(&ext_config)
+            .map_err(|e| format!("Failed to initialize extractor: {e}"))?;
+
+        extractor
+            .extract(content)
+            .map_err(|e| format!("Extraction failed: {e}"))?
+    } else {
+        // Offline extraction path — zero API calls
+        tracing::info!("Using offline rule-based extraction (zero API)");
+        uteke_core::offline_extraction::extract_facts(content, max_facts)
+    };
 
     if facts.is_empty() {
         tracing::warn!("Extraction produced no facts from input");
