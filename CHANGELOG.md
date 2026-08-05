@@ -1,3 +1,21 @@
+## [0.12.0] — 2026-08-05
+
+### Fixed
+- **`merge_from_file` skips 5 config sections (#856)** — Config merge now includes `[embed_fallback]`, `[extraction]`, `[recall]` weights (`salience_weight`, `recency_weight`), `[server]` advanced fields, and `[limits]` advanced fields. Previously these sections were silently ignored when loading from `uteke.toml`.
+- **`doc_upsert` double-deletes chunks — usearch index orphaned entries (#857)** — Chunk capture now happens *before* `upsert_document` via new `get_chunk_ids_for_documents()` method. Previously the flow deleted chunks after upsert (which re-creates them), causing orphaned entries in the usearch vector index — leading to index bloat and stale results.
+- **`delete_document` leaves dangling `room_documents` references (#858)** — Document deletion now cleans up the `room_documents` junction table via `DELETE FROM room_documents WHERE doc_slug = ?1`. Previously junction rows were orphaned since there's no foreign key constraint on the junction table.
+- **Default config template only includes 5 of 12 sections (#862)** — `write_default_config()` now emits `[embed_fallback]`, `[extraction]`, `salience_weight`/`recency_weight` in `[recall]`, and other previously missing sections. Users running `uteke init` now get a complete reference template.
+- **Misleading MCP tool name `uteke_room_document` (#861)** — Renamed to `uteke_room_summary_document` for clarity (it generates a summary document, not a CRUD operation). Old name kept as backward-compatible alias — no breaking change for existing MCP clients.
+
+### Added
+- **MCP + CLI room-document junction tools (#859)** — The HTTP API had 4 junction endpoints (`/room/add-document`, `/room/remove-document`, `/room/list-documents`, `/doc/list-rooms`) but these were not exposed via MCP or CLI. Added 4 new MCP tools (`uteke_room_add_document`, `uteke_room_remove_document`, `uteke_room_list_documents`, `uteke_doc_list_rooms`) and 4 CLI subcommands (`room add-document`, `room remove-document`, `room list-documents`, `room list-rooms`). MCP and CLI clients can now manage room↔document links without HTTP.
+
+### Changed
+- **FTS5 documents index now includes content body (#860)** — The `documents_fts` virtual table previously indexed only `title` and `slug` columns. Now also indexes `content`, enabling full-text search across document bodies. Schema migration auto-detects old FTS tables (missing `content` column via `pragma_table_info`) and recreates with full indexing + backfill. Fresh databases get 3-column FTS5 from initial schema.
+
+### Contributors
+- [@ajianaz](https://github.com/ajianaz) — all fixes, features, and FTS5 migration
+
 ## [0.11.0] — 2026-08-03
 
 ### Fixed
