@@ -88,11 +88,14 @@ pub(crate) fn run(
         RoomCommands::Recall {
             room_id,
             query,
+            query_flag,
             author,
             limit,
             min,
         } => {
-            if let Some(q) = query {
+            // Positional query takes precedence over --query flag.
+            let effective_query = query.as_ref().or(query_flag.as_ref());
+            if let Some(q) = effective_query {
                 // Semantic recall — rank by relevance
                 let min_score = min.unwrap_or(config.recall.min_score as f32);
                 let results = uteke
