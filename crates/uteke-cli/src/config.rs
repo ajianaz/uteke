@@ -909,6 +909,18 @@ impl Config {
 # graph_authority_weight = 0.1
 # graph_rerank_enabled = true
 # jaccard_weight = 0.0  # Post-RRF token overlap boost (#719). 0=off, 0.10-0.15 recommended
+# salience_weight = 0.0  # Post-RRF importance/pin boost. 0=off, 0.05-0.10 recommended
+# recency_weight = 0.0   # Post-RRF time-decay boost. 0=off, 0.05-0.10 recommended
+
+[embed_fallback]
+# Fallback when embedding model fails or is unavailable (#598)
+# enabled = true
+# strategy = "hash"  # hash | random | zero
+
+[extraction]
+# Content extraction settings for document chunking
+# max_chunk_size = 512
+# overlap = 50
 
 [server]
 # enabled = false
