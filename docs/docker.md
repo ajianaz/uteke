@@ -4,7 +4,7 @@ title: Docker
 
 # Docker
 
-Uteke ships as a lightweight multi-arch Docker image (~10MB). The embedding model (~208MB) downloads automatically on first run and is cached in the volume — subsequent updates are instant.
+Uteke ships as a lightweight multi-arch Docker image (~10MB). The embedding model (~188MB) downloads automatically on first run and is cached in the volume — subsequent updates are instant.
 
 ## Quick Start
 
@@ -125,9 +125,8 @@ Docker automatically pulls the correct architecture.
 | Tag | Description |
 |-----|-------------|
 | `latest` | Latest stable release |
-| `v0.7.2` | Specific version |
-| `v0.6.6` | Specific version |
-| `0.6` | Minor version (latest patch) |
+| `v0.12.0` | Specific version |
+| `0.12` | Minor version (latest patch) |
 | `slim` | Slim image (no embedded model — mount model volume separately, see below) |
 
 ## CLI in Docker

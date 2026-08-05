@@ -20,7 +20,7 @@ title: Comparison
 | Recall Cache | ✅ LRU + TTL | ❌ | ❌ | ❌ |
 | Benchmarks | ✅ Built-in | ❌ | ❌ | ❌ |
 | Privacy | ✅ Data stays local | ⚠️ Sent to LLM | ⚠️ Sent to LLM | ⚠️ Sent to LLM |
-| Recall Speed | ~30ms | Network RTT | Network RTT | Network RTT |
+| Recall Speed | ~40-45ms | Network RTT | Network RTT | Network RTT |
 | Tag Management | ✅ list/rename/delete | ⚠️ Basic | ❌ | ⚠️ Basic |
 | Memory Aging | ✅ Auto-cleanup | ✅ | ✅ Core memory | ✅ TTL-based |
 | Shell Hooks | ✅ bash/zsh/fish | ❌ | ❌ | ❌ |
@@ -30,7 +30,7 @@ title: Comparison
 
 uteke runs entirely on your machine. No network calls, no API keys, no data leaving your machine. Your memories — your infrastructure.
 
-**Performance:** ~30ms recall is possible because embedding inference, HNSW vector search, and FTS5 all run in-process. No network round-trip.
+**Performance:** ~40-45ms recall is possible because embedding inference, HNSW vector search, and FTS5 all run in-process. No network round-trip.
 
 **Privacy:** Data never leaves your machine. No telemetry. No cloud dependency.
 
