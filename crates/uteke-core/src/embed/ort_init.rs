@@ -151,12 +151,28 @@ pub fn resolve_ort_lib() -> Result<OrtLibInfo, String> {
         }
     }
 
-    // 5. No library found anywhere — build a descriptive error.
+    // 5. Python site-packages fallback — many users have onnxruntime via pip.
+    // This covers: ~/.local/lib/python*/site-packages/onnxruntime/capi/
+    // Also checks pyke cache: ~/.cache/ort.pyke.io/
+    if let Some(path) = find_python_or_conda_lib() {
+        tracing::info!(
+            "ORT: Using library from Python/conda install: {}",
+            path.display()
+        );
+        return Ok(OrtLibInfo {
+            lib_path: path,
+            has_avx2: avx2,
+        });
+    }
+
+    // 6. No library found anywhere — build a descriptive error.
     if avx2 {
         Err(format!(
             "ONNX Runtime library not found. Searched:\n\
              - {} (exe directory)\n\
              - /usr/local/lib, /usr/lib, /lib (system paths)\n\
+             - Python site-packages (~/.local/lib/python*/site-packages/onnxruntime/capi/)\n\
+             - pyke cache (~/.cache/ort.pyke.io/)\n\
              Set ORT_LIB_PATH to the library file, or use the standard release bundle.",
             exe_dir.join(ORT_LIB_NAME).display()
         ))
@@ -176,6 +192,119 @@ fn exe_dir() -> Result<PathBuf, String> {
     exe.parent()
         .map(|p| p.to_path_buf())
         .ok_or_else(|| "executable path has no parent directory".into())
+}
+
+/// Search for ONNX Runtime library in Python and conda installations.
+///
+/// Covers:
+/// - `~/.local/lib/python*/site-packages/onnxruntime/capi/` (pip user install)
+/// - `/usr/lib/python*/site-packages/onnxruntime/capi/` (pip system install)
+/// - `~/.cache/ort.pyke.io/` (pyke cache, nested dfbin dirs)
+/// - Conda: `~/miniconda3/lib/`, `~/anaconda3/lib/` (conda install)
+///
+/// Handles versioned library names: `libonnxruntime.so.1.25.0`, etc.
+///
+/// Returns the first match found, or `None`.
+fn find_python_or_conda_lib() -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+
+    // Collect all candidate directories.
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // 1. pip user site-packages: ~/.local/lib/python*/site-packages/onnxruntime/capi/
+    let pip_user_base = PathBuf::from(&home).join(".local/lib");
+    if let Ok(entries) = std::fs::read_dir(&pip_user_base) {
+        for entry in entries.flatten() {
+            let py_dir = entry.path().join("site-packages/onnxruntime/capi");
+            if py_dir.is_dir() {
+                candidates.push(py_dir);
+            }
+        }
+    }
+
+    // 2. pip system site-packages: /usr/lib/python*/site-packages/onnxruntime/capi/
+    //    and /usr/local/lib/python*/site-packages/onnxruntime/capi/
+    for sys_base in ["/usr/lib", "/usr/local/lib"] {
+        if let Ok(entries) = std::fs::read_dir(sys_base) {
+            for entry in entries.flatten() {
+                let py_dir = entry.path().join("site-packages/onnxruntime/capi");
+                if py_dir.is_dir() {
+                    candidates.push(py_dir);
+                }
+            }
+        }
+    }
+
+    // 3. pyke cache: ~/.cache/ort.pyke.io/ (nested dfbin dirs with hash names)
+    let pyke_base = PathBuf::from(&home).join(".cache/ort.pyke.io");
+    if pyke_base.is_dir() {
+        collect_pyke_dirs(&pyke_base, &mut candidates, 0);
+    }
+
+    // 4. Conda: ~/miniconda3/lib/, ~/anaconda3/lib/, ~/miniforge3/lib/
+    for conda in ["miniconda3", "anaconda3", "miniforge3"] {
+        candidates.push(PathBuf::from(&home).join(conda).join("lib"));
+    }
+
+    // Search each candidate for the ORT library (exact name or versioned variant).
+    for dir in &candidates {
+        if let Some(path) = find_ort_in_dir(dir) {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
+/// Recursively collect directories from pyke cache (max depth 3).
+fn collect_pyke_dirs(base: &PathBuf, candidates: &mut Vec<PathBuf>, depth: usize) {
+    if depth > 3 {
+        return;
+    }
+    if let Ok(entries) = std::fs::read_dir(base) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // Check if this dir contains the ORT lib directly.
+                if find_ort_in_dir(&path).is_some() {
+                    candidates.push(path);
+                } else {
+                    // Recurse deeper.
+                    collect_pyke_dirs(&path, candidates, depth + 1);
+                }
+            }
+        }
+    }
+}
+
+/// Look for the ORT library in a specific directory.
+///
+/// Tries exact filename first (`libonnxruntime.so`), then versioned
+/// variants (`libonnxruntime.so.*`).
+fn find_ort_in_dir(dir: &PathBuf) -> Option<PathBuf> {
+    // Exact match.
+    let exact = dir.join(ORT_LIB_NAME);
+    if exact.exists() {
+        return Some(exact);
+    }
+
+    // Versioned variant: libonnxruntime.so.1.25.0, etc.
+    // Only on Unix (.so suffix).
+    #[cfg(unix)]
+    {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                // Match: libonnxruntime.so.<anything>
+                if name_str.starts_with("libonnxruntime.so.") && entry.path().is_file() {
+                    return Some(entry.path());
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// Initialize the ORT environment using the resolved library path.
@@ -260,5 +389,47 @@ mod tests {
     fn exe_dir_returns_parent() {
         let dir = exe_dir().unwrap();
         assert!(dir.exists(), "exe dir should exist: {}", dir.display());
+    }
+
+    #[test]
+    fn find_ort_in_dir_finds_exact_match() {
+        let tmp = std::env::temp_dir();
+        let dir = tmp.join("test_ort_exact");
+        std::fs::create_dir_all(&dir).unwrap();
+        let lib = dir.join("libonnxruntime.so");
+        std::fs::write(&lib, b"fake").unwrap();
+
+        let result = find_ort_in_dir(&dir);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), lib);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn find_ort_in_dir_finds_versioned_variant() {
+        let tmp = std::env::temp_dir();
+        let dir = tmp.join("test_ort_versioned");
+        std::fs::create_dir_all(&dir).unwrap();
+        let lib = dir.join("libonnxruntime.so.1.25.0");
+        std::fs::write(&lib, b"fake").unwrap();
+
+        let result = find_ort_in_dir(&dir);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), lib);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn find_ort_in_dir_returns_none_when_empty() {
+        let tmp = std::env::temp_dir();
+        let dir = tmp.join("test_ort_empty");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let result = find_ort_in_dir(&dir);
+        assert!(result.is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
