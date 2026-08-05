@@ -794,6 +794,18 @@ impl super::Store {
         } else {
             format!("{}/%", path)
         };
+
+        // Collect all descendant document IDs (including self) for junction cleanup.
+        // Clean up room_documents junction entries BEFORE deleting the documents
+        // (so the subquery SELECT slug FROM documents still has rows to match).
+        self.conn
+            .execute(
+                "DELETE FROM room_documents WHERE doc_slug IN \
+                 (SELECT slug FROM documents WHERE id = ?1 OR path LIKE ?2)",
+                params![id, &cascade_prefix],
+            )
+            .map_err(|e| Error::db("cleanup room_documents junction on doc delete", e))?;
+
         let n = self
             .conn
             .execute(
