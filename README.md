@@ -112,7 +112,7 @@ Every AI tool forgets. Context windows fill up, sessions end, and your AI starts
 | **Works offline** | ✅ Fully | ⚠️ Optional | ❌ Cloud embedding | ❌ Needs LLM | ❌ Needs LLM | ❌ Needs LLM + vector DB | ⚠️ Self-hostable but needs infra | ✅ Fully |
 | **Search** | **Hybrid** (Vector + FTS5 + RRF) | sqlite-vec + FTS5 | Vector + Graph | Vector + Graph | Vector | Temporal Graph | Vector + rerank | **FTS5 only** |
 | **Recall speed** | ~45ms | ~50ms+ | Network round-trip | Network round-trip | Network round-trip | Network round-trip | Network round-trip | ~Fast (local) |
-| **Multi-agent** | ✅ Rooms (built-in collaboration) | ⚠️ Shared API | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Multi-agent** | ✅ **Rooms** (shared memory, cross-agent recall, author attribution) | ⚠️ Shared API | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Time-travel** | ✅ Native point-in-time | ⚠️ Temporal triples | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **MCP server** | ✅ JSON-RPC + HTTP | ✅ stdio + SSE | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Your data** | ✅ Never leaves machine | ✅ Local-first | ⚠️ Sent to LLM cloud | ⚠️ Sent to LLM cloud | ⚠️ Sent to LLM cloud | ⚠️ Sent to LLM cloud | ⚠️ Cloudflare-hosted | ✅ Local |
@@ -158,6 +158,39 @@ Full benchmarks: `uteke bench --counts 100,1000,10000 --json` · [Benchmark deta
 
 ---
 
+## 🏠 Rooms — Multi-Agent Shared Memory
+
+Other memory layers are single-player — every fact stored under a flat `user_id`, invisible to other agents. **Uteke Rooms** let multiple AI agents share a memory space with full author attribution.
+
+```bash
+# Create a shared room
+uteke room create "engineering" --description "Team decisions"
+
+# Alice's agent stores a decision
+uteke remember "We chose Redis for caching over Memcached" \
+  --room engineering --author alice
+
+# Bob's agent adds context
+uteke remember "Redis cluster: 3 nodes, 2 replicas each" \
+  --room engineering --author bob
+
+# Any agent can recall the shared history
+uteke recall "caching decision" --room engineering
+```
+
+**Why this matters:**
+
+| Problem without Rooms | Solution with Rooms |
+|---|---|
+| Agent A can't see Agent B's memories | Shared space, cross-agent recall |
+| Team knowledge is siloed per user | One room, multiple authors |
+| No way to attribute who said what | Author on every memory |
+| Multi-agent workflows need manual sync | Agents share context automatically |
+
+📖 **[Full Rooms documentation →](docs/rooms.md)**
+
+---
+
 ## ✨ Features
 
 ### Core Memory
@@ -165,7 +198,7 @@ Full benchmarks: `uteke bench --counts 100,1000,10000 --json` · [Benchmark deta
 | Feature | What it does |
 |---------|-------------|
 | 🧠 **Hybrid Search** | Vector similarity + FTS5 full-text search, merged by Reciprocal Rank Fusion (RRF). Finds by meaning AND exact keywords. |
-| 🏠 **Rooms** | Group memories by context (meetings, projects, clients) with author attribution. |
+| 🏠 **Rooms** | **Multi-agent shared memory.** Group memories by context (meetings, projects, clients). Multiple agents read/write to the same room with author attribution. Cross-agent recall without manual sync. |
 | ⏳ **Time-travel** | Recall memories as they existed at any point in time. `uteke recall "deploy" --at 2025-01-15` |
 | 🏷️ **Rich Metadata** | Tags, entities, categories, key:value pairs on every memory. |
 | 🧩 **Memory Types** | Typed categories (fact, procedure, decision, etc.) with auto-inference. |
