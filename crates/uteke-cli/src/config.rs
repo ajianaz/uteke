@@ -558,6 +558,104 @@ impl Config {
             if recall.contains_key("jaccard_weight") {
                 self.recall.jaccard_weight = overlay.recall.jaccard_weight;
             }
+            if recall.contains_key("salience_weight") {
+                self.recall.salience_weight = overlay.recall.salience_weight;
+            }
+            if recall.contains_key("recency_weight") {
+                self.recall.recency_weight = overlay.recall.recency_weight;
+            }
+        }
+
+        // Merge embed_fallback section
+        if let Some(fb) = table.get("embed_fallback").and_then(|v| v.as_table()) {
+            if fb.contains_key("api_key") {
+                self.embed_fallback.api_key = overlay.embed_fallback.api_key.clone();
+            }
+            if fb.contains_key("base_url") {
+                self.embed_fallback.base_url = overlay.embed_fallback.base_url.clone();
+            }
+            if fb.contains_key("endpoint_path") {
+                self.embed_fallback.endpoint_path = overlay.embed_fallback.endpoint_path.clone();
+            }
+            if fb.contains_key("model") {
+                self.embed_fallback.model = overlay.embed_fallback.model.clone();
+            }
+        }
+
+        // Merge extraction section
+        if let Some(ext) = table.get("extraction").and_then(|v| v.as_table()) {
+            if ext.contains_key("model") {
+                self.extraction.model = overlay.extraction.model.clone();
+            }
+            if ext.contains_key("api_key") {
+                self.extraction.api_key = overlay.extraction.api_key.clone();
+            }
+            if ext.contains_key("base_url") {
+                self.extraction.base_url = overlay.extraction.base_url.clone();
+            }
+            if ext.contains_key("endpoint_path") {
+                self.extraction.endpoint_path = overlay.extraction.endpoint_path.clone();
+            }
+            if ext.contains_key("max_facts") {
+                self.extraction.max_facts = overlay.extraction.max_facts;
+            }
+        }
+
+        // Merge limits section
+        if let Some(limits) = table.get("limits").and_then(|v| v.as_table()) {
+            if limits.contains_key("max_content_length") {
+                self.limits.max_content_length = overlay.limits.max_content_length;
+            }
+            if limits.contains_key("max_tags_count") {
+                self.limits.max_tags_count = overlay.limits.max_tags_count;
+            }
+            if limits.contains_key("max_tag_length") {
+                self.limits.max_tag_length = overlay.limits.max_tag_length;
+            }
+            if limits.contains_key("max_payload_size") {
+                self.limits.max_payload_size = overlay.limits.max_payload_size;
+            }
+            if limits.contains_key("default_recall_limit") {
+                self.limits.default_recall_limit = overlay.limits.default_recall_limit;
+            }
+        }
+
+        // Merge maintenance section
+        if let Some(maint) = table.get("maintenance").and_then(|v| v.as_table()) {
+            if maint.contains_key("auto_aging_enabled") {
+                self.maintenance.auto_aging_enabled = overlay.maintenance.auto_aging_enabled;
+            }
+            if maint.contains_key("auto_aging_interval_hours") {
+                self.maintenance.auto_aging_interval_hours =
+                    overlay.maintenance.auto_aging_interval_hours;
+            }
+            if maint.contains_key("auto_dream_enabled") {
+                self.maintenance.auto_dream_enabled = overlay.maintenance.auto_dream_enabled;
+            }
+            if maint.contains_key("auto_dream_interval_days") {
+                self.maintenance.auto_dream_interval_days =
+                    overlay.maintenance.auto_dream_interval_days;
+            }
+        }
+
+        // Merge dream section
+        if let Some(dream) = table.get("dream").and_then(|v| v.as_table()) {
+            if dream.contains_key("contradict_similarity_threshold") {
+                self.dream.contradict_similarity_threshold =
+                    overlay.dream.contradict_similarity_threshold;
+            }
+            if dream.contains_key("contradict_tag_jaccard_min") {
+                self.dream.contradict_tag_jaccard_min = overlay.dream.contradict_tag_jaccard_min;
+            }
+            if dream.contains_key("contradict_max_memories") {
+                self.dream.contradict_max_memories = overlay.dream.contradict_max_memories;
+            }
+            if dream.contains_key("dedup_threshold") {
+                self.dream.dedup_threshold = overlay.dream.dedup_threshold;
+            }
+            if dream.contains_key("orphan_importance_threshold") {
+                self.dream.orphan_importance_threshold = overlay.dream.orphan_importance_threshold;
+            }
         }
 
         // Merge server section
@@ -1137,6 +1235,64 @@ model = "other-model"
             .clone()
             .merge_from_file(std::path::Path::new("/no/such/file.toml"));
         assert_eq!(merged.store.path, cfg.store.path);
+    }
+
+    #[test]
+    fn merge_all_sections_from_file() {
+        // Regression test for #856: verify all 12 sections are merged.
+        let base = Config::default();
+        let toml = r#"
+[recall]
+salience_weight = 0.25
+recency_weight = 0.20
+
+[embed_fallback]
+api_key = "sk-test"
+base_url = "https://embed.example.com"
+model = "text-embed"
+
+[extraction]
+model = "gpt-4o"
+max_facts = 30
+
+[limits]
+max_content_length = 50000
+default_recall_limit = 10
+
+[maintenance]
+auto_aging_enabled = true
+auto_aging_interval_hours = 12
+auto_dream_enabled = false
+
+[dream]
+dedup_threshold = 0.95
+orphan_importance_threshold = 0.10
+"#;
+        let tmp = std::env::temp_dir().join("uteke_test_merge_all.toml");
+        std::fs::write(&tmp, toml).unwrap();
+        let merged = base.merge_from_file(&tmp);
+        std::fs::remove_file(&tmp).ok();
+
+        // recall (salience/recency_weight were the original missing fields)
+        assert!((merged.recall.salience_weight - 0.25).abs() < f32::EPSILON);
+        assert!((merged.recall.recency_weight - 0.20).abs() < f32::EPSILON);
+        // embed_fallback
+        assert_eq!(merged.embed_fallback.api_key, "sk-test");
+        assert_eq!(merged.embed_fallback.base_url, "https://embed.example.com");
+        assert_eq!(merged.embed_fallback.model, "text-embed");
+        // extraction
+        assert_eq!(merged.extraction.model, "gpt-4o");
+        assert_eq!(merged.extraction.max_facts, 30);
+        // limits
+        assert_eq!(merged.limits.max_content_length, 50000);
+        assert_eq!(merged.limits.default_recall_limit, 10);
+        // maintenance
+        assert!(merged.maintenance.auto_aging_enabled);
+        assert_eq!(merged.maintenance.auto_aging_interval_hours, 12);
+        assert!(!merged.maintenance.auto_dream_enabled);
+        // dream
+        assert!((merged.dream.dedup_threshold - 0.95).abs() < f32::EPSILON);
+        assert!((merged.dream.orphan_importance_threshold - 0.10).abs() < f64::EPSILON);
     }
 
     #[test]
