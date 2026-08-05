@@ -410,3 +410,62 @@ UTEKE_AUTH_TOKEN=admin-secret UTEKE_READ_ONLY_TOKEN=viewer-key uteke-serve
 
 Read-only tokens can only access GET endpoints (recall, search, list, stats, graph, health).
 POST/DELETE operations return `403 Forbidden`.
+
+## Aging (#247)
+
+Controls automatic memory lifecycle management. Disabled by default — opt-in for long-running stores.
+
+```toml
+[aging]
+enabled = false             # Set true to enable automatic cleanup
+max_age_days = 365          # Prune memories older than this
+max_access_count = 10       # Only prune if accessed fewer than this many times
+max_cold_count = 1000       # Max cold memories to keep before triggering cleanup
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enabled` | false | Enable automatic aging |
+| `max_age_days` | 365 | Maximum age in days before pruning |
+| `max_access_count` | 10 | Max access count to be considered "cold" |
+| `max_cold_count` | 1000 | Max cold memories before cleanup triggers |
+
+## Maintenance Daemon (#442)
+
+Controls auto-aging and auto-dream background tasks when running in server mode.
+
+```toml
+[maintenance]
+auto_aging_enabled = false       # Periodically clean up cold, stale memories
+auto_aging_interval_hours = 24   # How often to run aging
+auto_dream_enabled = true        # Periodically run dream cycle (lint → dedup → orphans)
+auto_dream_interval_days = 7     # How often to dream
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `auto_aging_enabled` | false | Enable auto-aging in server mode |
+| `auto_aging_interval_hours` | 24 | Aging check interval |
+| `auto_dream_enabled` | true | Enable auto-dream in server mode |
+| `auto_dream_interval_days` | 7 | Dream cycle interval |
+
+## Dream Pipeline Thresholds (#731)
+
+Configurable thresholds for the dream maintenance pipeline (contradiction scan, dedup, orphan detection). All values were hardcoded before v0.9.0.
+
+```toml
+[dream]
+contradict_similarity_threshold = 0.6    # Above this cosine = NOT a contradiction
+contradict_tag_jaccard_min = 0.4         # Min tag overlap to consider contradiction
+contradict_max_memories = 200            # Max memories for O(n²) scan
+dedup_threshold = 0.92                   # Cosine above this = merge candidate
+orphan_importance_threshold = 0.15       # Below this + no edges = orphan
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `contradict_similarity_threshold` | 0.6 | Cosine threshold for contradiction detection |
+| `contradict_tag_jaccard_min` | 0.4 | Min Jaccard tag overlap for contradiction |
+| `contradict_max_memories` | 200 | Max memories loaded for contradiction scan |
+| `dedup_threshold` | 0.92 | Cosine threshold for dedup merging |
+| `orphan_importance_threshold` | 0.15 | Importance threshold for orphan flagging |
