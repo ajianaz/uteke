@@ -136,6 +136,39 @@ Setiap AI tool lupa. Context window penuh, sesi berakhir, dan AI kamu start over
 
 ---
 
+## 🏠 Rooms — Shared Memory Multi-Agent
+
+Memory layer lain cuma single-player — setiap fakta disimpan di `user_id` yang flat, nggak kelihatan sama agent lain. **Uteke Rooms** bikin multiple AI agent bisa share memory space dengan atribusi author.
+
+```bash
+# Bikin room shared
+uteke room create "engineering" --description "Keputusan tim"
+
+# Agent Alice simpan keputusan
+uteke remember "Kita pilih Redis buat caching, bukan Memcached" \
+  --room engineering --author alice
+
+# Agent Bob tambah konteks
+uteke remember "Redis cluster: 3 node, 2 replica tiap node" \
+  --room engineering --author bob
+
+# Agent manapun bisa recall history shared
+uteke recall "caching decision" --room engineering
+```
+
+**Kenapa ini penting:**
+
+| Masalah tanpa Rooms | Solusi dengan Rooms |
+|---|---|
+| Agent A nggak lihat memori Agent B | Shared space, cross-agent recall |
+| Knowledge tim silo per user | Satu room, multiple author |
+| Nggak ada cara tau siapa bilang apa | Author di setiap memori |
+| Workflow multi-agent butuh sync manual | Agent share context otomatis |
+
+📖 **[Dokumentasi Rooms lengkap →](docs/rooms.md)**
+
+---
+
 ## ✨ Fitur
 
 ### Memori Inti
@@ -143,7 +176,7 @@ Setiap AI tool lupa. Context window penuh, sesi berakhir, dan AI kamu start over
 | Fitur | Apa fungsinya |
 |-------|---------------|
 | 🧠 **Hybrid Search** | Cari berdasarkan makna (vector) + kata kunci exact (FTS5). Digabung dengan Reciprocal Rank Fusion (RRF). |
-| 🏠 **Rooms** | Kelompokkan memori berdasarkan konteks (meeting, project, klien) dengan atribusi author. |
+| 🏠 **Rooms** | **Shared memory multi-agent.** Kelompokkan memori berdasarkan konteks (meeting, project, klien). Multiple agent baca/tulis ke room yang sama dengan atribusi author. Cross-agent recall tanpa sync manual. |
 | ⏳ **Time-travel** | Recall memori seperti adanya di titik waktu manapun. `uteke recall "deploy" --at 2025-01-15` |
 | 🏷️ **Metadata Kaya** | Tag, entity, kategori, key:value di setiap memori. |
 | 🧩 **Tipe Memori** | Kategori bertipe (fact, procedure, decision, dll.) dengan auto-inferensi. |
