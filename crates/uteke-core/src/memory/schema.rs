@@ -287,35 +287,69 @@ impl super::Store {
             )
             .map_err(|e| Error::db("check documents_fts exists (#549)", e))?;
 
-        if !exists {
-            tracing::warn!(
-                "documents_fts table missing on schema v{} DB — creating (#549)",
-                version
-            );
-            // Create FTS5 table.
+        // Check if FTS table has the `content` column (#860).
+        // Old schema only indexed title+slug; new schema also indexes content body.
+        let needs_content_upgrade = if exists {
+            let cols: Vec<String> = self
+                .conn
+                .prepare("SELECT name FROM pragma_table_info('documents_fts')")
+                .map_err(|e| Error::db("check documents_fts columns (#860)", e))?
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| Error::db("query documents_fts columns (#860)", e))?
+                .filter_map(|r| r.ok())
+                .collect();
+            !cols.iter().any(|c| c == "content")
+        } else {
+            false
+        };
+
+        if needs_content_upgrade {
+            tracing::info!("Upgrading documents_fts to include content column (#860)");
+            // Drop old triggers, FTS table, then recreate with content column.
             self.conn
                 .execute_batch(
-                    "CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(title, slug, content='documents', content_rowid='rowid')",
+                    "DROP TRIGGER IF EXISTS documents_fts_insert;
+                     DROP TRIGGER IF EXISTS documents_fts_update;
+                     DROP TRIGGER IF EXISTS documents_fts_delete;
+                     DROP TABLE IF EXISTS documents_fts;",
                 )
-                .map_err(|e| Error::db("create documents_fts (#549)", e))?;
-
-            // Create sync triggers.
-            self.conn.execute_batch(
-                "CREATE TRIGGER IF NOT EXISTS documents_fts_insert AFTER INSERT ON documents BEGIN                  INSERT INTO documents_fts(rowid, title, slug) VALUES (new.rowid, new.title, new.slug); END;                  CREATE TRIGGER IF NOT EXISTS documents_fts_update AFTER UPDATE ON documents BEGIN                  UPDATE documents_fts SET title = new.title, slug = new.slug WHERE rowid = new.rowid; END;                  CREATE TRIGGER IF NOT EXISTS documents_fts_delete AFTER DELETE ON documents BEGIN                  DELETE FROM documents_fts WHERE rowid = old.rowid; END;",
-            ).map_err(|e| Error::db("create documents_fts triggers (#549)", e))?;
-
-            // Backfill existing documents into FTS index.
-            self.conn
-                .execute_batch(
-                    "INSERT INTO documents_fts(rowid, title, slug)                      SELECT rowid, title, slug FROM documents",
-                )
-                .map_err(|e| Error::db("backfill documents_fts (#549)", e))?;
-
-            tracing::info!(
-                "documents_fts table created and backfilled from existing documents (#549)"
-            );
+                .map_err(|e| Error::db("drop old documents_fts (#860)", e))?;
+            // Force recreation below.
+            return self.ensure_documents_fts_create();
         }
 
+        if !exists {
+            return self.ensure_documents_fts_create();
+        }
+
+        Ok(())
+    }
+
+    fn ensure_documents_fts_create(&self) -> Result<(), Error> {
+        // Create FTS5 table with title, slug, AND content columns (#860).
+        self.conn
+            .execute_batch(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(title, slug, content, content='documents', content_rowid='rowid')",
+            )
+            .map_err(|e| Error::db("create documents_fts (#860)", e))?;
+
+        // Create sync triggers — include content body.
+        self.conn
+            .execute_batch(
+                "CREATE TRIGGER IF NOT EXISTS documents_fts_insert AFTER INSERT ON documents BEGIN INSERT INTO documents_fts(rowid, title, slug, content) VALUES (new.rowid, new.title, new.slug, new.content); END;
+                 CREATE TRIGGER IF NOT EXISTS documents_fts_update AFTER UPDATE ON documents BEGIN UPDATE documents_fts SET title = new.title, slug = new.slug, content = new.content WHERE rowid = new.rowid; END;
+                 CREATE TRIGGER IF NOT EXISTS documents_fts_delete AFTER DELETE ON documents BEGIN DELETE FROM documents_fts WHERE rowid = old.rowid; END;",
+            )
+            .map_err(|e| Error::db("create documents_fts triggers (#860)", e))?;
+
+        // Backfill existing documents into FTS index.
+        self.conn
+            .execute_batch(
+                "INSERT INTO documents_fts(rowid, title, slug, content) SELECT rowid, title, slug, content FROM documents",
+            )
+            .map_err(|e| Error::db("backfill documents_fts (#860)", e))?;
+
+        tracing::info!("documents_fts table created and backfilled from existing documents (#860)");
         Ok(())
     }
 
@@ -834,13 +868,13 @@ impl super::Store {
             let _ = self.conn.execute(idx, []);
         }
 
-        // FTS5 virtual table for documents (title + slug search).
+        // FTS5 virtual table for documents (title + slug + content search).
         // Best-effort: skip if FTS5 is not available (e.g., custom SQLite builds).
         let fts = [
-            "CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(title, slug, content='documents', content_rowid='rowid')",
+            "CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(title, slug, content, content='documents', content_rowid='rowid')",
             // Triggers to keep FTS in sync with documents table.
-            "CREATE TRIGGER IF NOT EXISTS documents_fts_insert AFTER INSERT ON documents BEGIN INSERT INTO documents_fts(rowid, title, slug) VALUES (new.rowid, new.title, new.slug); END",
-            "CREATE TRIGGER IF NOT EXISTS documents_fts_update AFTER UPDATE ON documents BEGIN UPDATE documents_fts SET title = new.title, slug = new.slug WHERE rowid = new.rowid; END",
+            "CREATE TRIGGER IF NOT EXISTS documents_fts_insert AFTER INSERT ON documents BEGIN INSERT INTO documents_fts(rowid, title, slug, content) VALUES (new.rowid, new.title, new.slug, new.content); END",
+            "CREATE TRIGGER IF NOT EXISTS documents_fts_update AFTER UPDATE ON documents BEGIN UPDATE documents_fts SET title = new.title, slug = new.slug, content = new.content WHERE rowid = new.rowid; END",
             "CREATE TRIGGER IF NOT EXISTS documents_fts_delete AFTER DELETE ON documents BEGIN DELETE FROM documents_fts WHERE rowid = old.rowid; END",
         ];
         for sql in &fts {
