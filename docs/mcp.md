@@ -160,7 +160,11 @@ Both transports expose the same 29 tools (MCP protocol version `2025-06-18`):
 | `uteke_room_delete` | Delete a room |
 | `uteke_room_stats` | Room statistics |
 | `uteke_room_summary` | Room topic summary (tag clustering, no LLM) |
-| `uteke_room_document` | Generate summary document from room (→ `POST /room/summary-document`) |
+| `uteke_room_summary_document` | Generate summary document from room (→ `POST /room/summary-document`) |
+| `uteke_room_add_document` | Link an existing document to a room (#859) |
+| `uteke_room_remove_document` | Unlink a document from a room (#859) |
+| `uteke_room_list_documents` | List documents linked to a room (#859) |
+| `uteke_doc_list_rooms` | List rooms that reference a document (#859) |
 | `uteke_tags_list` | List all tags with counts (#566) |
 | `uteke_tags_rename` | Rename a tag across all memories (#566) |
 | `uteke_tags_delete` | Delete a tag from all memories (#566) |

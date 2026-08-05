@@ -94,7 +94,7 @@ uteke(action="room_create", room_id="sprint-planning", title="Sprint Planning")
 uteke(action="room_remember", room_id="sprint-planning", content="Deploy scheduled for Friday", author="agent1")
 
 # Add a reference document to a room
-uteke(action="room_document", room_id="sprint-planning", content="Architecture spec: ...", title="Arch Spec")
+uteke(action="room_summary_document", room_id="sprint-planning", content="Architecture spec: ...", title="Arch Spec")
 
 # Recall from a room (semantic search — query is required)
 uteke(action="room_recall", room_id="sprint-planning", content="deploy deadline")
@@ -214,7 +214,7 @@ hermes mcp add uteke --command uteke-mcp
 | `forget` | Delete memory |
 | `stats` | Namespace or global statistics |
 | `room_remember` | Store memory in a room with author attribution |
-| `room_document` | Store a reference document in a room |
+| `room_summary_document` | Store a reference document in a room |
 | `room_create` | Create a room |
 | `room_recall` | Semantic search within a room (requires `query`) |
 | `room_list` | List all rooms (cross-namespace) |
@@ -234,7 +234,7 @@ hermes mcp add uteke --command uteke-mcp
 
 ## Valid Memory Types
 
-When using `remember`, `room_remember`, or `room_document`, the `type` parameter accepts these values:
+When using `remember`, `room_remember`, or `room_summary_document`, the `type` parameter accepts these values:
 
 | Type | Description |
 |------|-------------|
