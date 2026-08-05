@@ -30,7 +30,7 @@ namespace = "default"
 
 [logging]
 # Log level: trace, debug, info, warn, error
-level = "info"
+level = "warn"
 
 # Optional log file path. Empty = stderr only.
 # file = ""
@@ -134,22 +134,22 @@ unconfigured, no cloud calls are made.
 
 ```toml
 [embed_fallback]
-enabled = false               # opt-in: must be true to activate
-base_url = ""                 # e.g. "https://api.openai.com/v1"
 api_key = ""                  # or use UTEKE_EMBED_FALLBACK_API_KEY
+base_url = ""                 # e.g. "https://api.openai.com/v1"
+endpoint_path = ""            # path appended to base_url. Empty = "/embeddings"
 model = ""                    # e.g. "text-embedding-3-small"
-dims = 0                      # 0 = use fallback model default
 ```
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `enabled` | `false` | Must be explicitly enabled — no surprise cloud calls |
-| `base_url` | `""` | Fallback API endpoint (OpenAI-compatible) |
 | `api_key` | `""` | API key for the fallback endpoint |
+| `base_url` | `""` | Fallback API endpoint (OpenAI-compatible) |
+| `endpoint_path` | `""` | Path appended to `base_url`. Empty = `/embeddings` |
 | `model` | `""` | Fallback embedding model |
-| `dims` | `0` | Fallback dimensions (0 = model default) |
 
-**Environment variables** take precedence: `UTEKE_EMBED_FALLBACK_ENABLED`, `UTEKE_EMBED_FALLBACK_BASE_URL`, `UTEKE_EMBED_FALLBACK_API_KEY`, `UTEKE_EMBED_FALLBACK_MODEL`, `UTEKE_EMBED_FALLBACK_DIMS`.
+Fallback is **active** when all three of `api_key`, `base_url`, and `model` are non-empty. No `enabled` flag needed — empty fields mean inactive.
+
+**Environment variables** take precedence: `UTEKE_EMBED_FALLBACK_API_KEY`, `UTEKE_EMBED_FALLBACK_BASE_URL`, `UTEKE_EMBED_FALLBACK_ENDPOINT_PATH`, `UTEKE_EMBED_FALLBACK_MODEL`.
 
 **Dimension validation** — if the fallback produces different dimensions than the primary, uteke rejects it at startup with a clear error. Both backends must produce vectors of the same dimensionality.
 
@@ -231,12 +231,11 @@ Opt-in per query via `--salience` / `--recency` CLI flags. The `dream` cycle's `
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `salience_weight` | 0.0 | Salience boost weight (0 = off, 0.15 recommended) |
-| `recency_weight` | 0.0 | Recency boost weight (0 = off, 0.15 recommended) |
+| `salience_weight` | 0.15 | Salience boost weight (0 = disable) |
+| `recency_weight` | 0.15 | Recency boost weight (0 = disable) |
+| `jaccard_weight` | 0.0 | Jaccard token-overlap reranking weight (0 = disable) |
 
-Default is off (0.0) to preserve backward-compatible ranking. Enable via CLI flags or API.
-
-Use `--strict` flag, `--min <score>`, or `--strategy <name>` to override per-query.
+Enabled by default (0.15). Override per-query with `--strict`, `--min <score>`, or `--strategy <name>`.
 
 ## Environment Variables
 

@@ -266,12 +266,6 @@ curl http://127.0.0.1:8767/stats?namespace=cto
 
 **All endpoints that accept parameters use POST with JSON body**, not GET with query strings.
 
-### Known Issues
-
-- **#784** — `room/stats` counts deprecated memories (inflated counts vs `room/summary`)
-- **#785** — `room/recall` requires `query` parameter (cannot list all memories in a room)
-- **#786** — Full HTTP API reference documentation is pending
-
 ## Memory-Provider for Other Agents
 
 The `--memory-provider` pattern also works for non-Hermes agents (#575, #577):
