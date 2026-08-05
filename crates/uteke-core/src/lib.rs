@@ -1693,14 +1693,8 @@ impl Uteke {
         // entity_filter and category_filter are not supported by recall_hybrid;
         // they are applied as post-filters by the CLI caller (recall.rs).
         let _ = (entity_filter, category_filter); // acknowledged, applied by caller
-        let results = self.recall_hybrid(
-            query,
-            limit,
-            tags_filter,
-            namespace,
-            strategy,
-            min_score,
-        )?;
+        let results =
+            self.recall_hybrid(query, limit, tags_filter, namespace, strategy, min_score)?;
         Ok(results
             .into_iter()
             .map(|sr| {
@@ -2405,7 +2399,18 @@ mod tests {
 
         let recall = |q: &str| {
             uteke
-                .recall_unified(q, 2, None, None, 0.0, SearchType::All, None, None, false, RecallStrategy::Vector)
+                .recall_unified(
+                    q,
+                    2,
+                    None,
+                    None,
+                    0.0,
+                    SearchType::All,
+                    None,
+                    None,
+                    false,
+                    RecallStrategy::Vector,
+                )
                 .unwrap()
         };
         let matching = recall("rust memory safety");
