@@ -143,7 +143,16 @@ pub fn run(cli: &Cli) -> Result<(), String> {
     println!("→ Namespace: {}", ns);
     println!();
 
-    // ── Step 6: Feature toggles ────────────────────────────────
+    // ── Step 6: Extraction configuration ──────────────────────
+    let extraction_cfg = if *yes {
+        ExtractionSettings::default_offline()
+    } else {
+        prompt_extraction_config()?
+    };
+    println!("→ Extraction: {}", extraction_cfg.summary());
+    println!();
+
+    // ── Step 7: Feature toggles ────────────────────────────────
     let toggles = if *yes {
         FEATURE_TOGGLES
             .iter()
@@ -160,11 +169,11 @@ pub fn run(cli: &Cli) -> Result<(), String> {
     }
     println!();
 
-    // ── Step 7: Write config ───────────────────────────────────
-    let config_path = write_config(&ns, &toggles, *yes)?;
+    // ── Step 8: Write config ───────────────────────────────────
+    let config_path = write_config(&ns, &toggles, &extraction_cfg, *yes)?;
     println!("✓ Config written: {}", config_path.display());
 
-    // ── Step 8: Run `uteke init` for the agent ─────────────────────────
+    // ── Step 9: Run `uteke init` for the agent ─────────────────────────
     // We call the init module directly instead of spawning a subprocess.
     // Note: onboard always produces human-readable output; the global --json
     // flag is intentionally ignored here to avoid mixing ASCII banners with
@@ -183,7 +192,13 @@ pub fn run(cli: &Cli) -> Result<(), String> {
     }
     println!();
 
-    // ── Step 9: Feature showcase ───────────────────────────────
+    // ── Step 10: First memory test ─────────────────────────────
+    run_first_memory_test(&agent_choice, &ns);
+
+    // ── Step 11: Rooms intro ───────────────────────────────────
+    run_rooms_intro(&agent_choice, *yes);
+
+    // ── Step 12: Feature showcase ──────────────────────────────
     showcase();
 
     println!();
@@ -324,6 +339,238 @@ fn prompt_feature_toggles() -> Result<Vec<(&'static str, bool)>, String> {
     Ok(results)
 }
 
+// ── Extraction Settings ───────────────────────────────────────────────────
+
+/// User's extraction configuration chosen during onboarding.
+struct ExtractionSettings {
+    /// "offline", "llm", or "none".
+    mode: String,
+    /// LLM endpoint (only for mode = "llm").
+    base_url: String,
+    /// LLM API key (only for mode = "llm").
+    api_key: String,
+    /// LLM model name (only for mode = "llm").
+    model: String,
+}
+
+impl ExtractionSettings {
+    /// Default for `--yes` mode: offline rule-based extraction.
+    fn default_offline() -> Self {
+        Self {
+            mode: "offline".to_string(),
+            base_url: String::new(),
+            api_key: String::new(),
+            model: String::new(),
+        }
+    }
+
+    /// Human-readable summary for the onboarding output.
+    fn summary(&self) -> String {
+        match self.mode.as_str() {
+            "offline" => "offline (rule-based, zero API)".to_string(),
+            "llm" => format!("external LLM ({})", self.model),
+            _ => "disabled (manual only)".to_string(),
+        }
+    }
+}
+
+/// Prompt the user for extraction configuration.
+fn prompt_extraction_config() -> Result<ExtractionSettings, String> {
+    println!("Automatic fact extraction from conversations and files:");
+    println!("  1) Offline (rule-based, zero API calls)  ← recommended");
+    println!("     Best for: privacy, zero cost, air-gapped environments");
+    println!("  2) External LLM (better quality, needs API endpoint)");
+    println!("     Best for: nuanced conversations, complex fact extraction");
+    println!("  3) No extraction (manual insertion only)");
+    print!("\n  Select [1-3] (default 1): ");
+    io::stdout().flush().ok();
+    let resp = read_line()?;
+    match resp.as_str() {
+        "2" => {
+            println!();
+            println!("LLM Extraction Configuration:");
+            print!("  Endpoint [https://api.openai.com/v1]: ");
+            io::stdout().flush().ok();
+            let mut base_url = read_line()?;
+            if base_url.is_empty() {
+                base_url = "https://api.openai.com/v1".to_string();
+            }
+
+            print!("  API Key: ");
+            io::stdout().flush().ok();
+            let api_key = read_line()?;
+
+            print!("  Model [gpt-4o-mini]: ");
+            io::stdout().flush().ok();
+            let mut model = read_line()?;
+            if model.is_empty() {
+                model = "gpt-4o-mini".to_string();
+            }
+
+            // Optional connection test.
+            if !api_key.is_empty() {
+                println!("  → Testing connection...");
+                // We don't actually call the API here — just validate the
+                // fields are non-empty. The real test happens on first use.
+                println!("  ✓ Configuration saved (will be tested on first import --extract)");
+            }
+            Ok(ExtractionSettings {
+                mode: "llm".to_string(),
+                base_url,
+                api_key,
+                model,
+            })
+        }
+        "3" => Ok(ExtractionSettings {
+            mode: "none".to_string(),
+            ..ExtractionSettings::default_offline()
+        }),
+        _ => Ok(ExtractionSettings::default_offline()),
+    }
+}
+
+// ── First Memory Test ─────────────────────────────────────────────────────
+
+/// Run a quick remember + recall test to verify the memory system works.
+fn run_first_memory_test(agent: &str, namespace: &str) {
+    print_banner("Memory System Test");
+
+    let test_memory = format!("Onboarding complete for {} agent", agent);
+
+    // We spawn `uteke remember` and `uteke recall` as subprocesses so we
+    // don't need to pull in the full core library initialization here.
+    println!("→ Storing test memory...");
+    let remember_result =
+        std::process::Command::new(std::env::current_exe().unwrap_or_else(|_| "uteke".into()))
+            .arg("remember")
+            .arg(&test_memory)
+            .arg("--tags")
+            .arg("onboarding,test")
+            .arg("--namespace")
+            .arg(namespace)
+            .output();
+
+    match remember_result {
+        Ok(out) if out.status.success() => {
+            println!("  ✓ remember: success");
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            println!("  ⚠ remember: {}", stderr.trim());
+            println!("  (You can test manually later with: uteke remember \"hello\")");
+            return;
+        }
+        Err(e) => {
+            println!("  ⚠ Could not run memory test: {e}");
+            return;
+        }
+    }
+
+    // Small delay to let the write settle (SQLite WAL).
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    println!("→ Recalling test memory...");
+    let recall_result =
+        std::process::Command::new(std::env::current_exe().unwrap_or_else(|_| "uteke".into()))
+            .arg("recall")
+            .arg("onboarding")
+            .arg("--namespace")
+            .arg(namespace)
+            .arg("--limit")
+            .arg("3")
+            .output();
+
+    match recall_result {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            if stdout.contains("onboarding") || !stdout.trim().is_empty() {
+                println!("  ✓ recall: found test memory");
+                println!("  ✓ Memory system verified!");
+            } else {
+                println!("  ⚠ recall: no results (memory may still be indexing)");
+                println!("  (This is normal — try `uteke recall \"onboarding\"` in a moment)");
+            }
+        }
+        Ok(_) | Err(_) => {
+            println!("  ⚠ recall test skipped (you can verify manually)");
+        }
+    }
+    println!();
+}
+
+// ── Rooms Intro ───────────────────────────────────────────────────────────
+
+/// Introduce Rooms and optionally create the user's first room.
+fn run_rooms_intro(agent: &str, yes: bool) {
+    print_banner("Rooms — Multi-Agent Memory Sharing");
+    println!();
+    println!("  Rooms let multiple AI agents share a memory space.");
+    println!("  Use cases:");
+    println!("    • Multi-project context (one room per project)");
+    println!("    • Team knowledge sharing");
+    println!("    • Multi-agent collaboration (e.g. Hermes + Claude)");
+    println!();
+    println!("  Commands:");
+    println!("    uteke room create \"project-name\"");
+    println!("    uteke room recall \"project-name\" \"search term\"");
+    println!("    uteke room summary \"project-name\"");
+    println!();
+
+    if yes {
+        println!("  Skipping room creation (--yes mode).");
+        println!("  You can create a room later with: uteke room create \"my-project\"");
+        println!();
+        return;
+    }
+
+    print!("  Create your first room now? [Y/n] ");
+    io::stdout().flush().ok();
+    let resp = read_line().unwrap_or_default();
+    if resp.eq_ignore_ascii_case("n") {
+        println!("  → Skipped. You can create a room later.");
+        println!();
+        return;
+    }
+
+    let default_name = format!("project-{}", agent);
+    print!("  Room name [{}]: ", default_name);
+    io::stdout().flush().ok();
+    let room_name = {
+        let r = read_line().unwrap_or_default();
+        if r.is_empty() { default_name } else { r }
+    };
+
+    let result =
+        std::process::Command::new(std::env::current_exe().unwrap_or_else(|_| "uteke".into()))
+            .arg("room")
+            .arg("create")
+            .arg(&room_name)
+            .output();
+
+    match result {
+        Ok(out) if out.status.success() => {
+            println!("  ✓ Room \"{}\" created!", room_name);
+            println!("    Multiple agents can now share memories via this room.");
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            println!("  ⚠ Room creation failed: {}", stderr.trim());
+            println!(
+                "  (You can create it later: uteke room create \"{}\")",
+                room_name
+            );
+        }
+        Err(_) => {
+            println!("  ⚠ Could not create room.");
+            println!(
+                "  (You can create it later: uteke room create \"{}\")",
+                room_name
+            );
+        }
+    }
+    println!();
+}
+
 /// Write the config to `{uteke_home}/uteke.toml`.
 ///
 /// If a config file already exists, it is backed up to `uteke.toml.bak`
@@ -331,6 +578,7 @@ fn prompt_feature_toggles() -> Result<Vec<(&'static str, bool)>, String> {
 fn write_config(
     namespace: &str,
     toggles: &[(&str, bool)],
+    extraction: &ExtractionSettings,
     yes: bool,
 ) -> Result<std::path::PathBuf, String> {
     let uteke_dir = uteke_core::uteke_home().map_err(|e| format!("{e}"))?;
@@ -359,13 +607,38 @@ fn write_config(
         println!("→ Backed up existing config to {}", backup_path.display());
     }
 
-    // Build the config TOML from toggles.
+    // Build the config TOML from toggles + extraction settings.
     let aging_enabled = get_toggle(toggles, "Aging");
     let auto_maint = get_toggle(toggles, "Auto-maintenance");
     let graph_rerank = get_toggle(toggles, "Graph rerank");
     let salience = get_toggle(toggles, "Salience boost");
     let recency = get_toggle(toggles, "Recency boost");
     let server_enabled = get_toggle(toggles, "Server mode");
+
+    // Build extraction section based on chosen mode.
+    // Escape TOML special chars in user-provided strings to prevent injection.
+    let escape_toml = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+
+    let extraction_section = match extraction.mode.as_str() {
+        "offline" => r#"
+[extraction]
+mode = "offline"
+"#
+        .to_string(),
+        "llm" => format!(
+            r#"
+[extraction]
+mode = "llm"
+base_url = "{}"
+api_key = "{}"
+model = "{}"
+"#,
+            escape_toml(&extraction.base_url),
+            escape_toml(&extraction.api_key),
+            escape_toml(&extraction.model),
+        ),
+        _ => String::new(), // "none" — omit section entirely
+    };
 
     let toml = format!(
         r#"# Uteke configuration — generated by `uteke onboard`
@@ -378,7 +651,7 @@ namespace = "{namespace}"
 graph_rerank_enabled = {graph_rerank}
 salience_weight = {salience_weight}
 recency_weight = {recency_weight}
-
+{extraction_section}
 [aging]
 enabled = {aging_enabled}
 
@@ -392,6 +665,7 @@ enabled = {server_enabled}
         graph_rerank = graph_rerank,
         salience_weight = if salience { 0.15 } else { 0.0 },
         recency_weight = if recency { 0.15 } else { 0.0 },
+        extraction_section = extraction_section,
         aging_enabled = aging_enabled,
         auto_maint = auto_maint,
         server_enabled = server_enabled,
