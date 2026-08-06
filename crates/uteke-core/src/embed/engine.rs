@@ -55,7 +55,6 @@ pub struct OnnxEmbedder {
 struct LazyInner {
     session: Option<ort::session::Session>,
     tokenizer: Option<tokenizers::Tokenizer>,
-    init_error: Option<String>,
 }
 
 impl OnnxEmbedder {
@@ -69,7 +68,6 @@ impl OnnxEmbedder {
             inner: Mutex::new(LazyInner {
                 session: None,
                 tokenizer: None,
-                init_error: None,
             }),
         })
     }
@@ -83,27 +81,19 @@ impl OnnxEmbedder {
             .lock()
             .map_err(|_| Error::lock("ONNX embedder inner during lazy load"))?;
 
-        // Already initialized (or failed permanently)
+        // Already initialized successfully
         if inner.session.is_some() {
             return Ok(());
         }
-        if let Some(ref err) = inner.init_error {
-            return Err(Error::embed_msg(err.clone()));
-        }
 
         // ── Load model ──
-        match Self::load_model() {
-            Ok((session, tokenizer)) => {
-                inner.session = Some(session);
-                inner.tokenizer = Some(tokenizer);
-                Ok(())
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                inner.init_error = Some(msg.clone());
-                Err(e)
-            }
-        }
+        // Note: we do NOT cache failures. Transient errors (network timeout,
+        // file lock, etc.) should be retried on the next embed() call.
+        // The ORT env init (OnceLock) is idempotent, so re-calling is safe.
+        let (session, tokenizer) = Self::load_model()?;
+        inner.session = Some(session);
+        inner.tokenizer = Some(tokenizer);
+        Ok(())
     }
 
     /// Download model files (if needed) and load ONNX session + tokenizer.
