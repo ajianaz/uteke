@@ -47,6 +47,7 @@ pub(crate) fn run(
             older_than_days,
             max_access_count,
             yes,
+            dry_run,
         } => {
             // Preview first
             let preview = uteke
@@ -58,6 +59,23 @@ pub(crate) fn run(
                     output::print_json(&uteke_core::CleanupResult { deleted: 0 });
                 } else {
                     println!("No aged memories to clean up.");
+                }
+                return Ok(());
+            }
+
+            // --dry-run: show preview without deleting
+            if *dry_run {
+                if cli.json {
+                    output::print_json(&uteke_core::CleanupResult {
+                        deleted: preview.len(),
+                    });
+                } else {
+                    output::print_aging_preview_human(&preview);
+                    println!();
+                    println!(
+                        "\u{1f441} Dry run: {} memory(ies) would be deleted. No changes made.",
+                        preview.len()
+                    );
                 }
                 return Ok(());
             }
