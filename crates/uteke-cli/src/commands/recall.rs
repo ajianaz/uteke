@@ -86,8 +86,9 @@ pub(crate) fn run_recall(
     let resolved_strategy = match RecallStrategy::from_str_opt(strategy_name) {
         Some(s) => s,
         None => {
-            tracing::warn!("Unknown recall strategy '{strategy_name}', falling back to vector");
-            RecallStrategy::Vector
+            return Err(format!(
+                "Invalid strategy '{strategy_name}'. Valid options: vector, fts5, hybrid, graph."
+            ));
         }
     };
 
