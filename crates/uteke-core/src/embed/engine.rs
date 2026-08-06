@@ -41,14 +41,74 @@ const MODEL_CHECKSUMS: &[(&str, &str)] = &[
 ///
 /// Implements the [`Embedder`] trait. The tokenizer is wrapped in a `Mutex`
 /// so `embed()` can take `&self` (required by the trait) instead of `&mut self`.
+///
+/// **Lazy loading** (#896): The ONNX session and tokenizer are NOT loaded in
+/// `new()`. They are loaded on the first `embed()` call. This allows
+/// `CachingEmbedder` to skip the ~2s model load entirely on cache hits.
 pub struct OnnxEmbedder {
-    session: Mutex<ort::session::Session>,
-    tokenizer: Mutex<tokenizers::Tokenizer>,
+    /// Lazily-initialized ONNX session + tokenizer.
+    /// None until the first `embed()` call.
+    inner: Mutex<LazyInner>,
+}
+
+/// Inner state for lazy initialization.
+struct LazyInner {
+    session: Option<ort::session::Session>,
+    tokenizer: Option<tokenizers::Tokenizer>,
+    init_error: Option<String>,
 }
 
 impl OnnxEmbedder {
-    /// Create a new embedding engine. Downloads model if not cached.
+    /// Create a new embedding engine.
+    ///
+    /// Does NOT load the ONNX model — model loading is deferred to the first
+    /// `embed()` call (`lazy_load()`). This allows `CachingEmbedder` to skip
+    /// the model load entirely when serving from cache (#896).
     pub fn new() -> Result<Self, Error> {
+        Ok(Self {
+            inner: Mutex::new(LazyInner {
+                session: None,
+                tokenizer: None,
+                init_error: None,
+            }),
+        })
+    }
+
+    /// Lazily load the ONNX model on first use.
+    /// Returns a guard that holds the loaded session + tokenizer.
+    /// Subsequent calls return the cached session.
+    fn lazy_load(&self) -> Result<(), Error> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| Error::lock("ONNX embedder inner during lazy load"))?;
+
+        // Already initialized (or failed permanently)
+        if inner.session.is_some() {
+            return Ok(());
+        }
+        if let Some(ref err) = inner.init_error {
+            return Err(Error::embed_msg(err.clone()));
+        }
+
+        // ── Load model ──
+        match Self::load_model() {
+            Ok((session, tokenizer)) => {
+                inner.session = Some(session);
+                inner.tokenizer = Some(tokenizer);
+                Ok(())
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                inner.init_error = Some(msg.clone());
+                Err(e)
+            }
+        }
+    }
+
+    /// Download model files (if needed) and load ONNX session + tokenizer.
+    /// Called once on first `embed()` invocation.
+    fn load_model() -> Result<(ort::session::Session, tokenizers::Tokenizer), Error> {
         // ── Pre-flight: Initialize ORT environment with the correct library ──
         // This detects AVX2 support and loads the appropriate ONNX Runtime shared
         // library (standard AVX2 or legacy SSE4.2 sidecar). Must run before any
@@ -105,8 +165,12 @@ impl OnnxEmbedder {
             verify_checksum(&tokenizer_path, "tokenizer.json")?;
         }
 
-        // Load ONNX session
+        // Load ONNX session — use all cores for intra-op parallelism
+        let num_threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
         let session = ort::session::Session::builder()
+            .and_then(|b| Ok(b.with_intra_threads(num_threads)?))
             .and_then(|mut b| b.commit_from_file(&model_path))
             .map_err(|e| Error::embed("load ONNX model", e))?;
 
@@ -114,25 +178,32 @@ impl OnnxEmbedder {
         let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| Error::embed("load tokenizer", e))?;
 
-        Ok(Self {
-            session: Mutex::new(session),
-            tokenizer: Mutex::new(tokenizer),
-        })
+        Ok((session, tokenizer))
     }
 
     /// Embed a text string, returning a 768-dimensional f32 vector.
     ///
     /// Takes `&self` — the tokenizer mutex is locked internally.
+    /// Lazily loads the ONNX model on first call (#896).
     pub fn embed(&self, text: &str) -> Result<Vec<f32>, Error> {
-        // Tokenize (lock mutex)
-        let tokenizer = self
-            .tokenizer
+        // Lazy-load model on first embed() call
+        self.lazy_load()?;
+
+        let mut inner = self
+            .inner
             .lock()
-            .map_err(|_| Error::lock("tokenizer lock during embedding"))?;
-        let encoding = tokenizer
-            .encode(text, true)
-            .map_err(|e| Error::embed("tokenize text", e))?;
-        drop(tokenizer); // release lock before inference
+            .map_err(|_| Error::lock("ONNX embedder inner during embed"))?;
+
+        // Phase 1: Tokenize (immutable borrow of inner)
+        let encoding = {
+            let tokenizer = inner
+                .tokenizer
+                .as_ref()
+                .ok_or_else(|| Error::embed_msg("tokenizer not loaded after lazy_load"))?;
+            tokenizer
+                .encode(text, true)
+                .map_err(|e| Error::embed("tokenize text", e))?
+        };
 
         let input_ids = encoding.get_ids();
         let attention_mask = encoding.get_attention_mask();
@@ -160,13 +231,14 @@ impl OnnxEmbedder {
         ))
         .map_err(|e| Error::embed("create attention_mask tensor", e))?;
 
-        // Run ONNX inference — EmbeddingGemma has 2 outputs:
+        // Phase 2: Run ONNX inference (mutable borrow of inner)
+        // EmbeddingGemma has 2 outputs:
         //   output[0] = last_hidden_state (1, seq_len, 768)
         //   output[1] = sentence_embedding (1, 768) — already mean-pooled
-        let mut session = self
+        let session = inner
             .session
-            .lock()
-            .map_err(|_| Error::lock("session lock during embedding"))?;
+            .as_mut()
+            .ok_or_else(|| Error::embed_msg("ONNX session not loaded after lazy_load"))?;
         let outputs = session
             .run(ort::inputs![input_ids_tensor, attention_mask_tensor])
             .map_err(|e| Error::embed("ONNX inference", e))?;
