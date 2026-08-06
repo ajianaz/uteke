@@ -37,6 +37,7 @@ title: Architecture
 | `uteke-cli` | CLI binary — clap commands, JSON output, server proxy |
 | `uteke-server` | HTTP server — persistent daemon for fast agent access |
 | `uteke-mcp` | MCP JSON-RPC server — stdio + Streamable HTTP transport (#381) |
+| `docgen` | Build tooling — auto-generates `api-reference.md` from route registry (`publish = false`) |
 
 ## Components
 
