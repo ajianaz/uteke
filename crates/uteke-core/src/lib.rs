@@ -1639,6 +1639,7 @@ impl Uteke {
         entity_filter: Option<&str>,
         category_filter: Option<&str>,
         enrich: bool,
+        strategy: RecallStrategy,
     ) -> Result<Vec<UnifiedSearchResult>, Error> {
         let limit = limit.min(50);
         let ns = namespace.unwrap_or(DEFAULT_NAMESPACE);
@@ -1652,9 +1653,12 @@ impl Uteke {
                 min_score,
                 entity_filter,
                 category_filter,
+                strategy,
             ),
             SearchType::Document => self.recall_unified_documents(query, limit, ns, min_score),
-            SearchType::All => self.recall_unified_all(query, limit, tags_filter, ns, min_score),
+            SearchType::All => {
+                self.recall_unified_all(query, limit, tags_filter, ns, min_score, strategy)
+            }
         }?;
 
         if enrich {
@@ -1682,18 +1686,57 @@ impl Uteke {
         min_score: f32,
         entity_filter: Option<&str>,
         category_filter: Option<&str>,
+        strategy: RecallStrategy,
     ) -> Result<Vec<UnifiedSearchResult>, Error> {
-        let results = self.recall(
+        // Use recall_hybrid with the caller's strategy so that --strategy
+        // fts5/hybrid/graph is honoured on the unified path (#900).
+        // entity_filter and category_filter are not natively supported by
+        // recall_hybrid, so we apply them as post-filters here (#900 cora review).
+        //
+        // Over-fetch when post-filtering to compensate for rows that will be
+        // discarded by entity/category filters (CodeCora alert). A 3× multiplier
+        // is a pragmatic heuristic — it covers most selective filters without
+        // excessive DB load for small result sets.
+        let fetch_limit = if entity_filter.is_some() || category_filter.is_some() {
+            (limit.saturating_mul(3)).max(limit + 10)
+        } else {
+            limit
+        };
+        let results = self.recall_hybrid(
             query,
-            limit,
+            fetch_limit,
             tags_filter,
             namespace,
+            strategy,
             min_score,
-            entity_filter,
-            category_filter,
         )?;
-        Ok(results
+        let results = results
             .into_iter()
+            .filter(|sr| {
+                if let Some(ent) = entity_filter {
+                    let matches = sr
+                        .memory
+                        .metadata
+                        .get("entity")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|e| e == ent);
+                    if !matches {
+                        return false;
+                    }
+                }
+                if let Some(cat) = category_filter {
+                    let matches = sr
+                        .memory
+                        .metadata
+                        .get("category")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|c| c == cat);
+                    if !matches {
+                        return false;
+                    }
+                }
+                true
+            })
             .map(|sr| {
                 let m = &sr.memory;
                 UnifiedSearchResult {
@@ -1721,7 +1764,9 @@ impl Uteke {
                     linked_memory_ids: None,
                 }
             })
-            .collect())
+            .take(limit)
+            .collect();
+        Ok(results)
     }
 
     /// Unified search — documents only.
@@ -1786,12 +1831,13 @@ impl Uteke {
         tags_filter: Option<&[&str]>,
         ns: &str,
         min_score: f32,
+        strategy: RecallStrategy,
     ) -> Result<Vec<UnifiedSearchResult>, Error> {
         const RRF_K: u32 = 60;
 
-        // 1. Memory recall (vector + FTS5 hybrid)
+        // 1. Memory recall — use recall_hybrid with caller's strategy (#900)
         let mem_results =
-            match self.recall(query, limit * 2, tags_filter, Some(ns), 0.0, None, None) {
+            match self.recall_hybrid(query, limit * 2, tags_filter, Some(ns), strategy, 0.0) {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!(
@@ -2395,7 +2441,18 @@ mod tests {
 
         let recall = |q: &str| {
             uteke
-                .recall_unified(q, 2, None, None, 0.0, SearchType::All, None, None, false)
+                .recall_unified(
+                    q,
+                    2,
+                    None,
+                    None,
+                    0.0,
+                    SearchType::All,
+                    None,
+                    None,
+                    false,
+                    RecallStrategy::Vector,
+                )
                 .unwrap()
         };
         let matching = recall("rust memory safety");
@@ -2580,6 +2637,7 @@ mod tests {
                 None,
                 None,
                 true, // enrich=true
+                RecallStrategy::Vector,
             )
             .unwrap();
 
@@ -2623,6 +2681,7 @@ mod tests {
                 None,
                 None,
                 true, // enrich=true
+                RecallStrategy::Vector,
             )
             .unwrap();
 
@@ -2661,6 +2720,7 @@ mod tests {
                 None,
                 None,
                 false, // enrich=false
+                RecallStrategy::Vector,
             )
             .unwrap();
 
@@ -2732,6 +2792,7 @@ mod tests {
                 None,
                 None,
                 true, // enrich=true
+                RecallStrategy::Vector,
             )
             .unwrap();
 
@@ -2813,6 +2874,7 @@ mod tests {
                 None,
                 None,
                 true,
+                RecallStrategy::Vector,
             )
             .unwrap();
 
@@ -2823,6 +2885,69 @@ mod tests {
             let _ = &r.linked_doc_slugs;
             let _ = &r.linked_memory_ids;
         }
+    }
+
+    /// #900: Strategy flag must be honoured by recall_unified.
+    /// Previously recall_unified_memories called self.recall() (vector-only)
+    /// instead of self.recall_hybrid(), silently ignoring the strategy.
+    #[test]
+    #[serial]
+    fn recall_unified_honours_fts5_strategy() {
+        let dir = tempfile::tempdir().unwrap();
+        let uteke = Uteke::open(dir.path().join("test.uteke")).unwrap();
+
+        // Insert a memory with a distinctive keyword for FTS5,
+        // but a zero-vector embedding (no possible vector match).
+        let now = chrono::Utc::now();
+        let m1 = Memory {
+            id: "fts5-target".to_string(),
+            content: "The quick brown fox jumps over the lazy dog".to_string(),
+            embedding: vec![0.0; 768],
+            tags: vec![],
+            metadata: serde_json::json!({}),
+            created_at: now,
+            updated_at: now,
+            namespace: DEFAULT_NAMESPACE.to_string(),
+            access_count: 0,
+            last_accessed: None,
+            deprecated: false,
+            valid_from: None,
+            valid_until: None,
+            memory_type: "fact".to_string(),
+            importance: 0.5,
+            pinned: false,
+            content_type: "text".to_string(),
+            slug: None,
+            source: None,
+            source_type: "user".to_string(),
+        };
+        uteke.store.insert(&m1).unwrap();
+
+        // FTS5 strategy should find it via keyword match.
+        let results = uteke
+            .recall_unified(
+                "quick brown fox",
+                5,
+                None,
+                None,
+                0.0,
+                SearchType::All,
+                None,
+                None,
+                false,
+                RecallStrategy::Fts5,
+            )
+            .unwrap();
+
+        assert!(
+            !results.is_empty(),
+            "FTS5 strategy must return results for keyword match"
+        );
+        assert_eq!(
+            results[0].memory_id.as_deref(),
+            Some("fts5-target"),
+            "FTS5 should find the keyword-matched memory"
+        );
     }
 }
 

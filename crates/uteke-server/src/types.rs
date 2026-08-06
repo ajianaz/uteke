@@ -238,6 +238,9 @@ pub struct RecallRequest {
     /// `linked_memory_ids` on document results.
     #[serde(default)]
     pub enrich: bool,
+    /// Recall strategy: "vector" (default), "fts5", "hybrid", or "graph" (#900).
+    #[serde(default)]
+    pub strategy: Option<String>,
 }
 
 #[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
