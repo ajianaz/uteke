@@ -193,7 +193,7 @@ pub(crate) fn run(
         DocCommands::Move { id_or_slug, parent } => {
             let new_parent = parent.as_deref();
             let affected = uteke
-                .doc_move(id_or_slug, new_parent)
+                .doc_move(id_or_slug, new_parent, None)
                 .map_err(|e| format!("Failed to move document: {e}"))?;
             if cli.json {
                 println!(

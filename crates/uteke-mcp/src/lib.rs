@@ -1184,7 +1184,7 @@ fn exec_doc_move(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
     let parent = args["parent"].as_str();
 
     let moved = uteke
-        .doc_move(id, parent)
+        .doc_move(id, parent, None)
         .map_err(|e| format!("Failed: {e}"))?;
 
     let msg = match parent {
