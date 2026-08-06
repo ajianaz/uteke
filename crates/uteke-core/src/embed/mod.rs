@@ -1,5 +1,6 @@
 //! Embedding engine components.
 
+pub mod cache;
 pub mod embed_trait;
 #[cfg(feature = "onnx")]
 pub mod engine;
@@ -9,6 +10,7 @@ pub mod openai;
 #[cfg(feature = "onnx")]
 pub mod ort_init;
 
+pub use cache::{CachingEmbedder, EmbeddingCache};
 pub use embed_trait::Embedder;
 #[cfg(feature = "onnx")]
 pub use engine::OnnxEmbedder;
