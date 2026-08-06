@@ -780,5 +780,8 @@ pub enum AgingCommands {
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
+        /// Preview what would be deleted without actually deleting
+        #[arg(long)]
+        dry_run: bool,
     },
 }
