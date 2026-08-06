@@ -259,7 +259,7 @@ fn get_target(os: &str, arch: &str) -> Result<String, String> {
     }
 }
 
-fn get_latest_version() -> Result<String, String> {
+pub(crate) fn get_latest_version() -> Result<String, String> {
     let client = reqwest::blocking::Client::new();
 
     // Primary: parse 302 redirect (no API call, no rate limit)

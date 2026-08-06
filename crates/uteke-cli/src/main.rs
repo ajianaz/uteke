@@ -25,6 +25,20 @@ fn main() {
     // Initialize logging (console + file). Guard must stay alive.
     let _log_guard = logging::init(cli.verbose);
 
+    // Background update notification (non-blocking, cached 24h).
+    // Skipped for early-exit commands (completions, init, onboard, bench).
+    let early_exit = matches!(
+        &cli.command,
+        Commands::Completions { .. }
+            | Commands::Init { .. }
+            | Commands::Onboard { .. }
+            | Commands::Bench { .. }
+            | Commands::Upgrade { .. }
+    );
+    if !early_exit {
+        commands::update_check::spawn();
+    }
+
     // Handle completions and init early — don't need store
     match &cli.command {
         Commands::Completions { shell } => {
