@@ -197,8 +197,10 @@ impl OnnxEmbedder {
             .map(|n| n.get())
             .unwrap_or(4);
         let session = ort::session::Session::builder()
-            .and_then(|b| Ok(b.with_intra_threads(num_threads)?))
-            .and_then(|mut b| b.commit_from_file(&model_path))
+            .map_err(|e| Error::embed("ONNX session builder", e))?
+            .with_intra_threads(num_threads)
+            .map_err(|e| Error::embed("ONNX intra_threads config", e))?
+            .commit_from_file(&model_path)
             .map_err(|e| Error::embed("load ONNX model", e))?;
 
         // Load tokenizer
