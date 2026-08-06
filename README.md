@@ -106,25 +106,27 @@ Every AI tool forgets. Context windows fill up, sessions end, and your AI starts
 
 | | **Uteke** | **Mnemosyne** | **Mem0** | **AgentMemory** | **Letta** | **Zep** | **Supermemory** | **Engram** |
 |---|---|---|---|---|---|---|---|---|
-| **Language** | Rust (single binary) | Python (pip) | Python | TypeScript | Python | Python | TypeScript | Go (single binary) |
-| **Setup** | One binary (`curl \| sh`) | pip install + venv | pip + Docker + Qdrant | npm + Docker (iii-engine) | pip + Docker + Postgres | pip + Docker + Neo4j | Cloudflare Workers + Postgres | One binary |
+| **Language** | Rust (single binary) | Python (pip) | Python | TypeScript | TypeScript | Python | TypeScript | Go (single binary) |
+| **Setup** | One binary (`curl \| sh`) | pip install + venv | pip + Docker + Qdrant | npm + iii-engine | npm (Node.js) | pip + Docker + Neo4j | Cloudflare Workers + Postgres | One binary |
 | **API keys** | ❌ None | ⚠️ For remote embeddings | ✅ OpenAI/LLM | ✅ LLM key | ✅ LLM key | ✅ LLM key | ⚠️ Cloudflare account | ❌ None |
 | **Works offline** | ✅ Fully | ⚠️ Optional | ❌ Cloud embedding | ❌ Needs LLM | ❌ Needs LLM | ❌ Needs LLM + vector DB | ⚠️ Self-hostable but needs infra | ✅ Fully |
 | **Search** | **Hybrid** (Vector + FTS5 + RRF) | sqlite-vec + FTS5 | Vector + Graph | Vector + Graph | Vector | Temporal Graph | Vector + rerank | **FTS5 only** |
 | **Recall speed** | ~45ms | ~50ms+ | Network round-trip | Network round-trip | Network round-trip | Network round-trip | Network round-trip | ~Fast (local) |
-| **Multi-agent** | ✅ **Rooms** (shared memory, cross-agent recall, author attribution) | ⚠️ Shared API | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Time-travel** | ✅ Native point-in-time | ⚠️ Temporal triples | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **MCP server** | ✅ JSON-RPC + HTTP | ✅ stdio + SSE | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Your data** | ✅ Never leaves machine | ✅ Local-first | ⚠️ Sent to LLM cloud | ⚠️ Sent to LLM cloud | ⚠️ Sent to LLM cloud | ⚠️ Sent to LLM cloud | ⚠️ Cloudflare-hosted | ✅ Local |
-| **License** | Apache 2.0 | MIT | Apache 2.0 | Apache 2.0 | Apache 2.0 | Apache 2.0 | Apache 2.0 | Apache 2.0 |
+| **Multi-agent** | ✅ **Rooms** (shared memory, cross-agent recall, author attribution) | ✅ Multi-agent surface | ❌ | ✅ Shared server | ❌ | ❌ | ❌ | ⚠️ Shared via MCP |
+| **Time-travel** | ✅ Native point-in-time | ⚠️ Temporal triples | ❌ | ❌ | ❌ | ✅ Temporal graphs | ❌ | ❌ |
+| **MCP server** | ✅ JSON-RPC + HTTP | ✅ stdio + SSE | ❌ | ✅ 54 MCP tools | ❌ | ✅ Graphiti MCP | ✅ Open-source MCP | ✅ stdio MCP |
+| **Your data** | ✅ Never leaves machine | ✅ Local-first | ⚠️ Sent to LLM cloud | ✅ Local (iii-engine) | ⚠️ Sent to LLM cloud | ⚠️ Sent to LLM cloud | ⚠️ Cloudflare-hosted | ✅ Local |
+| **License** | Apache 2.0 | MIT | Apache 2.0 | Apache 2.0 | Apache 2.0 | Apache 2.0 | MIT | MIT |
 
-> **Uteke vs Mnemosyne:** Both are local-first with semantic + FTS5 search. Mnemosyne is the closest competitor (~1.5K stars, Python). Uteke wins on **single binary** (no Python runtime), **rooms**, **time-travel queries**, and **zero runtime dependencies**.
+> **Uteke vs Mnemosyne:** Both are local-first with semantic + FTS5 search. Mnemosyne is the closest competitor (~2.1K stars, Python). Uteke wins on **single binary** (no Python runtime), **native time-travel** (vs temporal triples), **rooms**, and **zero runtime dependencies**.
 
-> **Uteke vs Engram:** Both are single-binary, offline, no-API-key tools. But Engram is **FTS5-only** (keyword search). Uteke adds **vector semantic search + RRF fusion + rooms + time-travel + graph relationships + smart decay + document engine + batch import**. Same simplicity thesis, 10× the features.
+> **Uteke vs Engram:** Both are single-binary, offline, no-API-key tools — and both have MCP servers. But Engram is **FTS5-only** (keyword search). Uteke adds **vector semantic search + RRF fusion + rooms + time-travel + graph relationships + smart decay + document engine + batch import**. Same simplicity thesis, 10× the features.
 
 > **Uteke vs Supermemory:** Supermemory (28K stars) markets itself as "run fully locally" but requires Cloudflare Workers + Postgres. Uteke is a true single binary with zero infrastructure. No Workers, no Postgres, no Cloudflare account.
 
-> **Uteke vs AgentMemory/Mem0/Letta/Zep:** Those are powerful — but all require cloud LLM API keys and Docker infrastructure. Your data goes to OpenAI/Anthropic. Uteke runs fully offline with local ONNX embeddings. No Docker, no Python, no API keys.
+> **Uteke vs Mem0/Letta/Zep:** Those are powerful — but all require cloud LLM API keys and Docker infrastructure. Your data goes to OpenAI/Anthropic. Uteke runs fully offline with local ONNX embeddings. No Docker, no Python, no API keys.
+>
+> **Uteke vs AgentMemory:** AgentMemory (26K stars) is feature-rich with 54 MCP tools and multi-agent shared memory via local iii-engine. Uteke wins on **zero dependencies** (no npm, no iii-engine), **hybrid search** (AgentMemory lacks FTS5), and **time-travel queries**.
 
 <details>
 <summary>📊 Benchmark numbers</summary>
@@ -295,13 +297,13 @@ Mem0 and Letta are great — but they require cloud API keys (OpenAI/LLM) and ex
 <details>
 <summary><strong>How is Uteke different from AgentMemory?</strong></summary>
 
-AgentMemory (25K stars) is a TypeScript/Node.js platform with 53 MCP tools and 12 auto-hooks. It's feature-rich but requires Docker + the iii-engine + LLM API keys. Uteke is Rust, zero dependencies, and works fully offline. If you want maximum integrations and don't mind cloud dependency → AgentMemory. If you want privacy, speed, and zero setup → Uteke.
+AgentMemory (26K stars) is a TypeScript/Node.js platform with 54 MCP tools, 12 auto-hooks, and multi-agent shared memory via local iii-engine. It's feature-rich — but requires npm, the iii-engine runtime, and LLM API keys for embeddings. Uteke is Rust, zero dependencies, and works fully offline with local ONNX embeddings. If you want maximum integrations and multi-agent shared state → AgentMemory. If you want privacy, speed, zero setup, and hybrid search → Uteke.
 </details>
 
 <details>
 <summary><strong>How is Uteke different from Engram?</strong></summary>
 
-Engram (2.4K stars, Go) shares our philosophy: single binary, zero deps, MCP server, local-first. The key difference is **search**: Engram uses **FTS5 only** (keyword matching). Uteke uses **hybrid search** (HNSW vector similarity + FTS5 + Reciprocal Rank Fusion) — meaning you can search by *meaning*, not just exact words. Uteke also adds rooms, time-travel, graph relationships, smart decay, document engine, and batch import.
+Engram (5.8K stars, Go) shares our philosophy: single binary, zero deps, MCP server, local-first. The key difference is **search**: Engram uses **FTS5 only** (keyword matching). Uteke uses **hybrid search** (HNSW vector similarity + FTS5 + Reciprocal Rank Fusion) — meaning you can search by *meaning*, not just exact words. Uteke also adds rooms, time-travel, graph relationships, smart decay, document engine, and batch import.
 </details>
 
 <details>
