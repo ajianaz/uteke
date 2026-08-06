@@ -449,6 +449,7 @@ Detailed field definitions for each request type.
 |-------|------|----------|-------------|
 | `id` | any | No |  |
 | `new_parent` | any | No |  |
+| `new_sort_order` | any | No | Optional sort order for the moved document (#sort-order). |
 | `slug` | any | No |  |
 
 
