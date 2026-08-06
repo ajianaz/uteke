@@ -25,7 +25,22 @@ fn main() {
     // Initialize logging (console + file). Guard must stay alive.
     let _log_guard = logging::init(cli.verbose);
 
-    // Handle completions and init early — don't need store
+    // Background update notification (non-blocking, cached 24h).
+    // Skipped for early-exit commands (completions, init, onboard, bench).
+    let early_exit = matches!(
+        &cli.command,
+        Commands::Completions { .. }
+            | Commands::Init { .. }
+            | Commands::Onboard { .. }
+            | Commands::Bench { .. }
+            | Commands::Upgrade { .. }
+    );
+    let update_handle = if !early_exit {
+        commands::update_check::spawn()
+    } else {
+        None
+    };
+
     match &cli.command {
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
@@ -83,7 +98,12 @@ fn main() {
     if server_available {
         tracing::info!("Server detected at {server_url}, routing via HTTP");
         match commands::run_via_server(&cli, &server_url) {
-            Ok(()) => return,
+            Ok(()) => {
+                if let Some(handle) = update_handle {
+                    let _ = handle.join();
+                }
+                return;
+            }
             Err(e) if e == "unsupported" => {
                 tracing::info!("Command not supported via server, using local store");
             }
@@ -173,6 +193,11 @@ fn main() {
     .expect("Failed to set SIGINT handler");
 
     let result = commands::run_command(&cli, &mut uteke, &config);
+
+    // Wait for update check thread to finish before shutdown.
+    if let Some(handle) = update_handle {
+        let _ = handle.join();
+    }
 
     if let Err(e) = uteke.shutdown() {
         tracing::warn!("Shutdown flush failed: {e}");

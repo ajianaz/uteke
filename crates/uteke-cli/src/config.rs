@@ -348,7 +348,7 @@ impl Default for DreamConfig {
 }
 
 /// Full uteke configuration, loaded from `uteke.toml`.
-#[derive(serde::Deserialize, Default, Clone)]
+#[derive(serde::Deserialize, Clone)]
 #[serde(default)]
 pub struct Config {
     pub store: StoreConfig,
@@ -363,6 +363,35 @@ pub struct Config {
     pub limits: LimitsConfig,
     pub maintenance: MaintenanceConfig,
     pub dream: DreamConfig,
+    /// Enable background update notification on startup. Default: true.
+    /// Set to `false` to disable.
+    #[serde(default = "default_true")]
+    pub update_check: bool,
+}
+
+/// Serde default helper: returns `true`.
+fn default_true() -> bool {
+    true
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            store: StoreConfig::default(),
+            embedding: EmbeddingConfig::default(),
+            extraction: ExtractionConfig::default(),
+            embed_fallback: EmbedFallbackConfig::default(),
+            tier: TierConfig::default(),
+            logging: LoggingConfig::default(),
+            aging: AgingConfig::default(),
+            recall: RecallConfig::default(),
+            server: ServerConfig::default(),
+            limits: LimitsConfig::default(),
+            maintenance: MaintenanceConfig::default(),
+            dream: DreamConfig::default(),
+            update_check: true,
+        }
+    }
 }
 
 /// Configurable limits (#404).

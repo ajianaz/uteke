@@ -1373,6 +1373,7 @@ impl Uteke {
         &self,
         id_or_slug: &str,
         new_parent_slug: Option<&str>,
+        new_sort_order: Option<i64>,
     ) -> Result<usize, Error> {
         // Resolve by slug first, fall back to UUID lookup (#833).
         let doc = match self.store.get_document_by_slug(id_or_slug)? {
@@ -1398,7 +1399,8 @@ impl Uteke {
         };
 
         let parent_id_ref = new_parent_id.as_deref();
-        self.store.move_document(&doc.id, parent_id_ref, None)
+        self.store
+            .move_document(&doc.id, parent_id_ref, new_sort_order)
     }
 
     /// Delete a document by ID or slug (#438).

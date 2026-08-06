@@ -718,6 +718,8 @@ uteke timeline <memory-id> --json
 | `uteke verify` | Verify DB and index consistency |
 | `uteke verify-checksums --binary <path>` | Verify binary integrity against SHA256 checksums |
 | `uteke repair` | Rebuild index from SQLite |
+| `uteke repair --rebuild` | Rebuild index from SQLite (explicit) |
+| `uteke repair --reembed` | Regenerate missing embeddings for memories without vectors (#906) |
 | `uteke namespace list` | List all namespaces with memory counts |
 | `uteke namespace stats <name>` | Show stats for a namespace |
 | `uteke namespace switch <name>` | Set default namespace in config |
