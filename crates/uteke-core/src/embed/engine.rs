@@ -81,7 +81,8 @@ impl OnnxEmbedder {
     /// 188MB downloads. Does NOT permanently cache failures: if `load_model()`
     /// returns an error, the next call will retry.
     fn lazy_load(&self) -> Result<(), Error> {
-        // Fast path: already initialized (check session as sentinel)
+        // Fast path: already initialized (session is the sentinel — it is
+        // stored LAST, so if session.is_some() then tokenizer is guaranteed set)
         {
             let session = self
                 .session
@@ -114,19 +115,21 @@ impl OnnxEmbedder {
         // Note: we do NOT cache failures — transient errors should retry.
         let loaded = Self::load_model()?;
 
-        // Store the loaded model into separate mutexes.
+        // Store tokenizer FIRST, then session. Session is the sentinel —
+        // other threads see is_some() only after both are stored, so there
+        // is no window where one is set and the other is not.
         {
-            let mut session = self
-                .session
+            let mut tokenizer = self
+                .tokenizer
                 .lock()
-                .map_err(|_| Error::lock("ONNX session during store"))?;
-            *session = Some(loaded.0);
+                .map_err(|_| Error::lock("ONNX tokenizer during store"))?;
+            *tokenizer = Some(loaded.1);
         }
-        let mut tokenizer = self
-            .tokenizer
+        let mut session = self
+            .session
             .lock()
-            .map_err(|_| Error::lock("ONNX tokenizer during store"))?;
-        *tokenizer = Some(loaded.1);
+            .map_err(|_| Error::lock("ONNX session during store"))?;
+        *session = Some(loaded.0);
         Ok(())
     }
 
