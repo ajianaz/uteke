@@ -95,15 +95,19 @@ impl super::Store {
 
     /// Count memories never accessed in a namespace.
     pub fn count_never_accessed(&self, namespace: Option<&str>) -> Result<usize, Error> {
-        let ns = namespace.unwrap_or(DEFAULT_NAMESPACE);
-        let count: usize = self
-            .conn
-            .query_row(
+        let count: usize = match namespace {
+            Some(ns) => self.conn.query_row(
                 "SELECT COUNT(*) FROM memories WHERE namespace = ?1 AND last_accessed IS NULL",
                 params![ns],
                 |row| row.get::<_, i64>(0),
-            )
-            .map_err(|e| Error::db("database operation", e))? as usize;
+            ),
+            None => self.conn.query_row(
+                "SELECT COUNT(*) FROM memories WHERE last_accessed IS NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            ),
+        }
+        .map_err(|e| Error::db("database operation", e))? as usize;
         Ok(count)
     }
 
@@ -114,37 +118,58 @@ impl super::Store {
         hot_days: i64,
         warm_days: i64,
     ) -> Result<(usize, usize, usize), Error> {
-        let ns = namespace.unwrap_or(DEFAULT_NAMESPACE);
         let now = chrono::Utc::now();
         let hot_cutoff = (now - chrono::Duration::days(hot_days)).to_rfc3339();
         let warm_cutoff = (now - chrono::Duration::days(warm_days)).to_rfc3339();
 
-        let hot: usize = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM memories WHERE namespace = ?1 AND last_accessed >= ?2",
-                params![ns, hot_cutoff],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(|e| Error::db("database operation", e))? as usize;
+        let (hot, warm, cold) = match namespace {
+            Some(ns) => {
+                let hot: usize = self.conn.query_row(
+                    "SELECT COUNT(*) FROM memories WHERE namespace = ?1 AND last_accessed >= ?2",
+                    params![ns, hot_cutoff],
+                    |row| row.get::<_, i64>(0),
+                ).map_err(|e| Error::db("database operation", e))? as usize;
 
-        let warm: usize = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM memories WHERE namespace = ?1 AND last_accessed >= ?2 AND last_accessed < ?3",
-                params![ns, warm_cutoff, hot_cutoff],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(|e| Error::db("database operation", e))? as usize;
+                let warm: usize = self.conn.query_row(
+                    "SELECT COUNT(*) FROM memories WHERE namespace = ?1 AND last_accessed >= ?2 AND last_accessed < ?3",
+                    params![ns, warm_cutoff, hot_cutoff],
+                    |row| row.get::<_, i64>(0),
+                ).map_err(|e| Error::db("database operation", e))? as usize;
 
-        let cold: usize = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM memories WHERE namespace = ?1 AND (last_accessed < ?2 OR last_accessed IS NULL)",
-                params![ns, warm_cutoff],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(|e| Error::db("database operation", e))? as usize;
+                let cold: usize = self.conn.query_row(
+                    "SELECT COUNT(*) FROM memories WHERE namespace = ?1 AND (last_accessed < ?2 OR last_accessed IS NULL)",
+                    params![ns, warm_cutoff],
+                    |row| row.get::<_, i64>(0),
+                ).map_err(|e| Error::db("database operation", e))? as usize;
+
+                (hot, warm, cold)
+            }
+            None => {
+                let hot: usize = self
+                    .conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM memories WHERE last_accessed >= ?1",
+                        params![hot_cutoff],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(|e| Error::db("database operation", e))?
+                    as usize;
+
+                let warm: usize = self.conn.query_row(
+                    "SELECT COUNT(*) FROM memories WHERE last_accessed >= ?1 AND last_accessed < ?2",
+                    params![warm_cutoff, hot_cutoff],
+                    |row| row.get::<_, i64>(0),
+                ).map_err(|e| Error::db("database operation", e))? as usize;
+
+                let cold: usize = self.conn.query_row(
+                    "SELECT COUNT(*) FROM memories WHERE last_accessed < ?1 OR last_accessed IS NULL",
+                    params![warm_cutoff],
+                    |row| row.get::<_, i64>(0),
+                ).map_err(|e| Error::db("database operation", e))? as usize;
+
+                (hot, warm, cold)
+            }
+        };
 
         Ok((hot, warm, cold))
     }
