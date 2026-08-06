@@ -224,12 +224,19 @@ pub enum Commands {
         #[arg(long)]
         binary: String,
     },
-    /// Repair index by rebuilding from SQLite
+    /// Repair index by rebuilding from SQLite.
+    /// Use --rebuild to delete corrupt index files first.
+    /// Use --reembed to regenerate embeddings for memories missing them.
     Repair {
         /// Delete existing index files before rebuilding (ignores corrupt index).
         /// Use when the index is corrupted and normal repair fails.
         #[arg(long)]
         rebuild: bool,
+
+        /// Re-generate embeddings for memories with missing/empty vectors.
+        /// Makes previously invisible memories searchable via semantic recall.
+        #[arg(long)]
+        reembed: bool,
     },
     /// Export all memories to JSONL file (no embeddings — portable)
     Export {
