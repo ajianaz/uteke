@@ -25,12 +25,16 @@ struct Cache {
 /// Seconds before re-checking GitHub (24 hours).
 const CACHE_TTL: u64 = 86_400;
 
-/// Entry point: spawn a background thread that prints a notification to stderr
-/// if a newer version exists. Fire-and-forget — errors are silently ignored.
-pub fn spawn() {
+/// Entry point: returns a `JoinHandle` that the caller should `.join()`
+/// at the end of `main()` to ensure the thread isn't killed prematurely.
+///
+/// - If cache is fresh, prints immediately and returns `None` (no thread).
+/// - If cache is stale/missing, spawns a background thread and returns
+///   `Some(handle)`.
+pub fn spawn() -> Option<std::thread::JoinHandle<()>> {
     // Respect config opt-out.
     if !enabled() {
-        return;
+        return None;
     }
 
     // Try cache first — if fresh, print immediately and skip network.
@@ -39,17 +43,19 @@ pub fn spawn() {
         if is_newer(&latest, current) {
             print_banner(&latest, current);
         }
-        return;
+        return None;
     }
 
     // Cache stale or missing — spawn background check.
-    // Thread is detached (fire-and-forget). Wrapped in catch_unwind
-    // to prevent panic propagation on process exit.
-    std::thread::spawn(move || {
+    // Caller MUST join() this handle before process exit so the thread
+    // isn't killed before the network request completes.
+    let handle = std::thread::spawn(move || {
         let _ = std::panic::catch_unwind(|| {
             run_check();
         });
     });
+
+    Some(handle)
 }
 
 /// Read config to determine if update check is enabled.

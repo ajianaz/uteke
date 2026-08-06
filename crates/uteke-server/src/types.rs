@@ -55,6 +55,9 @@ pub struct DocMoveRequest {
     pub slug: Option<String>,
     #[serde(default)]
     pub new_parent: Option<String>,
+    /// Optional sort order for the moved document (#sort-order).
+    #[serde(default)]
+    pub new_sort_order: Option<i64>,
 }
 
 #[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]

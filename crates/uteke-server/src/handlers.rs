@@ -1547,7 +1547,8 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
             Ok(req_data) => match resolve_doc_id_move(&req_data) {
                 Ok(id_or_slug) => {
                     let new_parent = req_data.new_parent.as_deref();
-                    match uteke.doc_move(id_or_slug, new_parent) {
+                    let new_sort_order = req_data.new_sort_order;
+                    match uteke.doc_move(id_or_slug, new_parent, new_sort_order) {
                         Ok(moved) => ctx.ok_response_for(req, &serde_json::json!({"moved": moved})),
                         Err(e) => {
                             if e.to_string().contains("not found") {
