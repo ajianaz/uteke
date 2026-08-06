@@ -433,6 +433,9 @@ pub struct Uteke {
     dream_config: DreamConfig,
     /// Recall cache — avoids redundant embedding computation for repeated queries.
     recall_cache: recall_cache::RecallCache,
+    /// Path to the persistent embedding cache DB (`embed_cache.db`).
+    /// `None` for in-memory stores (tests).
+    embed_cache_path: Option<std::path::PathBuf>,
 }
 
 impl Uteke {
@@ -589,6 +592,13 @@ impl Uteke {
             }
         }
 
+        // Resolve embedding cache path: same directory as the main DB.
+        // `embed_cache.db` avoids ONNX model load for repeated queries (#896).
+        let embed_cache_path = store.path().map(|p| {
+            let dir = p.parent().unwrap_or(Path::new("."));
+            dir.join("embed_cache.db")
+        });
+
         Ok(Self {
             store,
             index: RwLock::new(index),
@@ -604,6 +614,7 @@ impl Uteke {
             recall_cache: recall_cache::RecallCache::new(recall_cache::RecallCacheConfig::default()),
             jaccard_weight: 0.0,
             dream_config: DreamConfig::default(),
+            embed_cache_path,
         })
     }
 
@@ -835,6 +846,34 @@ impl Uteke {
                     Some(Box::new(cloud_embedder)),
                 )?;
                 *guard = Some(Box::new(fallback_embedder));
+            }
+
+            // Wrap with persistent embedding cache (#896).
+            // CachingEmbedder intercepts embed() calls and serves from SQLite
+            // cache on hit, avoiding the ~2s ONNX model load on repeated queries.
+            // Skipped for in-memory stores (tests) where no cache path exists.
+            if let Some(ref cache_path) = self.embed_cache_path {
+                // Init cache DB first (without moving `inner`), so on failure
+                // we can fall back to the uncached embedder cleanly.
+                match crate::embed::EmbeddingCache::open(cache_path) {
+                    Ok(cache) => {
+                        tracing::debug!(
+                            cache_path = %cache_path.display(),
+                            "Persistent embedding cache enabled"
+                        );
+                        let inner = guard.take().unwrap();
+                        *guard = Some(Box::new(crate::embed::CachingEmbedder::with_cache(
+                            inner, cache,
+                        )));
+                    }
+                    Err(e) => {
+                        // Cache init failure is non-fatal — use uncached embedder
+                        tracing::warn!(
+                            error = %e,
+                            "Failed to init embedding cache, using uncached embedder"
+                        );
+                    }
+                }
             }
         }
         Ok(())
