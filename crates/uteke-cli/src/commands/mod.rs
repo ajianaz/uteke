@@ -169,7 +169,7 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
 
         Commands::Verify => maintenance::run_verify(cli, uteke),
 
-        Commands::Repair => maintenance::run_repair(cli, uteke),
+        Commands::Repair { rebuild } => maintenance::run_repair(cli, uteke, *rebuild, config),
 
         Commands::Tags { command } => tags::run(cli, uteke, ns, command),
 

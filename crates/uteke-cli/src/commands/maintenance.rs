@@ -28,8 +28,40 @@ pub(crate) fn run_verify(cli: &Cli, uteke: &Uteke) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn run_repair(cli: &Cli, uteke: &Uteke) -> Result<(), String> {
-    tracing::info!("Running repair");
+pub(crate) fn run_repair(
+    cli: &Cli,
+    uteke: &Uteke,
+    rebuild: bool,
+    config: &crate::Config,
+) -> Result<(), String> {
+    if rebuild {
+        tracing::info!("Running repair --rebuild (deleting index files first)");
+
+        // Determine index path: cli --store override or config default.
+        let store_dir = cli
+            .store
+            .as_deref()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| crate::Config::expand_tilde(&config.store.path));
+
+        let index_path = std::path::PathBuf::from(&store_dir).join("uteke_index.usearch");
+        let keys_path = std::path::PathBuf::from(&store_dir).join("uteke_index.keys");
+
+        // Delete both index files so the store opens cleanly.
+        if index_path.exists() {
+            tracing::info!("Removing {}", index_path.display());
+            std::fs::remove_file(&index_path)
+                .map_err(|e| format!("Failed to remove index file: {e}"))?;
+        }
+        if keys_path.exists() {
+            tracing::info!("Removing {}", keys_path.display());
+            std::fs::remove_file(&keys_path)
+                .map_err(|e| format!("Failed to remove keys file: {e}"))?;
+        }
+    } else {
+        tracing::info!("Running repair");
+    }
+
     let report = uteke.repair().map_err(|e| format!("Repair failed: {e}"))?;
     if cli.json {
         output::print_json(&report);
