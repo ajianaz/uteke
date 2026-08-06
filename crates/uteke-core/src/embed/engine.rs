@@ -179,70 +179,83 @@ impl OnnxEmbedder {
         // Lazy-load model on first embed() call
         self.lazy_load()?;
 
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|_| Error::lock("ONNX embedder inner during embed"))?;
+        // Phase 1: Tokenize + prepare tensors (holds lock briefly)
+        let (input_ids_tensor, attention_mask_tensor) = {
+            let inner = self
+                .inner
+                .lock()
+                .map_err(|_| Error::lock("ONNX embedder inner during tokenize"))?;
 
-        // Phase 1: Tokenize (immutable borrow of inner)
-        let encoding = {
             let tokenizer = inner
                 .tokenizer
                 .as_ref()
                 .ok_or_else(|| Error::embed_msg("tokenizer not loaded after lazy_load"))?;
-            tokenizer
+
+            let encoding = tokenizer
                 .encode(text, true)
-                .map_err(|e| Error::embed("tokenize text", e))?
+                .map_err(|e| Error::embed("tokenize text", e))?;
+
+            let input_ids = encoding.get_ids();
+            let attention_mask = encoding.get_attention_mask();
+
+            // Truncate to max sequence length
+            let seq_len = input_ids.len().min(MAX_SEQ_LEN);
+
+            // Prepare input arrays as i64
+            let input_ids_i64: Vec<i64> = input_ids[..seq_len].iter().map(|&v| v as i64).collect();
+            let attention_mask_i64: Vec<i64> = attention_mask[..seq_len]
+                .iter()
+                .map(|&v| v as i64)
+                .collect();
+
+            // Create tensors
+            let input_ids_tensor = ort::value::Tensor::<i64>::from_array((
+                vec![1i64, seq_len as i64],
+                input_ids_i64.into_boxed_slice(),
+            ))
+            .map_err(|e| Error::embed("create input_ids tensor", e))?;
+
+            let attention_mask_tensor = ort::value::Tensor::<i64>::from_array((
+                vec![1i64, seq_len as i64],
+                attention_mask_i64.into_boxed_slice(),
+            ))
+            .map_err(|e| Error::embed("create attention_mask tensor", e))?;
+
+            (input_ids_tensor, attention_mask_tensor)
         };
+        // Lock dropped here — other threads can tokenize while we run inference.
 
-        let input_ids = encoding.get_ids();
-        let attention_mask = encoding.get_attention_mask();
-
-        // Truncate to max sequence length
-        let seq_len = input_ids.len().min(MAX_SEQ_LEN);
-
-        // Prepare input arrays as i64
-        let input_ids_i64: Vec<i64> = input_ids[..seq_len].iter().map(|&v| v as i64).collect();
-        let attention_mask_i64: Vec<i64> = attention_mask[..seq_len]
-            .iter()
-            .map(|&v| v as i64)
-            .collect();
-
-        // Create tensors
-        let input_ids_tensor = ort::value::Tensor::<i64>::from_array((
-            vec![1i64, seq_len as i64],
-            input_ids_i64.into_boxed_slice(),
-        ))
-        .map_err(|e| Error::embed("create input_ids tensor", e))?;
-
-        let attention_mask_tensor = ort::value::Tensor::<i64>::from_array((
-            vec![1i64, seq_len as i64],
-            attention_mask_i64.into_boxed_slice(),
-        ))
-        .map_err(|e| Error::embed("create attention_mask tensor", e))?;
-
-        // Phase 2: Run ONNX inference (mutable borrow of inner)
+        // Phase 2: Run ONNX inference (re-acquire lock for session only)
         // EmbeddingGemma has 2 outputs:
         //   output[0] = last_hidden_state (1, seq_len, 768)
         //   output[1] = sentence_embedding (1, 768) — already mean-pooled
-        let session = inner
-            .session
-            .as_mut()
-            .ok_or_else(|| Error::embed_msg("ONNX session not loaded after lazy_load"))?;
-        let outputs = session
-            .run(ort::inputs![input_ids_tensor, attention_mask_tensor])
-            .map_err(|e| Error::embed("ONNX inference", e))?;
+        let embedding: Vec<f32> = {
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|_| Error::lock("ONNX embedder inner during inference"))?;
 
-        // Use output[1] (sentence_embedding) — already pooled by the model
-        let sentence_emb = &outputs[1];
+            let session = inner
+                .session
+                .as_mut()
+                .ok_or_else(|| Error::embed_msg("ONNX session not loaded after lazy_load"))?;
 
-        let emb_view = sentence_emb
-            .try_extract_tensor::<f32>()
-            .map_err(|e| Error::embed("extract sentence embedding", e))?;
+            let outputs = session
+                .run(ort::inputs![input_ids_tensor, attention_mask_tensor])
+                .map_err(|e| Error::embed("ONNX inference", e))?;
 
-        let mut embedding: Vec<f32> = emb_view.1.to_vec();
+            // Use output[1] (sentence_embedding) — already pooled by the model
+            let sentence_emb = &outputs[1];
+            let emb_view = sentence_emb
+                .try_extract_tensor::<f32>()
+                .map_err(|e| Error::embed("extract sentence embedding", e))?;
+
+            emb_view.1.to_vec()
+        };
+        // Lock dropped — post-processing runs without any lock.
 
         // L2 normalize
+        let mut embedding = embedding;
         let norm = embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
         if norm > 0.0 {
             for v in embedding.iter_mut() {
