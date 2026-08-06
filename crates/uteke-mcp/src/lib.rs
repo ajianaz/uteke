@@ -840,6 +840,7 @@ fn exec_recall(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
             None,
             None,
             false,
+            uteke_core::RecallStrategy::Vector, // #900: default vector, MCP doesn't expose strategy yet
         )
         .map_err(|e| format!("Failed: {e}"))?;
 
