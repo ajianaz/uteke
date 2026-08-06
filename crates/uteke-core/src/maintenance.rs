@@ -2,7 +2,9 @@
 
 use crate::error::{Error, format_bytes};
 use crate::memory::types::{AgingStatus, CleanupResult, Memory, PruneResult, StoreStats};
-use crate::types::{DoctorCheck, DoctorReport, DoctorStatus, RepairReport, VerifyReport};
+use crate::types::{
+    DoctorCheck, DoctorReport, DoctorStatus, ReembedReport, RepairReport, VerifyReport,
+};
 use crate::uteke_home;
 
 impl crate::Uteke {
@@ -139,6 +141,99 @@ impl crate::Uteke {
             db_count: before_db,
             index_before: before_index,
             index_after: items.len(),
+        })
+    }
+
+    /// Re-embed memories that have missing or empty embedding vectors.
+    ///
+    /// Scans all non-deprecated memories, finds those with empty embeddings,
+    /// generates new embeddings, updates the database, and adds them to the index.
+    pub fn reembed_missing(&self) -> Result<ReembedReport, Error> {
+        let all_memories = self.store.load_all(None)?;
+        let total_scanned = all_memories.len();
+
+        // Filter to memories with empty embeddings, excluding deprecated.
+        let missing: Vec<&Memory> = all_memories
+            .iter()
+            .filter(|m| !m.deprecated && m.embedding.is_empty())
+            .collect();
+
+        let missing_count = missing.len();
+        if missing_count == 0 {
+            return Ok(ReembedReport {
+                total_scanned,
+                missing_count,
+                reembedded: 0,
+                failed: 0,
+            });
+        }
+
+        tracing::info!(
+            total = total_scanned,
+            missing = missing_count,
+            "Re-embedding memories with missing vectors"
+        );
+
+        // Ensure embedder is initialized.
+        self.ensure_embedder()?;
+
+        let mut reembedded = 0usize;
+        let mut failed = 0usize;
+        let mut new_items: Vec<(String, Vec<f32>)> = Vec::new();
+
+        for mem in &missing {
+            let embedder = self
+                .embedder
+                .lock()
+                .map_err(|_| Error::lock("embedder lock during reembed"))?;
+            let embedder = embedder
+                .as_ref()
+                .ok_or_else(|| Error::embed("reembed", "embedder not initialized"))?;
+
+            match embedder.embed(&mem.content) {
+                Ok(vec) => {
+                    // Update memory in database.
+                    let mut updated = (*mem).clone();
+                    updated.embedding = vec.clone();
+                    updated.updated_at = chrono::Utc::now();
+                    if let Err(e) = self.store.update(&updated) {
+                        tracing::warn!(id = %mem.id, error = %e, "Failed to update embedding in DB");
+                        failed += 1;
+                        continue;
+                    }
+                    new_items.push((mem.id.clone(), vec));
+                    reembedded += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(id = %mem.id, error = %e, "Failed to generate embedding");
+                    failed += 1;
+                }
+            }
+        }
+
+        // Add newly-embedded memories to the index.
+        if !new_items.is_empty() {
+            let mut index = self
+                .index
+                .write()
+                .map_err(|_| Error::lock("index write during reembed"))?;
+            for (id, vec) in &new_items {
+                if let Err(e) = index.insert(id, vec) {
+                    tracing::warn!(id = %id, error = %e, "Failed to add to index");
+                }
+            }
+            if let Err(e) = index.save() {
+                tracing::warn!(error = %e, "Failed to save index after reembed");
+            }
+        }
+
+        tracing::info!(reembedded, failed, "Re-embed complete");
+
+        Ok(ReembedReport {
+            total_scanned,
+            missing_count,
+            reembedded,
+            failed,
         })
     }
 
