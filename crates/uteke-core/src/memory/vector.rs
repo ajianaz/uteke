@@ -198,8 +198,40 @@ impl VectorIndex {
             let tmp_path = path.with_extension(format!("{USEARCH_EXT}.tmp"));
             std::fs::write(&tmp_path, &buffer)
                 .map_err(|e| Error::embed("write temp usearch index", e))?;
+
+            // On Windows, `std::fs::rename` fails with `ERROR_ACCESS_DENIED` if
+            // the destination file is locked by `LockFileEx` via fs2 (#926).
+            // Temporarily release the lock, perform the rename, then re-acquire.
+            #[cfg(windows)]
+            {
+                if let Some(ref lock_file) = self._lock_file {
+                    // Best-effort unlock — ignore errors, worst case rename fails below
+                    let _ = fs2::FileExt::unlock(lock_file);
+                }
+            }
+
             std::fs::rename(&tmp_path, path)
                 .map_err(|e| Error::embed("rename temp to final usearch index", e))?;
+
+            #[cfg(windows)]
+            {
+                if let Some(ref mut lock_file) = self._lock_file {
+                    // Re-open the file handle (path was just replaced by rename)
+                    // and re-acquire the lock.
+                    let new_file = std::fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(path)
+                        .map_err(|e| {
+                            Error::embed_msg(format!(
+                                "Failed to reopen usearch file after save rename: {e}"
+                            ))
+                        })?;
+                    fs2::FileExt::try_lock_exclusive(&new_file)
+                        .map_err(|e| Error::embed("re-lock usearch file after save", e))?;
+                    *lock_file = new_file;
+                }
+            }
 
             // Save key→id mapping as sidecar file using atomic write
             let mapping_path = path.with_extension("keys");
@@ -381,8 +413,9 @@ pub fn cosine_distance_to_similarity(distance: f32) -> f32 {
 
 /// Acquire an exclusive file lock on the usearch index file (#543).
 ///
-/// Blocks until the lock is available. This serializes concurrent access from
-/// separate CLI processes (e.g., `xargs -P5 uteke remember`).
+/// Retry loop with timeout: tries `try_lock_exclusive` every 200ms up to 30s,
+/// then fails with a helpful diagnostic. This prevents indefinite blocking
+/// on Windows where `lock_exclusive` has no built-in timeout (#922).
 fn acquire_file_lock(path: &Path) -> Result<File, Error> {
     let file = File::options()
         .read(true)
@@ -390,19 +423,55 @@ fn acquire_file_lock(path: &Path) -> Result<File, Error> {
         .open(path)
         .map_err(|e| Error::embed_msg(format!("Failed to open usearch file for locking: {e}")))?;
 
+    // Fast path: try non-blocking lock first.
     if file.try_lock_exclusive().is_ok() {
         tracing::debug!("usearch file lock acquired: {}", path.display());
-    } else {
-        tracing::debug!("usearch file lock busy on {}, waiting...", path.display());
-        file.lock_exclusive()
-            .map_err(|e| Error::embed("acquire exclusive file lock on usearch", e))?;
-        tracing::debug!(
-            "usearch file lock acquired (after wait): {}",
+        return Ok(file);
+    }
+
+    // Contended: retry with timeout (#922).
+    // On Linux, flock(LOCK_EX) would block indefinitely anyway, so the retry
+    // loop adds a bounded timeout on all platforms. On Windows,
+    // LockFileEx(LOCKFILE_EXCLUSIVE_LOCK) also blocks forever — the retry loop
+    // with try_lock_exclusive gives us control over the timeout.
+    tracing::debug!(
+        "usearch file lock busy on {}, retrying with timeout...",
+        path.display()
+    );
+
+    const RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+    const MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + MAX_WAIT;
+    let mut waited = std::time::Duration::ZERO;
+
+    loop {
+        std::thread::sleep(RETRY_INTERVAL);
+        waited += RETRY_INTERVAL;
+
+        if file.try_lock_exclusive().is_ok() {
+            tracing::debug!(
+                "usearch file lock acquired (after {:?}): {}",
+                waited,
+                path.display()
+            );
+            return Ok(file);
+        }
+
+        if std::time::Instant::now() >= deadline {
+            return Err(Error::embed_msg(format!(
+                "Could not acquire lock on {} after {MAX_WAIT:?}. \
+                 Another uteke process (uteke-serve or CLI) may be running. \
+                 Stop it and retry.",
+                path.display()
+            )));
+        }
+
+        tracing::trace!(
+            "usearch file lock still busy after {:?}: {}",
+            waited,
             path.display()
         );
     }
-
-    Ok(file)
 }
 
 /// Atomic file write: write to temp file then rename.

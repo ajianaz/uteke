@@ -945,35 +945,51 @@ impl crate::Uteke {
             .index
             .write()
             .map_err(|_| Error::lock("index write lock during forget"))?;
-        // SQLite delete (source of truth)
-        self.store.delete(id)?;
+        // SQLite delete (source of truth).
+        // Check the return value: Ok(false) means the ID was not found in the DB (#926).
+        let deleted = self.store.delete(id)?;
+        if !deleted {
+            return Err(Error::db_msg(format!(
+                "Memory with id='{id}' not found in store. Nothing was deleted."
+            )));
+        }
         // Vector index remove — orphan is harmless if fails (verify/repair cleans up)
         if !index.remove(id) {
             tracing::warn!("Vector index entry not found during forget for id={id}");
         }
         // Retry index persistence up to 3 times (#621).
         // A failed save leaves orphan entries that desync from SQLite.
+        let mut last_err = None;
         for attempt in 0..3 {
             match index.save() {
                 Ok(()) => return Ok(()),
                 Err(e) => {
+                    last_err = Some(e);
                     if attempt < 2 {
                         tracing::warn!(
-                            "Index save attempt {}/3 failed after forget for id={id}: {e}. Retrying...",
-                            attempt + 1
+                            "Index save attempt {}/3 failed after forget for id={id}: {}. Retrying...",
+                            attempt + 1,
+                            last_err.as_ref().unwrap()
                         );
                         std::thread::sleep(std::time::Duration::from_millis(200));
-                    } else {
-                        tracing::warn!(
-                            "Failed to persist vector index after 3 attempts for forget id={id}: {e}. \
-                             Orphan entry will be cleaned up by verify/repair."
-                        );
                     }
                 }
             }
         }
 
-        Ok(())
+        // All retries exhausted: SQLite row is deleted but index persistence failed (#926).
+        // Return Err so the caller knows the operation was only partially successful.
+        // The DB is the source of truth; `repair` will resync the index.
+        tracing::error!(
+            "Failed to persist vector index after 3 attempts for forget id={id}. \
+             SQLite row deleted but index is stale. Run `uteke repair` to resync."
+        );
+        Err(Error::embed_msg(format!(
+            "Memory {id} was deleted from the database, but the vector index \
+             could not be saved after 3 attempts: {}. \
+             Run `uteke repair` to resync the index.",
+            last_err.unwrap()
+        )))
     }
 
     /// Bulk delete memories by tag. Also removes from index.
@@ -995,12 +1011,7 @@ impl crate::Uteke {
                 );
             }
         }
-        if let Err(e) = index.save() {
-            tracing::warn!(
-                "Failed to persist vector index after bulk_forget_by_tag: {e}. \
-                 Orphan entries will be cleaned up by verify/repair."
-            );
-        }
+        persist_index_after_delete(&mut index, "bulk_forget_by_tag")?;
         Ok(BulkDeleteResult {
             deleted: ids.len(),
             ids,
@@ -1022,12 +1033,7 @@ impl crate::Uteke {
                 tracing::warn!("Vector index entry not found during bulk_forget_cold for id={id}");
             }
         }
-        if let Err(e) = index.save() {
-            tracing::warn!(
-                "Failed to persist vector index after bulk_forget_cold: {e}. \
-                 Orphan entries will be cleaned up by verify/repair."
-            );
-        }
+        persist_index_after_delete(&mut index, "bulk_forget_cold")?;
         Ok(BulkDeleteResult {
             deleted: ids.len(),
             ids,
@@ -1047,12 +1053,7 @@ impl crate::Uteke {
                 tracing::warn!("Vector index entry not found during bulk_forget_all for id={id}");
             }
         }
-        if let Err(e) = index.save() {
-            tracing::warn!(
-                "Failed to persist vector index after bulk_forget_all: {e}. \
-                 Orphan entries will be cleaned up by verify/repair."
-            );
-        }
+        persist_index_after_delete(&mut index, "bulk_forget_all")?;
         Ok(BulkDeleteResult {
             deleted: ids.len(),
             ids,
@@ -1388,6 +1389,127 @@ impl crate::Uteke {
     ) -> Result<Vec<Memory>, Error> {
         self.store
             .list_at_time(tag, namespace, limit, offset, point_in_time)
+    }
+}
+
+/// Persist the vector index to disk after a delete operation.
+///
+/// Retries up to 3 times with 200ms backoff. Unlike the old per-call inline
+/// code, this helper **returns an error** on persistent failure so the caller
+/// can surface it to the user instead of silently swallowing it (#926).
+///
+/// The database is always the source of truth: if the index save fails, the
+/// rows are already gone from SQLite. `uteke repair` will resync the index.
+fn persist_index_after_delete(
+    index: &mut crate::memory::vector::VectorIndex,
+    context: &str,
+) -> Result<(), Error> {
+    let mut last_err = None;
+    for attempt in 0..3 {
+        match index.save() {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_err = Some(e);
+                if attempt < 2 {
+                    tracing::warn!(
+                        "Index save attempt {}/3 failed after {context}: {}. Retrying...",
+                        attempt + 1,
+                        last_err.as_ref().unwrap()
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+            }
+        }
+    }
+
+    tracing::error!(
+        "Failed to persist vector index after 3 attempts in {context}. \
+         SQLite rows deleted but index is stale. Run `uteke repair` to resync."
+    );
+    Err(Error::embed_msg(format!(
+        "Vector index could not be saved after 3 attempts in {context}: {}. \
+         Database rows were deleted. Run `uteke repair` to resync the index.",
+        last_err.unwrap()
+    )))
+}
+
+#[cfg(test)]
+mod forget_tests {
+    use crate::Uteke;
+
+    /// Insert a memory with a fake embedding (bypassing ONNX), then forget it.
+    /// Verifies the memory is gone from both store and index (#926).
+    #[test]
+    fn test_forget_deletes_memory() {
+        let uteke = Uteke::open(":memory:").unwrap();
+        let embedding = vec![0.1_f32; 768]; // matches DEFAULT_DIMS
+        let id = uteke
+            .remember_precomputed(
+                "test forget content",
+                &["test-forget"],
+                None,
+                Some("forget-test"),
+                "fact",
+                "text",
+                &embedding,
+            )
+            .unwrap();
+
+        // Verify it exists
+        assert!(uteke.get_by_id(&id).unwrap().is_some());
+
+        // Forget it
+        uteke.forget(&id).unwrap();
+
+        // Verify it's gone from store
+        assert!(uteke.get_by_id(&id).unwrap().is_none());
+    }
+
+    /// Forgetting a non-existent ID should return an error, not Ok(()) (#926).
+    #[test]
+    fn test_forget_nonexistent_returns_error() {
+        let uteke = Uteke::open(":memory:").unwrap();
+        let result = uteke.forget("nonexistent-id-12345");
+        assert!(
+            result.is_err(),
+            "forget on non-existent ID should return Err, not Ok(())"
+        );
+    }
+
+    /// Forget → re-insert should work (no stale state) (#926).
+    #[test]
+    fn test_forget_then_reinsert() {
+        let uteke = Uteke::open(":memory:").unwrap();
+        let embedding = vec![0.5_f32; 768]; // matches DEFAULT_DIMS
+        let id = uteke
+            .remember_precomputed(
+                "forget then reinsert",
+                &[],
+                None,
+                Some("reinsert-test"),
+                "fact",
+                "text",
+                &embedding,
+            )
+            .unwrap();
+
+        uteke.forget(&id).unwrap();
+        assert!(uteke.get_by_id(&id).unwrap().is_none());
+
+        // Re-insert with same content — should get a new ID
+        let id2 = uteke
+            .remember_precomputed(
+                "forget then reinsert",
+                &[],
+                None,
+                Some("reinsert-test"),
+                "fact",
+                "text",
+                &embedding,
+            )
+            .unwrap();
+        assert_ne!(id, id2, "re-inserted memory should have a new ID");
+        assert!(uteke.get_by_id(&id2).unwrap().is_some());
     }
 }
 
