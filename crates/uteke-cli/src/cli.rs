@@ -225,7 +225,12 @@ pub enum Commands {
         binary: String,
     },
     /// Repair index by rebuilding from SQLite
-    Repair,
+    Repair {
+        /// Delete existing index files before rebuilding (ignores corrupt index).
+        /// Use when the index is corrupted and normal repair fails.
+        #[arg(long)]
+        rebuild: bool,
+    },
     /// Export all memories to JSONL file (no embeddings — portable)
     Export {
         /// Output file path (use - for stdout)

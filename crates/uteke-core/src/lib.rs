@@ -552,7 +552,25 @@ impl Uteke {
         };
 
         let mut index = match &index_path {
-            Some(path) => VectorIndex::load_or_create(path, dims)?,
+            Some(path) => match VectorIndex::load_or_create(path, dims) {
+                Ok(idx) => idx,
+                Err(e) => {
+                    // Index file is corrupt (dim mismatch, truncated, etc).
+                    // Instead of crashing, discard the bad index and rebuild
+                    // from SQLite below. This unblocks `uteke repair` (#901).
+                    tracing::warn!(
+                        "Vector index at {} failed to load ({}). \
+                         Discarding corrupt index — will rebuild from SQLite.",
+                        path.display(),
+                        e
+                    );
+                    // Remove the corrupt files so rebuild starts clean.
+                    let _ = std::fs::remove_file(path);
+                    let keys_path = path.with_extension("keys");
+                    let _ = std::fs::remove_file(&keys_path);
+                    VectorIndex::new(dims)?
+                }
+            },
             None => VectorIndex::new(dims)?,
         };
 
