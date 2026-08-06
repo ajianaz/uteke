@@ -108,6 +108,17 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
             *enrich,
         ),
 
+        Commands::Context { namespace } => {
+            let effective_ns = namespace.as_deref().or(ns);
+            match uteke.build_context(effective_ns) {
+                Ok(summary) => {
+                    println!("{summary}");
+                    Ok(())
+                }
+                Err(e) => Err(format!("Failed to build context: {e}")),
+            }
+        }
+
         Commands::Search { query, limit, tags } => {
             recall::run_search(cli, uteke, ns, query, *limit, tags)
         }

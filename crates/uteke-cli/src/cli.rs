@@ -149,6 +149,12 @@ pub enum Commands {
         #[arg(long)]
         enrich: bool,
     },
+    /// Show project context summary (memory counts, top tags, recent activity)
+    Context {
+        /// Namespace to summarize (default: resolved namespace)
+        #[arg(long)]
+        namespace: Option<String>,
+    },
     /// Search memories by content keywords (text search)
     Search {
         /// Keywords to search for
