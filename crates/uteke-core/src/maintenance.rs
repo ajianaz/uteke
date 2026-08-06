@@ -181,15 +181,17 @@ impl crate::Uteke {
         let mut failed = 0usize;
         let mut new_items: Vec<(String, Vec<f32>)> = Vec::new();
 
-        for mem in &missing {
-            let embedder = self
-                .embedder
-                .lock()
-                .map_err(|_| Error::lock("embedder lock during reembed"))?;
-            let embedder = embedder
-                .as_ref()
-                .ok_or_else(|| Error::embed("reembed", "embedder not initialized"))?;
+        // Acquire embedder lock ONCE before the loop to avoid
+        // per-iteration mutex overhead (codecoradev/uteke#919 review).
+        let embedder_guard = self
+            .embedder
+            .lock()
+            .map_err(|_| Error::lock("embedder lock during reembed"))?;
+        let embedder = embedder_guard
+            .as_ref()
+            .ok_or_else(|| Error::embed("reembed", "embedder not initialized"))?;
 
+        for mem in &missing {
             match embedder.embed(&mem.content) {
                 Ok(vec) => {
                     // Update memory in database.
