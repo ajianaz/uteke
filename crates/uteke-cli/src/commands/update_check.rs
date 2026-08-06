@@ -32,12 +32,10 @@ const CACHE_TTL: u64 = 86_400;
 /// - If cache is stale/missing, spawns a background thread and returns
 ///   `Some(handle)`.
 pub fn spawn() -> Option<std::thread::JoinHandle<()>> {
-    // Respect config opt-out.
-    if !enabled() {
-        return None;
-    }
-
     // Try cache first — if fresh, print immediately and skip network.
+    // No config load needed for cached path (zero disk I/O for opt-out
+    // users who have no cache file either — they fall through to thread
+    // which checks config asynchronously).
     if let Some(latest) = read_cache() {
         let current = env!("CARGO_PKG_VERSION");
         if is_newer(&latest, current) {
@@ -47,10 +45,16 @@ pub fn spawn() -> Option<std::thread::JoinHandle<()>> {
     }
 
     // Cache stale or missing — spawn background check.
+    // Config opt-out check happens inside the thread to avoid
+    // synchronous disk I/O on the main thread.
     // Caller MUST join() this handle before process exit so the thread
     // isn't killed before the network request completes.
     let handle = std::thread::spawn(move || {
         let _ = std::panic::catch_unwind(|| {
+            // Respect config opt-out (checked in background thread).
+            if !enabled() {
+                return;
+            }
             run_check();
         });
     });
