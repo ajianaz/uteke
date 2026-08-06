@@ -589,7 +589,11 @@ Request for memory feedback / trust scoring (#718).
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `after` | any | No | Temporal range filter: only return memories created at or after this
+RFC3339 timestamp (#902). |
 | `at` | any | No | Time-travel: query memories that existed at this RFC3339 timestamp. |
+| `before` | any | No | Temporal range filter: only return memories created at or before this
+RFC3339 timestamp (#902). |
 | `category` | any | No | Filter by category metadata. |
 | `enrich` | `boolean` | No | Enrich results with cross-entity links (doc↔memory) (#689).
 When true, populates `linked_doc_slugs` on memory results and

@@ -241,6 +241,14 @@ pub struct RecallRequest {
     /// Recall strategy: "vector" (default), "fts5", "hybrid", or "graph" (#900).
     #[serde(default)]
     pub strategy: Option<String>,
+    /// Temporal range filter: only return memories created at or after this
+    /// RFC3339 timestamp (#902).
+    #[serde(default)]
+    pub after: Option<String>,
+    /// Temporal range filter: only return memories created at or before this
+    /// RFC3339 timestamp (#902).
+    #[serde(default)]
+    pub before: Option<String>,
 }
 
 #[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
@@ -414,6 +422,8 @@ pub struct RecallFileSection {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
+/// Hard cap on recall/list `limit` to prevent DoS via unbounded queries (#903).
+pub const MAX_LIMIT: usize = 100;
 /// Default strict mode threshold for server recall.
 /// Used as fallback when [recall] min_score_strict is not configured.
 pub const STRICT_THRESHOLD: f32 = 0.5;
