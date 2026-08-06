@@ -64,7 +64,9 @@ pub use embed::Embedder;
 #[cfg(feature = "onnx")]
 pub use embed::OnnxEmbedder;
 pub use error::{Error, format_bytes};
-pub use types::{DoctorCheck, DoctorReport, DoctorStatus, RepairReport, VerifyReport};
+pub use types::{
+    DoctorCheck, DoctorReport, DoctorStatus, ReembedReport, RepairReport, VerifyReport,
+};
 
 /// Maximum memory content length (characters) — default, overridable via config (#404).
 pub const MAX_CONTENT_LENGTH: usize = 100_000;

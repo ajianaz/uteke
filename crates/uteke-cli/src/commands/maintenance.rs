@@ -32,6 +32,7 @@ pub(crate) fn run_repair(
     cli: &Cli,
     uteke: &Uteke,
     rebuild: bool,
+    reembed: bool,
     config: &crate::Config,
 ) -> Result<(), String> {
     if rebuild {
@@ -68,6 +69,34 @@ pub(crate) fn run_repair(
     } else {
         output::print_repair_human(&report);
     }
+
+    // Optional: re-embed memories with missing vectors.
+    if reembed {
+        tracing::info!("Running repair --reembed (regenerating missing embeddings)");
+        let reembed_report = uteke
+            .reembed_missing()
+            .map_err(|e| format!("Re-embed failed: {e}"))?;
+        if cli.json {
+            output::print_json(&reembed_report);
+        } else {
+            println!();
+            if reembed_report.missing_count == 0 {
+                println!(
+                    "✓ All {} memories have embeddings — nothing to re-embed.",
+                    reembed_report.total_scanned
+                );
+            } else {
+                println!(
+                    "Re-embedded {}/{} memories ({} failed) out of {} total scanned.",
+                    reembed_report.reembedded,
+                    reembed_report.missing_count,
+                    reembed_report.failed,
+                    reembed_report.total_scanned
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
