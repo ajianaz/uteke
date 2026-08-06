@@ -469,3 +469,17 @@ orphan_importance_threshold = 0.15       # Below this + no edges = orphan
 | `contradict_max_memories` | 200 | Max memories loaded for contradiction scan |
 | `dedup_threshold` | 0.92 | Cosine threshold for dedup merging |
 | `orphan_importance_threshold` | 0.15 | Importance threshold for orphan flagging |
+
+## Update Notification (#917)
+
+Uteke checks GitHub for newer releases at startup. The result is cached for 24 hours to avoid repeated network calls.
+
+```toml
+update_check = true    # Set to false to disable startup update notification
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `update_check` | true | Enable background update notification on startup |
+
+When an update is available, a banner is printed to **stderr** (does not interfere with stdout pipes). The check is non-blocking — it runs in a background thread joined before process exit, so it never delays command execution.
