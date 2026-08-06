@@ -110,12 +110,22 @@ jobs:
       matrix:
         include:
           # Linux x86_64
-          - os: ubuntu-latest
+          # IMPORTANT: Pin to ubuntu-22.04 (GLIBC 2.35) for backward compatibility.
+          # ubuntu-latest = 24.04 (GLIBC 2.39) — binary won't run on Debian 12,
+          # Ubuntu 22.04, RHEL 9, or any system with GLIBC < 2.39.
+          # See: https://github.com/codecoradev/uteke issues — GLIBC_2.39 not found.
+          #
+          # EOL: Ubuntu 22.04 standard support ends April 2027.
+          # Before that date, migrate to cargo-zigbuild targeting GLIBC 2.17,
+          # which covers Ubuntu 18.04+, Debian 10+, RHEL 8+ and is runner-independent.
+          # (musl static is NOT viable — ort crate has no static-link feature,
+          #  and musl binary dlopen-ing glibc-linked ORT .so risks ABI conflicts.)
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             artifact: uteke-x86_64-unknown-linux-gnu
             ext: tar.gz
           # Linux ARM64
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             artifact: uteke-aarch64-unknown-linux-gnu
             ext: tar.gz

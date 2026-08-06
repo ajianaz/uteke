@@ -163,6 +163,69 @@ install() {
     if [ -f "${INSTALL_DIR}/${MCP_BINARY_NAME}" ]; then
         info "Successfully installed ${MCP_BINARY_NAME} to ${INSTALL_DIR}/${MCP_BINARY_NAME}"
     fi
+
+    # GLIBC compatibility check — verify binary actually runs
+    if [ "$OS" = "linux" ]; then
+        GLIBC_TEST=$("${INSTALL_DIR}/${BINARY_NAME}" --version 2>&1 || true)
+        if echo "$GLIBC_TEST" | grep -qi "GLIBC.*not found"; then
+            echo ""
+            error "${GLIBC_TEST}
+
+Your system's GLIBC is too old for the prebuilt binary.
+Options:
+  1. Build from source:
+     curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sh -s -- --from-source
+  2. Upgrade your OS to Ubuntu 22.04+ or Debian 12+
+  3. Use Docker: docker run --rm ghcr.io/${REPO}:latest"
+        fi
+    fi
+}
+
+# Build from source fallback
+build_from_source() {
+    info "Building from source..."
+
+    if ! command -v cargo >/dev/null 2>&1; then
+        error "cargo not found. Install Rust: https://rustup.rs"
+    fi
+
+    info "Cloning repository..."
+    TEMP_DIR=$(mktemp -d)
+
+    git clone --depth 1 "https://github.com/${REPO}.git" "$TEMP_DIR" || error "Clone failed."
+
+    cd "$TEMP_DIR"
+    info "Building release binary (this may take a few minutes)..."
+
+    # Download ORT library for linking
+    ORT_VER="1.24.4"
+    ORT_PKG=""
+    case "$(uname -m)" in
+        x86_64|amd64)  ORT_PKG="onnxruntime-linux-x64-${ORT_VER}.tgz" ;;
+        arm64|aarch64) ORT_PKG="onnxruntime-linux-aarch64-${ORT_VER}.tgz" ;;
+        *)             error "Unsupported architecture for source build: $(uname -m)" ;;
+    esac
+    curl -sL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/${ORT_PKG}" | tar xz
+    mkdir -p ort-lib
+    find onnxruntime-*/lib -name 'libonnxruntime.so*' \( -type f -o -type l \) -exec cp -a {} ort-lib/ \;
+    export ORT_LIB_DIR=ort-lib
+
+    # Use trap to ensure cleanup even on build failure
+    trap 'cd /; rm -rf "$TEMP_DIR"' EXIT
+    cargo build --release -p uteke-cli -p uteke-server -p uteke-mcp || error "Build failed."
+
+    mkdir -p "$INSTALL_DIR"
+    cp target/release/${BINARY_NAME} "${INSTALL_DIR}/"
+    cp target/release/${SERVER_BINARY_NAME} "${INSTALL_DIR}/" 2>/dev/null || true
+    cp target/release/${MCP_BINARY_NAME} "${INSTALL_DIR}/" 2>/dev/null || true
+    chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
+
+    # Copy ORT .so next to binary
+    cp ort-lib/libonnxruntime.so* "${INSTALL_DIR}/" 2>/dev/null || true
+
+    # Cleanup handled by trap (set before cargo build)
+
+    info "✓ Installed from source to ${INSTALL_DIR}/${BINARY_NAME}"
 }
 
 # Verify installation
@@ -192,6 +255,16 @@ verify() {
 }
 
 main() {
+    # --from-source flag: skip binary download, compile directly
+    if [ "${1:-}" = "--from-source" ]; then
+        info "Installing ${BINARY_NAME} from source..."
+        build_from_source
+        verify
+        echo ""
+        info "Installation complete! Run '${BINARY_NAME} --help' to get started."
+        return
+    fi
+
     info "Installing ${BINARY_NAME}..."
 
     detect_os
@@ -210,4 +283,4 @@ main() {
     info "Installation complete! Run '${BINARY_NAME} --help' to get started."
 }
 
-main
+main "$@"
