@@ -200,9 +200,9 @@ pub(crate) fn run_import(
     };
 
     let result = match detected_format.as_str() {
-        "jsonl" => uteke
+        "jsonl" | "json" => uteke
             .import(&content, ns)
-            .map_err(|e| format!("Failed to import JSONL: {e}"))?,
+            .map_err(|e| format!("Failed to import JSON: {e}"))?,
         "markdown" | "text" => {
             let tag_refs: Vec<&str> = tags.iter().map(|s| s.as_str()).collect();
             import_text(uteke, &content, &tag_refs, ns)?
@@ -331,7 +331,7 @@ fn detect_format(filename: &str, content: &str) -> String {
     // Check file extension
     let ext = filename.rsplit('.').next().unwrap_or("");
     match ext {
-        "jsonl" => "jsonl".to_string(),
+        "jsonl" | "json" => "jsonl".to_string(),
         "md" | "markdown" => "markdown".to_string(),
         "txt" => "text".to_string(),
         "csv" => "text".to_string(), // treat CSV as text for now

@@ -31,28 +31,58 @@ impl crate::Uteke {
         Ok(lines.join("\n"))
     }
 
-    /// Import memories from JSONL format.
+    /// Import memories from JSONL or JSON array format.
     ///
-    /// Each line should be a valid JSON object with `content`, `tags`, `metadata`, `created_at`.
+    /// Accepts:
+    /// - JSONL: one JSON object per line (each must have `content`)
+    /// - JSON array: `[{"content":"..."}, ...]`
+    /// - Single JSON object: `{"content":"..."}`
+    ///
+    /// Required field: `content`. Optional fields default automatically.
     /// Embeddings are re-computed during import.
-    pub fn import(&self, jsonl: &str, namespace: Option<&str>) -> Result<ImportResult, Error> {
-        let mut imported = 0;
-        let mut skipped = 0;
+    pub fn import(&self, input: &str, namespace: Option<&str>) -> Result<ImportResult, Error> {
+        let trimmed = input.trim();
 
-        for line in jsonl.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
+        // Detect JSON array or single object (non-JSONL)
+        let (entries, mut skipped): (Vec<ExportEntry>, usize) = if trimmed.starts_with('[') {
+            // JSON array mode
+            match serde_json::from_str::<Vec<ExportEntry>>(trimmed) {
+                Ok(arr) => (arr, 0),
+                Err(e) => {
+                    return Err(Error::validation(format!("Invalid JSON array: {e}")));
+                }
             }
-
-            let entry: ExportEntry = match serde_json::from_str(line) {
-                Ok(e) => e,
-                Err(_) => {
-                    skipped += 1;
+        } else if trimmed.starts_with('{') {
+            // Single JSON object (single-line or pretty-printed)
+            match serde_json::from_str::<ExportEntry>(trimmed) {
+                Ok(entry) => (vec![entry], 0),
+                Err(e) => {
+                    return Err(Error::validation(format!("Invalid JSON object: {e}")));
+                }
+            }
+        } else {
+            // JSONL mode: parse line by line, track parse failures
+            let mut entries = Vec::new();
+            let mut failed = 0;
+            for line in input.lines() {
+                let line = line.trim();
+                if line.is_empty() {
                     continue;
                 }
-            };
+                match serde_json::from_str::<ExportEntry>(line) {
+                    Ok(e) => entries.push(e),
+                    Err(e) => {
+                        tracing::warn!("Skipping invalid JSONL line: {e}");
+                        failed += 1;
+                    }
+                }
+            }
+            (entries, failed)
+        };
 
+        let mut imported = 0;
+
+        for entry in entries {
             if entry.content.is_empty() {
                 skipped += 1;
                 continue;
