@@ -39,31 +39,26 @@ const MODEL_CHECKSUMS: &[(&str, &str)] = &[
 
 /// ONNX-based embedding engine using EmbeddingGemma Q4 (768d).
 ///
-/// Implements the [`Embedder`] trait. Tokenization and ONNX inference use
-/// **separate mutexes** so concurrent threads can tokenize in parallel
-/// (Phase 1) while only inference (Phase 2) is serialized on the session.
+/// Implements the [`Embedder`] trait. Uses **separate locks** for the
+/// tokenizer and ONNX session so tokenization (Phase 1) and inference
+/// (Phase 2) can proceed concurrently across threads.
 ///
 /// **Lazy loading** (#896): The ONNX session and tokenizer are NOT loaded in
-/// `new()`. They are loaded on the first `embed()` call via a
-/// `std::sync::OnceLock`, guaranteeing exactly one model load even under
-/// concurrent first calls. This allows `CachingEmbedder` to skip the ~2s
-/// model load entirely on cache hits.
+/// `new()`. They are loaded on the first `embed()` call via a double-check
+/// locking pattern with a dedicated `init_lock`, guaranteeing exactly one
+/// model load even under concurrent first calls. This allows
+/// `CachingEmbedder` to skip the ~2s model load entirely on cache hits.
 pub struct OnnxEmbedder {
-    /// Lazily-initialized ONNX session + tokenizer.
-    /// `Mutex<Option<LazyInner>>` — None until first successful `embed()`.
-    inner: Mutex<Option<LazyInner>>,
+    /// Lazily-initialized ONNX session.
+    /// `!Sync` — must be serialized via `session_lock` during inference.
+    session: Mutex<Option<ort::session::Session>>,
+    /// Lazily-initialized tokenizer.
+    /// Tokenization only needs `&self` on the tokenizer, so this lock is
+    /// held briefly during Phase 1 and does NOT conflict with inference.
+    tokenizer: Mutex<Option<tokenizers::Tokenizer>>,
     /// Serializes the one-time model load (double-check locking pattern).
     /// Prevents duplicate 188MB downloads under concurrent first calls.
     init_lock: Mutex<()>,
-    /// Serializes ONNX inference calls (session.run is !Sync).
-    /// Tokenization runs without this lock, enabling parallel Phase 1.
-    inference_lock: Mutex<()>,
-}
-
-/// Inner state for lazy initialization.
-struct LazyInner {
-    session: ort::session::Session,
-    tokenizer: tokenizers::Tokenizer,
 }
 
 impl OnnxEmbedder {
@@ -74,9 +69,9 @@ impl OnnxEmbedder {
     /// the model load entirely when serving from cache (#896).
     pub fn new() -> Result<Self, Error> {
         Ok(Self {
-            inner: Mutex::new(None),
+            session: Mutex::new(None),
+            tokenizer: Mutex::new(None),
             init_lock: Mutex::new(()),
-            inference_lock: Mutex::new(()),
         })
     }
 
@@ -86,17 +81,16 @@ impl OnnxEmbedder {
     /// 188MB downloads. Does NOT permanently cache failures: if `load_model()`
     /// returns an error, the next call will retry.
     fn lazy_load(&self) -> Result<(), Error> {
-        // Fast path: already initialized (acquire-release fence via Mutex)
+        // Fast path: already initialized (check session as sentinel)
         {
-            let inner = self
-                .inner
+            let session = self
+                .session
                 .lock()
-                .map_err(|_| Error::lock("ONNX embedder inner during lazy_load fast path"))?;
-            if inner.is_some() {
+                .map_err(|_| Error::lock("ONNX session during lazy_load fast path"))?;
+            if session.is_some() {
                 return Ok(());
             }
         }
-        // Lock dropped — other threads see inner == None and proceed.
 
         // Slow path: acquire init lock. This serializes the one-time load.
         let _init_guard = self
@@ -107,11 +101,11 @@ impl OnnxEmbedder {
         // Double-check after acquiring init_lock: another thread may have
         // completed the load while we were waiting.
         {
-            let inner = self
-                .inner
+            let session = self
+                .session
                 .lock()
-                .map_err(|_| Error::lock("ONNX embedder inner during lazy_load double-check"))?;
-            if inner.is_some() {
+                .map_err(|_| Error::lock("ONNX session during lazy_load double-check"))?;
+            if session.is_some() {
                 return Ok(());
             }
         }
@@ -120,15 +114,19 @@ impl OnnxEmbedder {
         // Note: we do NOT cache failures — transient errors should retry.
         let loaded = Self::load_model()?;
 
-        // Store the loaded model.
-        let mut inner = self
-            .inner
+        // Store the loaded model into separate mutexes.
+        {
+            let mut session = self
+                .session
+                .lock()
+                .map_err(|_| Error::lock("ONNX session during store"))?;
+            *session = Some(loaded.0);
+        }
+        let mut tokenizer = self
+            .tokenizer
             .lock()
-            .map_err(|_| Error::lock("ONNX embedder inner during store"))?;
-        *inner = Some(LazyInner {
-            session: loaded.0,
-            tokenizer: loaded.1,
-        });
+            .map_err(|_| Error::lock("ONNX tokenizer during store"))?;
+        *tokenizer = Some(loaded.1);
         Ok(())
     }
 
@@ -210,24 +208,23 @@ impl OnnxEmbedder {
     /// Embed a text string, returning a 768-dimensional f32 vector.
     ///
     /// Takes `&self` — the tokenizer mutex is locked internally.
-    /// Lazily loads the ONNX model on first call (#896).
     pub fn embed(&self, text: &str) -> Result<Vec<f32>, Error> {
         // Lazy-load model on first embed() call
         self.lazy_load()?;
 
-        // Phase 1: Tokenize + prepare tensors (holds inner lock briefly)
+        // Phase 1: Tokenize + prepare tensors
+        // Holds tokenizer_lock only — does NOT block inference (session_lock).
         let (input_ids_tensor, attention_mask_tensor) = {
-            let inner = self
-                .inner
-                .lock()
-                .map_err(|_| Error::lock("ONNX embedder inner during tokenize"))?;
-
-            let inner = inner
-                .as_ref()
-                .ok_or_else(|| Error::embed_msg("model not loaded after lazy_load"))?;
-
-            let encoding = inner
+            let tokenizer_guard = self
                 .tokenizer
+                .lock()
+                .map_err(|_| Error::lock("ONNX tokenizer during tokenize"))?;
+
+            let tokenizer = tokenizer_guard
+                .as_ref()
+                .ok_or_else(|| Error::embed_msg("tokenizer not loaded after lazy_load"))?;
+
+            let encoding = tokenizer
                 .encode(text, true)
                 .map_err(|e| Error::embed("tokenize text", e))?;
 
@@ -259,31 +256,26 @@ impl OnnxEmbedder {
 
             (input_ids_tensor, attention_mask_tensor)
         };
-        // inner lock dropped — other threads can tokenize while we run inference.
+        // tokenizer_lock dropped — other threads can tokenize while we run inference.
 
         // Phase 2: Run ONNX inference
-        // inference_lock serializes session.run() calls (session is !Sync).
-        // inner lock is held only to get &mut session, then dropped after run.
+        // Holds session_lock only — does NOT block tokenization (tokenizer_lock).
+        // session.run() is !Sync so this serializes inference calls, but
+        // tokenization in Phase 1 proceeds concurrently on other threads.
         // EmbeddingGemma has 2 outputs:
         //   output[0] = last_hidden_state (1, seq_len, 768)
         //   output[1] = sentence_embedding (1, 768) — already mean-pooled
         let embedding: Vec<f32> = {
-            let _inf_guard = self
-                .inference_lock
+            let mut session_guard = self
+                .session
                 .lock()
-                .map_err(|_| Error::lock("ONNX inference_lock"))?;
+                .map_err(|_| Error::lock("ONNX session during inference"))?;
 
-            let mut inner = self
-                .inner
-                .lock()
-                .map_err(|_| Error::lock("ONNX embedder inner during inference"))?;
-
-            let inner = inner
+            let session = session_guard
                 .as_mut()
                 .ok_or_else(|| Error::embed_msg("session not loaded after lazy_load"))?;
 
-            let outputs = inner
-                .session
+            let outputs = session
                 .run(ort::inputs![input_ids_tensor, attention_mask_tensor])
                 .map_err(|e| Error::embed("ONNX inference", e))?;
 
@@ -295,7 +287,7 @@ impl OnnxEmbedder {
 
             emb_view.1.to_vec()
         };
-        // All locks dropped — post-processing runs without any lock.
+        // session_lock dropped — post-processing runs without any lock.
 
         // L2 normalize
         let mut embedding = embedding;
