@@ -205,14 +205,17 @@ build_from_source() {
         arm64|aarch64) ORT_PKG="onnxruntime-linux-aarch64-${ORT_VER}.tgz" ;;
         *)             error "Unsupported architecture for source build: $(uname -m)" ;;
     esac
-    curl -sL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/${ORT_PKG}" | tar xz
+    info "Downloading ONNX Runtime ${ORT_VER}..."
+    curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/${ORT_PKG}" -o /tmp/ort-pkg.tgz || error "Failed to download ORT"
+    tar xzf /tmp/ort-pkg.tgz -C "$TEMP_DIR" || error "Failed to extract ORT"
+    rm -f /tmp/ort-pkg.tgz
     mkdir -p ort-lib
     find onnxruntime-*/lib -name 'libonnxruntime.so*' \( -type f -o -type l \) -exec cp -a {} ort-lib/ \;
     export ORT_LIB_DIR=ort-lib
 
-    # Use trap to ensure cleanup even on build failure
-    trap 'cd /; rm -rf "$TEMP_DIR"' EXIT
-    cargo build --release -p uteke-cli -p uteke-server -p uteke-mcp || error "Build failed."
+    cargo build --release -p uteke-cli -p uteke-server -p uteke-mcp || {
+        cd /; rm -rf "$TEMP_DIR"; error "Build failed."
+    }
 
     mkdir -p "$INSTALL_DIR"
     cp target/release/${BINARY_NAME} "${INSTALL_DIR}/"
@@ -220,10 +223,12 @@ build_from_source() {
     cp target/release/${MCP_BINARY_NAME} "${INSTALL_DIR}/" 2>/dev/null || true
     chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
 
-    # Copy ORT .so next to binary
+    # Copy ORT .so next to binary and set up loader path
     cp ort-lib/libonnxruntime.so* "${INSTALL_DIR}/" 2>/dev/null || true
 
-    # Cleanup handled by trap (set before cargo build)
+    # Cleanup
+    cd /
+    rm -rf "$TEMP_DIR"
 
     info "✓ Installed from source to ${INSTALL_DIR}/${BINARY_NAME}"
 }

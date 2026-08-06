@@ -127,11 +127,12 @@ install_uteke() {
     if echo "${installed_version}" | grep -qi "GLIBC.*not found"; then
         # GLIBC too old — binary downloaded but can't execute
         echo ""
-        error "${installed_version}\n\n\
-Your system's GLIBC is too old for the prebuilt binary.\n\
-Options:\n\
-  1. Build from source: curl -fsSL https://raw.githubusercontent.com/${REPO}/develop/scripts/install.sh | sh -s -- --from-source\n\
-  2. Upgrade your OS to Ubuntu 22.04+ or Debian 12+\n\
+        error "${installed_version}
+
+Your system's GLIBC is too old for the prebuilt binary.
+Options:
+  1. Build from source: curl -fsSL https://raw.githubusercontent.com/${REPO}/develop/scripts/install.sh | sh -s -- --from-source
+  2. Upgrade your OS to Ubuntu 22.04+ or Debian 12+
   3. Use Docker: docker run --rm ghcr.io/${REPO}:latest"
     fi
 
