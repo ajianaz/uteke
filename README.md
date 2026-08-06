@@ -118,15 +118,15 @@ Every AI tool forgets. Context windows fill up, sessions end, and your AI starts
 | **Your data** | ✅ Never leaves machine | ✅ Local-first | ⚠️ Sent to LLM cloud | ✅ Local (iii-engine) | ⚠️ Sent to LLM cloud | ⚠️ Sent to LLM cloud | ⚠️ Cloudflare-hosted | ✅ Local |
 | **License** | Apache 2.0 | MIT | Apache 2.0 | Apache 2.0 | Apache 2.0 | Apache 2.0 | MIT | MIT |
 
-> **Uteke vs Mnemosyne:** Both are local-first with semantic + FTS5 search. Mnemosyne is the closest competitor (~2.1K stars, Python). Uteke wins on **single binary** (no Python runtime), **native time-travel** (vs temporal triples), **rooms**, and **zero runtime dependencies**.
+> **Uteke vs Mnemosyne:** Both are local-first with semantic + FTS5 search. Mnemosyne is the closest competitor (~2.1K stars, Python). Uteke's edge: **single binary** (no Python runtime), **native time-travel** (vs temporal triples), **rooms**, and **zero runtime dependencies**.
 
-> **Uteke vs Engram:** Both are single-binary, offline, no-API-key tools — and both have MCP servers. But Engram is **FTS5-only** (keyword search). Uteke adds **vector semantic search + RRF fusion + rooms + time-travel + graph relationships + smart decay + document engine + batch import**. Same simplicity thesis, 10× the features.
+> **Uteke vs Engram:** Both are single-binary, offline, no-API-key tools, and both ship MCP servers. But Engram is **FTS5-only** (keyword search). Uteke adds **vector semantic search + RRF fusion + rooms + time-travel + graph relationships + smart decay + document engine + batch import**. Same simplicity thesis, more capabilities.
 
-> **Uteke vs Supermemory:** Supermemory (29K stars) now offers a local binary mode (`npx supermemory local`) with Ollama support — a big step toward offline-first. But it's still TypeScript/Node.js under the hood. Uteke is Rust: smaller footprint, faster startup, zero runtime. And Uteke has **hybrid search with FTS5** (Supermemory's local mode uses vector-only — no keyword fallback).
+> **Uteke vs Supermemory:** Supermemory (29K stars) now offers a local binary mode (`npx supermemory local`) with Ollama support, a solid step toward offline-first. But it's still TypeScript/Node.js under the hood. Uteke is Rust: smaller footprint, faster startup, zero runtime. And Uteke has **hybrid search with FTS5** (Supermemory's local mode uses vector-only, no keyword fallback).
 
-> **Uteke vs Mem0/Letta/Zep:** Those are powerful — but all require cloud LLM API keys and Docker infrastructure. Your data goes to OpenAI/Anthropic. Uteke runs fully offline with local ONNX embeddings. No Docker, no Python, no API keys.
+> **Uteke vs Mem0/Letta/Zep:** Those are powerful, but all require cloud LLM API keys and Docker infrastructure. Your data goes to OpenAI/Anthropic. Uteke runs fully offline with local ONNX embeddings. No Docker, no Python, no API keys.
 >
-> **Uteke vs AgentMemory:** AgentMemory (26K stars) is feature-rich with 54 MCP tools and multi-agent shared memory via local iii-engine. Uteke wins on **zero dependencies** (no npm, no iii-engine), **hybrid search** (AgentMemory lacks FTS5), and **time-travel queries**.
+> **Uteke vs AgentMemory:** AgentMemory (26K stars) has 54 MCP tools and multi-agent shared memory via local iii-engine. Uteke's edge: **zero dependencies** (no npm, no iii-engine), **hybrid search** (AgentMemory lacks FTS5), and **time-travel queries**.
 
 <details>
 <summary>📊 Benchmark numbers</summary>
@@ -291,25 +291,25 @@ Everything runs in-process. No network. No cloud. No server required (unless you
 <details>
 <summary><strong>How is Uteke different from Mem0 or Letta?</strong></summary>
 
-Mem0 and Letta are great — but they require cloud API keys (OpenAI/LLM) and external infrastructure (Docker, Postgres, Qdrant). Your data gets sent to a cloud LLM provider. Uteke is a single binary with zero API keys. All embeddings run locally via ONNX. Your data never leaves your machine. [See comparison table](#-why-uteke).
+Mem0 and Letta are solid tools, but they require cloud API keys (OpenAI/LLM) and external infrastructure (Docker, Postgres, Qdrant). Your data gets sent to a cloud LLM provider. Uteke is a single binary with zero API keys. All embeddings run locally via ONNX. Your data never leaves your machine. [See comparison table](#-why-uteke).
 </details>
 
 <details>
 <summary><strong>How is Uteke different from AgentMemory?</strong></summary>
 
-AgentMemory (26K stars) is a TypeScript/Node.js platform with 54 MCP tools, 12 auto-hooks, and multi-agent shared memory via local iii-engine. It's feature-rich — but requires npm, the iii-engine runtime, and LLM API keys for embeddings. Uteke is Rust, zero dependencies, and works fully offline with local ONNX embeddings. If you want maximum integrations and multi-agent shared state → AgentMemory. If you want privacy, speed, zero setup, and hybrid search → Uteke.
+AgentMemory (26K stars) is a TypeScript/Node.js platform with 54 MCP tools, 12 auto-hooks, and multi-agent shared memory via local iii-engine. It's packed with integrations, but requires npm, the iii-engine runtime, and LLM API keys for embeddings. Uteke is Rust, zero dependencies, and works fully offline with local ONNX embeddings. If you want maximum integrations and multi-agent shared state → AgentMemory. If you want privacy, speed, zero setup, and hybrid search → Uteke.
 </details>
 
 <details>
 <summary><strong>How is Uteke different from Engram?</strong></summary>
 
-Engram (5.8K stars, Go) shares our philosophy: single binary, zero deps, MCP server, local-first. The key difference is **search**: Engram uses **FTS5 only** (keyword matching). Uteke uses **hybrid search** (HNSW vector similarity + FTS5 + Reciprocal Rank Fusion) — meaning you can search by *meaning*, not just exact words. Uteke also adds rooms, time-travel, graph relationships, smart decay, document engine, and batch import.
+Engram (5.8K stars, Go) shares our philosophy: single binary, zero deps, MCP server, local-first. The key difference is **search**: Engram uses **FTS5 only** (keyword matching). Uteke uses **hybrid search** (HNSW vector similarity + FTS5 + Reciprocal Rank Fusion), meaning you can search by *meaning*, not just exact words. Uteke also adds rooms, time-travel, graph relationships, smart decay, document engine, and batch import.
 </details>
 
 <details>
 <summary><strong>How is Uteke different from Supermemory?</strong></summary>
 
-Supermemory (28K stars, TypeScript) markets itself as local-first but requires Cloudflare Workers + Postgres to run. It is a web platform, not a single binary. Uteke is one binary with zero infrastructure: no Workers, no Postgres, no Cloudflare account. Uteke also adds rooms for multi-agent collaboration, time-travel queries, and hybrid search (vector + FTS5 + RRF fusion).
+Supermemory (29K stars, TypeScript) now offers a local binary mode (`npx supermemory local`) with Ollama support. The cloud version still needs Cloudflare Workers + Postgres. Uteke is one binary with zero infrastructure: no Workers, no Postgres, no Cloudflare account. Uteke also adds rooms for multi-agent collaboration, time-travel queries, and hybrid search (vector + FTS5 + RRF fusion).
 </details>
 
 <details>
