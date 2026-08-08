@@ -514,8 +514,10 @@ impl crate::Uteke {
         );
 
         // Phase 2: Auto-prune expired deprecated memories.
-        // When soft_delete_only is true, skip hard delete entirely.
-        let (pruned, pruned_ids) = if cfg.auto_prune_enabled && !cfg.soft_delete_only {
+        // soft_delete_only only restricts forget() from hard-deleting active memories.
+        // Prune operates on already-deprecated memories past their TTL, which is the
+        // intended hard-delete path regardless of soft_delete_only.
+        let (pruned, pruned_ids) = if cfg.auto_prune_enabled {
             let expired = self
                 .store
                 .find_deprecated_for_prune(cfg.deprecated_ttl_days, namespace)?;
