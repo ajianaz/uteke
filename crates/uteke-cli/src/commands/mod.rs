@@ -7,6 +7,7 @@ mod dream;
 mod edges;
 mod forget;
 pub(crate) mod graph;
+mod lifecycle;
 mod list;
 mod maintenance;
 mod namespace;
@@ -181,6 +182,8 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
         Commands::Consolidate { threshold, dry_run } => {
             maintenance::run_consolidate(cli, uteke, ns, *threshold, *dry_run)
         }
+
+        Commands::Lifecycle { command } => lifecycle::run(cli, uteke, ns, command),
 
         Commands::Export { output } => maintenance::run_export(cli, uteke, ns, output),
 

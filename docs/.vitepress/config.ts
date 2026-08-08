@@ -29,6 +29,7 @@ export default createConfig({
         { text: 'Time-Travel', link: '/time-travel' },
         { text: 'Multi-Agent', link: '/multi-agent' },
         { text: 'Smart Decay', link: '/smart-decay' },
+        { text: 'Memory Lifecycle', link: '/memory-lifecycle' },
         { text: 'Relationship Graph', link: '/relationship-graph' },
         { text: 'Benchmarks', link: '/benchmarks' },
         { text: 'Shell Hooks', link: '/shell-hooks' },

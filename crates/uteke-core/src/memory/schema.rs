@@ -57,6 +57,12 @@ impl super::Store {
                 .execute_batch("ALTER TABLE memories ADD COLUMN valid_until TEXT;")
                 .map_err(|e| Error::db("database operation", e))?;
         }
+        // Migration: add deprecate_reason column (#929)
+        if !self.column_exists("deprecate_reason") {
+            self.conn
+                .execute_batch("ALTER TABLE memories ADD COLUMN deprecate_reason TEXT;")
+                .map_err(|e| Error::db("database operation", e))?;
+        }
         if !self.column_exists("memory_type") {
             self.conn
                 .execute_batch(

@@ -4,7 +4,7 @@ title: CLI Reference
 
 # CLI Reference
 
-Complete reference for all uteke commands. Version **0.12.0**.
+Complete reference for all uteke commands. Version **0.13.0**.
 
 ## Global Flags
 
@@ -228,6 +228,39 @@ uteke prune --ttl 30 --dry-run
 # Prune deprecated/expired memories
 uteke prune --ttl 30
 ```
+
+## uteke lifecycle
+
+Safe memory lifecycle management: deprecate, promote, and inspect lifecycle status.
+
+```bash
+# Show lifecycle status (active vs deprecated counts + config)
+uteke lifecycle status
+
+# Scoped to a namespace
+uteke lifecycle status --namespace my-agent
+
+# Run a lifecycle cycle (deprecate aged + prune expired)
+uteke lifecycle cycle
+
+# Scoped cycle
+uteke lifecycle cycle --namespace my-agent
+
+# Promote a deprecated memory back to active
+uteke lifecycle promote <memory-id>
+
+# Restore is an alias for promote
+uteke lifecycle restore <memory-id>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `status` | Show active/deprecated counts and lifecycle config |
+| `cycle` | Run lifecycle cycle (deprecate aged memories + prune expired) |
+| `promote <id>` | Restore a deprecated memory to active status |
+| `restore <id>` | Alias for `promote` |
+
+See [Configuration → Memory Lifecycle](/configuration#memory-lifecycle) for lifecycle config options.
 
 ## uteke namespace
 

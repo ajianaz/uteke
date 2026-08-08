@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="docs/assets/uteke-banner.png" alt="Uteke — Give your AI a memory" width="640" />
+  <img src="docs/assets/uteke-banner.png" alt="Uteke: Give your AI a memory" width="640" />
 </p>
 
 <h1 align="center">Uteke</h1>
 <p align="center"><strong>Give your AI a memory that never leaves your machine.</strong></p>
 <p align="center">
-  Your AI forgets everything between sessions. Uteke fixes that — one binary, fully offline, ~45ms recall.
+  Local-first by default. One binary, fully offline, ~45ms recall. Want cloud or team deployments? Docker ready.
 </p>
 
 <p align="center">
@@ -33,13 +33,17 @@ curl -sSL codecora.dev/install | sh
 # Store a memory
 uteke remember "Deploy v2.1 to staging at 3pm"
 
-# Search it back — by meaning, not just keywords
+# Search it back: by meaning, not just keywords
 uteke recall "when do we deploy?"
 ```
 
-**That's it.** No API keys. No Docker. No Python. No cloud.
+**That's it.** No API keys, no Python, no cloud required. First run downloads the embedding model (~188MB, one-time) and you're running.
 
-First run downloads the embedding model (~188MB, one-time) and you're running.
+> **Want Docker or server mode?** Uteke ships as a single binary by default, but Docker is ready when you need it:
+> ```bash
+> docker run -d -p 127.0.0.1:8767:8767 -v uteke-data:/data ghcr.io/codecoradev/uteke:latest
+> ```
+> 📖 [Docker docs](docs/docker.md)
 
 Want richer memories? Add metadata:
 
@@ -69,7 +73,7 @@ uteke remember "Deploy v2.1 to staging" \
 ## 🚀 Onboarding (New users & AI agents)
 
 > **Are you an AI agent reading this?** Your user just shared this repo link with you.
-> Run `uteke onboard` to interactively configure uteke for your environment — it will
+> Run `uteke onboard` to interactively configure uteke for your environment. It will
 > detect your install, ask which agent you are, toggle features, write config, and
 > show you every command available. If non-interactive: `uteke onboard --yes --agent <your-agent>`.
 
@@ -82,7 +86,7 @@ uteke onboard
 The wizard will:
 1. **Detect** if uteke is installed and if a store exists
 2. **Ask** which AI agent you use (Hermes, Claude, Cursor, Pi, OpenCode)
-3. **Pick** integration mode — manual tool calls vs automatic memory-provider
+3. **Pick** integration mode: manual tool calls vs automatic memory-provider
 4. **Toggle** features on/off (Aging, Auto-maintenance, Graph rerank, Salience/Recency boost, Server mode)
 5. **Write** `~/.codecora/uteke/uteke.toml` with your selections
 6. **Install** agent integration files automatically (`uteke init`)
@@ -102,9 +106,9 @@ uteke onboard --yes --agent hermes --namespace default
 
 You just spent 2 hours explaining your codebase to ChatGPT. Next session? Blank slate. Again.
 
-Every AI tool forgets. Context windows fill up, sessions end, and your AI starts over every single time. Uteke gives it persistent memory — and keeps it on your machine.
+Every AI tool forgets. Context windows fill up, sessions end, and your AI starts over every single time. Uteke gives it persistent memory and keeps it on your machine.
 
-| | **Uteke** | **Mnemosyne** | **Mem0** | **AgentMemory** | **Letta** | **Zep** | **Supermemory** | **Engram** |
+| | **Uteke** | **Tool A** | **Tool B** | **Tool C** | **Tool D** | **Tool E** | **Tool F** | **Tool G** |
 |---|---|---|---|---|---|---|---|---|
 | **Language** | Rust (single binary) | Python (pip) | Python | TypeScript | TypeScript | Python | TypeScript | Go (single binary) |
 | **Setup** | One binary (`curl \| sh`) | pip install + venv | pip + Docker + Qdrant | npm + iii-engine | npm (Node.js) | pip + Docker + Neo4j | Cloud or local binary | One binary |
@@ -118,15 +122,17 @@ Every AI tool forgets. Context windows fill up, sessions end, and your AI starts
 | **Your data** | ✅ Never leaves machine | ✅ Local-first | ⚠️ Sent to LLM cloud | ✅ Local (iii-engine) | ⚠️ Sent to LLM cloud | ⚠️ Sent to LLM cloud | ⚠️ Cloudflare-hosted | ✅ Local |
 | **License** | Apache 2.0 | MIT | Apache 2.0 | Apache 2.0 | Apache 2.0 | Apache 2.0 | MIT | MIT |
 
-> **Uteke vs Mnemosyne:** Both are local-first with semantic + FTS5 search. Mnemosyne is the closest competitor (~2.1K stars, Python). Uteke's edge: **single binary** (no Python runtime), **native time-travel** (vs temporal triples), **rooms**, and **zero runtime dependencies**.
+> **Note:** Tool labels (A–G) represent common categories of AI memory layers available as of August 2026. Capabilities are assessed from public documentation and may change. This table is a starting point for your own evaluation, not a definitive ranking.
 
-> **Uteke vs Engram:** Both are single-binary, offline, no-API-key tools, and both ship MCP servers. But Engram is **FTS5-only** (keyword search). Uteke adds **vector semantic search + RRF fusion + rooms + time-travel + graph relationships + smart decay + document engine + batch import**. Same simplicity thesis, more capabilities.
+> **Uteke vs Tool A (Python local-first):** Both offer local-first with semantic + FTS5 search. Uteke's edge: **single binary** (no Python runtime), **native time-travel** (vs temporal triples), **rooms**, and **zero runtime dependencies**.
 
-> **Uteke vs Supermemory:** Supermemory (29K stars) now offers a local binary mode (`npx supermemory local`) with Ollama support, a solid step toward offline-first. But it's still TypeScript/Node.js under the hood. Uteke is Rust: smaller footprint, faster startup, zero runtime. And Uteke has **hybrid search with FTS5** (Supermemory's local mode uses vector-only, no keyword fallback).
+> **Uteke vs Tool G (Go single binary):** Both are single-binary, offline, no-API-key, and both ship MCP servers. Tool G is **FTS5-only** (keyword search). Uteke adds **vector semantic search + RRF fusion + rooms + time-travel + graph relationships + smart decay + document engine + batch import**. Same simplicity thesis, more capabilities.
 
-> **Uteke vs Mem0/Letta/Zep:** Those are powerful, but all require cloud LLM API keys and Docker infrastructure. Your data goes to OpenAI/Anthropic. Uteke runs fully offline with local ONNX embeddings. No Docker, no Python, no API keys.
+> **Uteke vs Tool F (TypeScript local mode):** Tool F now offers a local binary mode with Ollama support, a solid step toward offline-first. But it's still TypeScript/Node.js under the hood. Uteke is Rust: smaller footprint, faster startup, zero runtime. And Uteke has **hybrid search with FTS5** (Tool F's local mode uses vector-only, no keyword fallback).
+
+> **Uteke vs Tools B/D/E:** Those are powerful, but all require cloud LLM API keys and Docker infrastructure. Your data goes to external LLM providers. Uteke runs fully offline with local ONNX embeddings. No Docker, no Python, no API keys.
 >
-> **Uteke vs AgentMemory:** AgentMemory (26K stars) has 54 MCP tools and multi-agent shared memory via local iii-engine. Uteke's edge: **zero dependencies** (no npm, no iii-engine), **hybrid search** (AgentMemory lacks FTS5), and **time-travel queries**.
+> **Uteke vs Tool C:** Tool C has 54 MCP tools and multi-agent shared memory via a local engine. Uteke's edge: **zero dependencies** (no npm, no extra engine), **hybrid search** (Tool C lacks FTS5), and **time-travel queries**.
 
 <details>
 <summary>📊 Benchmark numbers</summary>
@@ -143,26 +149,26 @@ Full benchmarks: `uteke bench --counts 100,1000,10000 --json` · [Benchmark deta
 </details>
 
 <p align="center">
-  <img src="docs/assets/uteke-comparison.png" alt="Uteke vs cloud alternatives" width="640" />
+  <img src="docs/assets/uteke-comparison.png" alt="Uteke compared to other memory tools" width="640" />
 </p>
 
 ---
 
 ## 💡 What Can You Do With Uteke?
 
-**🤖 Building AI agents?** Give them persistent memory without cloud dependencies. Your agent remembers user preferences, past decisions, and context — across sessions, fully offline.
+**🤖 Building AI agents?** Give them persistent memory without cloud dependencies. Your agent remembers user preferences, past decisions, and context across sessions, fully offline.
 
-**👥 Working in a team?** Use [Rooms](docs/getting-started.md) to share knowledge. Meeting notes, project decisions, architecture choices — searchable by everyone, attributed by author.
+**👥 Working in a team?** Use [Rooms](docs/getting-started.md) to share knowledge. Meeting notes, project decisions, architecture choices: searchable by everyone, attributed by author.
 
-**🔒 Building for privacy-sensitive domains?** Healthcare, finance, legal — data stays on your machine. No API calls, no telemetry, no cloud. Local embeddings (ONNX, 768d).
+**🔒 Building for privacy-sensitive domains?** Healthcare, finance, legal: data stays on your machine. No API calls, no telemetry, no cloud. Local embeddings (ONNX, 768d).
 
 **⌨️ Power user who lives in the terminal?** Uteke is your personal knowledge graph. Remember anything, recall by meaning, link related thoughts. All from the command line.
 
 ---
 
-## 🏠 Rooms — Multi-Agent Shared Memory
+## 🏠 Rooms: Multi-Agent Shared Memory
 
-Other memory layers are single-player — every fact stored under a flat `user_id`, invisible to other agents. **Uteke Rooms** let multiple AI agents share a memory space with full author attribution.
+Other memory layers are single-player: every fact stored under a flat `user_id`, invisible to other agents. **Uteke Rooms** let multiple AI agents share a memory space with full author attribution.
 
 ```bash
 # Create a shared room
@@ -224,7 +230,7 @@ uteke recall "caching decision" --room engineering
 | Feature | What it does |
 |---------|-------------|
 | 🔌 **MCP Server** | JSON-RPC over stdio + Streamable HTTP. Works with Claude Code, Cursor, Hermes. |
-| 🖥️ **Server Mode** | Persistent daemon — eliminates cold-start embedding load on every call. |
+| 🖥️ **Server Mode** | Persistent daemon: eliminates cold-start embedding load on every call. |
 | 📂 **Batch Import** | Import entire directories with auto-strategy routing (document vs. memory extraction). |
 | 📝 **Document Engine** | Wiki/knowledge base with `uteke doc create/get/list` and auto-chunking. |
 | 📥 **Import/Export** | JSONL-based backup and restore. |
@@ -234,7 +240,8 @@ uteke recall "caching decision" --room engineering
 
 | Feature | What it does |
 |---------|-------------|
-| 📦 **Single Binary** | Zero dependencies. No Docker needed, no database server, no Python, no API keys. |
+| 📦 **Single Binary** | Zero dependencies. No Python, no API keys. Local-first by default. |
+| 🐳 **Docker Ready** | Official image on GHCR. Run as a shared service for teams or cloud deployments. |
 | 🔒 **Fully Offline** | Local ONNX embeddings (EmbeddingGemma Q4, 768d). No telemetry, no cloud. |
 | ⚡ **Recall Cache** | LRU cache eliminates redundant embedding for repeated queries. |
 | 🔥 **Tiered Memory** | Hot/Warm/Cold tracking with auto-cleanup of stale memories. |
@@ -243,7 +250,7 @@ uteke recall "caching decision" --room engineering
 | 📊 **Benchmarks** | Built-in `uteke bench` for perf testing. [See results](docs/BENCHMARKS.md). |
 
 <details>
-<summary>🔌 MCP Server config — connect to Claude Code, Cursor, Hermes</summary>
+<summary>🔌 MCP Server config: connect to Claude Code, Cursor, Hermes</summary>
 
 ```jsonc
 // .mcp.json (Claude Code, Cursor)
@@ -254,6 +261,44 @@ For Claude Desktop, Hermes, and HTTP transport, see [MCP docs](docs/mcp.md).
 </details>
 
 📖 [Full documentation](docs/getting-started.md) · [CLI reference](docs/cli-reference.md) · [Configuration](docs/configuration.md)
+
+---
+
+## 📦 Deployment Modes
+
+Uteke runs the same everywhere. Pick the mode that fits your setup.
+
+### Local-first (default)
+
+Single binary, zero infrastructure. Everything runs in-process on your machine:
+
+```bash
+curl -sSL codecora.dev/install | sh
+uteke remember "first memory"
+```
+
+No Docker, no Python, no database server. Your data stays in `~/.codecora/uteke/`. This is what most users need.
+
+### Docker / Server mode
+
+Running Uteke as a shared service for a team, or deploying to a server? Docker keeps it simple:
+
+```bash
+docker run -d \
+  -p 127.0.0.1:8767:8767 \
+  -v uteke-data:/data \
+  ghcr.io/codecoradev/uteke:latest
+```
+
+Prefer the binary directly? Run it as a daemon:
+
+```bash
+uteke serve --host 0.0.0.0 --port 8767
+```
+
+Both expose the same HTTP API. Other agents and tools connect via `http://your-host:8767`. Rooms work across agents whether they're on the same machine or connecting remotely.
+
+📖 **[Docker setup guide](docs/docker.md)** · [Server mode docs](docs/configuration.md#server-mode)
 
 ---
 
@@ -274,9 +319,9 @@ graph LR
 ```
 
 **How hybrid search works:**
-1. **HNSW** (usearch) — finds by meaning ("deploy" matches "rollout")
-2. **FTS5** (SQLite) — finds by exact terms ("deploy" matches "deploy")
-3. **RRF** (k=60) — merges both ranked lists → best of both worlds
+1. **HNSW** (usearch): finds by meaning ("deploy" matches "rollout")
+2. **FTS5** (SQLite): finds by exact terms ("deploy" matches "deploy")
+3. **RRF** (k=60): merges both ranked lists → best of both worlds
 
 Everything runs in-process. No network. No cloud. No server required (unless you want server mode).
 
@@ -289,27 +334,27 @@ Everything runs in-process. No network. No cloud. No server required (unless you
 ## ❓ FAQ
 
 <details>
-<summary><strong>How is Uteke different from Mem0 or Letta?</strong></summary>
+<summary><strong>How is Uteke different from cloud-dependent memory tools?</strong></summary>
 
-Mem0 and Letta are solid tools, but they require cloud API keys (OpenAI/LLM) and external infrastructure (Docker, Postgres, Qdrant). Your data gets sent to a cloud LLM provider. Uteke is a single binary with zero API keys. All embeddings run locally via ONNX. Your data never leaves your machine. [See comparison table](#-why-uteke).
+Many memory layers (Python-based or TypeScript-based) require cloud API keys (OpenAI/LLM) and external infrastructure (Docker, Postgres, Qdrant). Your data gets sent to a cloud LLM provider. Uteke is a single binary with zero API keys. All embeddings run locally via ONNX. Your data never leaves your machine. [See comparison table](#-why-uteke).
 </details>
 
 <details>
-<summary><strong>How is Uteke different from AgentMemory?</strong></summary>
+<summary><strong>How is Uteke different from multi-tool MCP platforms?</strong></summary>
 
-AgentMemory (26K stars) is a TypeScript/Node.js platform with 54 MCP tools, 12 auto-hooks, and multi-agent shared memory via local iii-engine. It's packed with integrations, but requires npm, the iii-engine runtime, and LLM API keys for embeddings. Uteke is Rust, zero dependencies, and works fully offline with local ONNX embeddings. If you want maximum integrations and multi-agent shared state → AgentMemory. If you want privacy, speed, zero setup, and hybrid search → Uteke.
+Some platforms offer dozens of MCP tools and multi-agent shared memory via a local engine. They're packed with integrations, but require npm, a separate runtime, and LLM API keys for embeddings. Uteke is Rust, zero dependencies, and works fully offline with local ONNX embeddings. If you want maximum integrations → those platforms. If you want privacy, speed, zero setup, and hybrid search → Uteke.
 </details>
 
 <details>
-<summary><strong>How is Uteke different from Engram?</strong></summary>
+<summary><strong>How is Uteke different from other single-binary memory tools?</strong></summary>
 
-Engram (5.8K stars, Go) shares our philosophy: single binary, zero deps, MCP server, local-first. The key difference is **search**: Engram uses **FTS5 only** (keyword matching). Uteke uses **hybrid search** (HNSW vector similarity + FTS5 + Reciprocal Rank Fusion), meaning you can search by *meaning*, not just exact words. Uteke also adds rooms, time-travel, graph relationships, smart decay, document engine, and batch import.
+Some single-binary tools share our philosophy: one binary, zero deps, MCP server, local-first. The key difference is **search**: most are **FTS5-only** (keyword matching). Uteke uses **hybrid search** (HNSW vector similarity + FTS5 + Reciprocal Rank Fusion), meaning you can search by *meaning*, not just exact words. Uteke also adds rooms, time-travel, graph relationships, smart decay, document engine, and batch import.
 </details>
 
 <details>
-<summary><strong>How is Uteke different from Supermemory?</strong></summary>
+<summary><strong>How is Uteke different from local-mode cloud tools?</strong></summary>
 
-Supermemory (29K stars, TypeScript) now offers a local binary mode (`npx supermemory local`) with Ollama support. The cloud version still needs Cloudflare Workers + Postgres. Uteke is one binary with zero infrastructure: no Workers, no Postgres, no Cloudflare account. Uteke also adds rooms for multi-agent collaboration, time-travel queries, and hybrid search (vector + FTS5 + RRF fusion).
+Some cloud-native tools now offer a local binary mode with Ollama support. Their cloud version still needs managed infrastructure (Workers, Postgres, etc.). Uteke is one binary with zero infrastructure: no Workers, no Postgres, no cloud account. Uteke also adds rooms for multi-agent collaboration, time-travel queries, and hybrid search (vector + FTS5 + RRF fusion).
 </details>
 
 <details>
@@ -321,7 +366,7 @@ Anything text-based: decisions, meeting notes, code snippets, project context, p
 <details>
 <summary><strong>Does it really work offline?</strong></summary>
 
-Yes. The embedding model (EmbeddingGemma Q4, 768d) downloads once (~188MB) on first run. After that, zero network calls. No telemetry. If the local model fails, Uteke degrades gracefully to a no-op embedder — it never crashes and never calls a cloud API.
+Yes. The embedding model (EmbeddingGemma Q4, 768d) downloads once (~188MB) on first run. After that, zero network calls. No telemetry. If the local model fails, Uteke degrades gracefully to a no-op embedder. It never crashes and never calls a cloud API.
 </details>
 
 <details>
@@ -339,7 +384,7 @@ Yes. Uteke ships with an MCP server that works with Claude Code, Cursor, and Her
 <details>
 <summary><strong>Is it production-ready?</strong></summary>
 
-Uteke is at v0.12.0 with 432 tests, CI/CD on every commit, and benchmark harness. It's used in production by the CodeCora team and other early adopters. Still in 0.x — expect rough edges, but the core is stable.
+Uteke is at v0.13.0 with 460+ tests, CI/CD on every commit, and benchmark harness. It's used in production by the CodeCora team and other early adopters. Still in 0.x, so expect rough edges, but the core is stable.
 </details>
 
 ---
@@ -348,7 +393,7 @@ Uteke is at v0.12.0 with 432 tests, CI/CD on every commit, and benchmark harness
 
 ```bash
 cargo build --workspace        # Build
-cargo test --workspace         # Test (431 tests)
+cargo test --workspace         # Test (460+ tests)
 cargo clippy -- -D warnings    # Lint
 cargo fmt                      # Format
 ```
@@ -359,7 +404,7 @@ Contributions welcome! Read [CONTRIBUTING.md](CONTRIBUTING.md) for the full guid
 
 ## 📄 License
 
-[Apache License 2.0](LICENSE) — use it, fork it, ship it.
+[Apache License 2.0](LICENSE). Use it, fork it, ship it.
 
 ---
 
@@ -372,7 +417,7 @@ Contributions welcome! Read [CONTRIBUTING.md](CONTRIBUTING.md) for the full guid
 ---
 
 <p align="center">
-  <strong>Found this useful?</strong> ⭐ Star this repo — it helps others discover Uteke.
+  <strong>Found this useful?</strong> ⭐ Star this repo. It helps others discover Uteke.
 </p>
 <p align="center">
   <a href="https://github.com/codecoradev/uteke/stargazers">
