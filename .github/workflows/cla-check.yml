@@ -14,8 +14,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Fetch CLA signatures
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          curl -sfL "https://raw.githubusercontent.com/codecoradev/.github/main/.cla/signatures.json" -o signatures.json \
+          # Use GitHub API (more reliable than raw CDN)
+          gh api repos/codecoradev/.github/contents/.cla/signatures.json --jq '.content' \
+            | base64 -d > signatures.json 2>/dev/null \
+            || echo '{"signatures":[]}' > signatures.json
+          # Validate JSON
+          python3 -c "import json; json.load(open('signatures.json'))" 2>/dev/null \
             || echo '{"signatures":[]}' > signatures.json
 
       - name: Check CLA signature
