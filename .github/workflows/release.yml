@@ -234,12 +234,17 @@ jobs:
           echo "=== GLIBC version requirement ==="
           objdump -T "$BIN_DIR/uteke" | grep -oP 'GLIBC_[\d.]+' | sort -V -u
           echo ""
-          # Use sort -V for proper version comparison (handles 2.100 > 2.99)
+          # Extract highest GLIBC version requirement
           MAX_GLIBC=$(objdump -T "$BIN_DIR/uteke" | grep -oP 'GLIBC_[\d.]+' | sort -V -u | tail -1)
           FLOOR="GLIBC_2.17"
-          echo "Highest GLIBC requirement: $MAX_GLIBC"
+          echo "Highest GLIBC requirement: ${MAX_GLIBC:-<none>}"
           echo "Floor:                     $FLOOR"
-          # If MAX_GLIBC sorts after FLOOR, binary needs newer GLIBC
+          # Guard against empty result (objdump failure, corrupt binary, static link)
+          if [ -z "$MAX_GLIBC" ]; then
+            echo "::error::No GLIBC symbols found. Binary may be statically linked or objdump failed."
+            exit 1
+          fi
+          # Use sort -V for proper version comparison (handles 2.100 > 2.99)
           if [[ "$(echo -e "$MAX_GLIBC\n$FLOOR" | sort -V | tail -1)" != "$FLOOR" ]]; then
             echo "::error::Binary requires $MAX_GLIBC > $FLOOR. zigbuild target not working."
             exit 1
