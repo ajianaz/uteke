@@ -22,6 +22,7 @@ mod import_export;
 mod jaccard;
 mod maintenance;
 pub mod memory;
+pub mod offline_extraction;
 mod operations;
 mod orphans;
 mod recall_cache;
@@ -63,7 +64,9 @@ pub use embed::Embedder;
 #[cfg(feature = "onnx")]
 pub use embed::OnnxEmbedder;
 pub use error::{Error, format_bytes};
-pub use types::{DoctorCheck, DoctorReport, DoctorStatus, RepairReport, VerifyReport};
+pub use types::{
+    DoctorCheck, DoctorReport, DoctorStatus, ReembedReport, RepairReport, VerifyReport,
+};
 
 /// Maximum memory content length (characters) — default, overridable via config (#404).
 pub const MAX_CONTENT_LENGTH: usize = 100_000;
@@ -206,6 +209,124 @@ impl Default for DreamConfig {
             dedup_threshold: 0.92,
             orphan_importance_threshold: 0.15,
         }
+    }
+}
+
+/// Memory lifecycle configuration (#928).
+///
+/// Controls how memories transition through their lifecycle:
+/// `ACTIVE → DEPRECATED (hidden, restorable) → PRUNED (hard delete)`.
+///
+/// All destructive operations (aging_cleanup, dream dedup/compact,
+/// consolidate, CRUD delete) route through soft-delete (`deprecate`)
+/// when `soft_delete_only` is `true` (the default). Hard delete is
+/// reserved for `prune()` after the TTL expires and explicit `forget()`.
+///
+/// ## Defaults (conservative)
+///
+/// ```toml
+/// [lifecycle]
+/// soft_delete_only = true           # route destructive ops through deprecate
+/// auto_aging_interval_hours = 168   # weekly
+/// min_age_days = 90                 # don't touch memories < 90 days old
+/// max_access_count = 3              # only deprecate rarely-accessed
+/// max_deprecate_percent = 1.0       # max 1% of total per cycle
+/// min_deprecate_per_cycle = 1       # always allow at least 1
+/// max_deprecate_per_cycle = 50      # hard ceiling
+/// deprecated_ttl_days = 30         # deprecated → prune after 30 days
+/// auto_prune_enabled = true         # auto-prune expired deprecated
+/// dream_dedup_soft_delete = true    # dream dedup → deprecate, not delete
+/// dream_compact_soft_delete = true  # dream compact → deprecate, not delete
+/// ```
+#[derive(Clone, Copy, Debug)]
+pub struct LifecycleConfig {
+    /// When `true`, all destructive operations route through `deprecate()`
+    /// instead of `delete()`. Set to `false` to restore pre-v0.13 hard-delete
+    /// behavior (not recommended).
+    pub soft_delete_only: bool,
+
+    /// When `true`, automatic lifecycle cycles run at the configured interval.
+    /// Default: true. Set to `false` to disable background lifecycle cycles
+    /// (memories will still be preserved — just no auto-deprecation/pruning).
+    pub auto_aging_enabled: bool,
+
+    /// Interval in hours between automatic lifecycle cycles.
+    /// Default: 168 (weekly). Only effective in server mode.
+    pub auto_aging_interval_hours: u64,
+
+    /// Minimum age in days before a memory is eligible for deprecation.
+    /// Memories younger than this are always preserved. Default: 90.
+    pub min_age_days: u32,
+
+    /// Maximum access count for a memory to be considered "cold".
+    /// Memories accessed more than this are preserved. Default: 3.
+    pub max_access_count: u32,
+
+    /// Maximum percentage of total memories that can be deprecated in
+    /// a single cycle. E.g. 1.0 = at most 1% of 1000 = 10 memories.
+    /// Default: 1.0 (conservative).
+    pub max_deprecate_percent: f64,
+
+    /// Minimum number of memories to deprecate per cycle, even if the
+    /// percentage cap would result in 0. Default: 1. Set to 0 to allow
+    /// zero-deprecation cycles.
+    pub min_deprecate_per_cycle: usize,
+
+    /// Hard ceiling on deprecations per cycle, regardless of percentage.
+    /// Prevents mass-deprecation on very large stores. Default: 50.
+    pub max_deprecate_per_cycle: usize,
+
+    /// Days after deprecation before a memory is eligible for pruning
+    /// (hard delete). This is the "review window" — deprecated memories
+    /// can be promoted back to active during this period.
+    /// Default: 30.
+    pub deprecated_ttl_days: u32,
+
+    /// When `true`, expired deprecated memories are automatically pruned
+    /// during lifecycle cycles. Default: true.
+    pub auto_prune_enabled: bool,
+
+    /// When `true`, dream dedup phase uses soft-delete instead of hard-delete.
+    /// Default: true.
+    pub dream_dedup_soft_delete: bool,
+
+    /// when `true`, dream compact phase uses soft-delete instead of hard-delete.
+    /// Default: true.
+    pub dream_compact_soft_delete: bool,
+}
+
+impl Default for LifecycleConfig {
+    fn default() -> Self {
+        Self {
+            soft_delete_only: true,
+            auto_aging_enabled: true,
+            auto_aging_interval_hours: 168,
+            min_age_days: 90,
+            max_access_count: 3,
+            max_deprecate_percent: 1.0,
+            min_deprecate_per_cycle: 1,
+            max_deprecate_per_cycle: 50,
+            deprecated_ttl_days: 30,
+            auto_prune_enabled: true,
+            dream_dedup_soft_delete: true,
+            dream_compact_soft_delete: true,
+        }
+    }
+}
+
+impl LifecycleConfig {
+    /// Calculate the maximum number of memories to deprecate in a single
+    /// cycle, based on the percentage cap and min/max bounds.
+    ///
+    /// - `total_memories` — current active (non-deprecated) count.
+    ///
+    /// Returns a value in `[min_deprecate_per_cycle, max_deprecate_per_cycle]`,
+    /// clamped after percentage calculation.
+    pub fn cycle_deprecate_cap(&self, total_memories: usize) -> usize {
+        let pct_based = (total_memories as f64 * self.max_deprecate_percent / 100.0) as usize;
+        pct_based
+            .max(self.min_deprecate_per_cycle)
+            .min(self.max_deprecate_per_cycle)
     }
 }
 
@@ -428,11 +549,27 @@ pub struct Uteke {
     /// Dream pipeline thresholds (#731). Used by contradiction scan,
     /// dedup/consolidate, and orphan detection phases.
     dream_config: DreamConfig,
+    /// Memory lifecycle configuration (#928). Controls soft-delete behavior,
+    /// dynamic deprecation caps, and TTL-based pruning.
+    lifecycle_config: LifecycleConfig,
     /// Recall cache — avoids redundant embedding computation for repeated queries.
     recall_cache: recall_cache::RecallCache,
+    /// Path to the persistent embedding cache DB (`embed_cache.db`).
+    /// `None` for in-memory stores (tests).
+    embed_cache_path: Option<std::path::PathBuf>,
 }
 
 impl Uteke {
+    /// Borrow the underlying store (for CLI/advanced use).
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
+
+    /// Borrow lifecycle configuration (read-only).
+    pub fn get_lifecycle_config(&self) -> &LifecycleConfig {
+        &self.lifecycle_config
+    }
+
     /// Open or create a Uteke memory store.
     ///
     /// `path` can be a directory path (will create `uteke.db` inside)
@@ -551,7 +688,25 @@ impl Uteke {
         };
 
         let mut index = match &index_path {
-            Some(path) => VectorIndex::load_or_create(path, dims)?,
+            Some(path) => match VectorIndex::load_or_create(path, dims) {
+                Ok(idx) => idx,
+                Err(e) => {
+                    // Index file is corrupt (dim mismatch, truncated, etc).
+                    // Instead of crashing, discard the bad index and rebuild
+                    // from SQLite below. This unblocks `uteke repair` (#901).
+                    tracing::warn!(
+                        "Vector index at {} failed to load ({}). \
+                         Discarding corrupt index — will rebuild from SQLite.",
+                        path.display(),
+                        e
+                    );
+                    // Remove the corrupt files so rebuild starts clean.
+                    let _ = std::fs::remove_file(path);
+                    let keys_path = path.with_extension("keys");
+                    let _ = std::fs::remove_file(&keys_path);
+                    VectorIndex::new(dims)?
+                }
+            },
             None => VectorIndex::new(dims)?,
         };
 
@@ -568,6 +723,13 @@ impl Uteke {
             }
         }
 
+        // Resolve embedding cache path: same directory as the main DB.
+        // `embed_cache.db` avoids ONNX model load for repeated queries (#896).
+        let embed_cache_path = store.path().map(|p| {
+            let dir = p.parent().unwrap_or(Path::new("."));
+            dir.join("embed_cache.db")
+        });
+
         Ok(Self {
             store,
             index: RwLock::new(index),
@@ -583,6 +745,8 @@ impl Uteke {
             recall_cache: recall_cache::RecallCache::new(recall_cache::RecallCacheConfig::default()),
             jaccard_weight: 0.0,
             dream_config: DreamConfig::default(),
+            lifecycle_config: LifecycleConfig::default(),
+            embed_cache_path,
         })
     }
 
@@ -622,6 +786,19 @@ impl Uteke {
     /// startup from CLI/server config.
     pub fn set_dream_config(&mut self, config: DreamConfig) {
         self.dream_config = config;
+    }
+
+    /// Set memory lifecycle configuration (#928).
+    ///
+    /// Controls soft-delete behavior, dynamic deprecation caps, and
+    /// TTL-based pruning. Called once at startup from CLI/server config.
+    pub fn set_lifecycle_config(&mut self, config: LifecycleConfig) {
+        self.lifecycle_config = config;
+    }
+
+    /// Get the current lifecycle configuration (#928).
+    pub fn lifecycle_config(&self) -> LifecycleConfig {
+        self.lifecycle_config
     }
 
     /// Configure cloud embedding fallback.
@@ -814,6 +991,34 @@ impl Uteke {
                     Some(Box::new(cloud_embedder)),
                 )?;
                 *guard = Some(Box::new(fallback_embedder));
+            }
+
+            // Wrap with persistent embedding cache (#896).
+            // CachingEmbedder intercepts embed() calls and serves from SQLite
+            // cache on hit, avoiding the ~2s ONNX model load on repeated queries.
+            // Skipped for in-memory stores (tests) where no cache path exists.
+            if let Some(ref cache_path) = self.embed_cache_path {
+                // Init cache DB first (without moving `inner`), so on failure
+                // we can fall back to the uncached embedder cleanly.
+                match crate::embed::EmbeddingCache::open(cache_path) {
+                    Ok(cache) => {
+                        tracing::debug!(
+                            cache_path = %cache_path.display(),
+                            "Persistent embedding cache enabled"
+                        );
+                        let inner = guard.take().unwrap();
+                        *guard = Some(Box::new(crate::embed::CachingEmbedder::with_cache(
+                            inner, cache,
+                        )));
+                    }
+                    Err(e) => {
+                        // Cache init failure is non-fatal — use uncached embedder
+                        tracing::warn!(
+                            error = %e,
+                            "Failed to init embedding cache, using uncached embedder"
+                        );
+                    }
+                }
             }
         }
         Ok(())
@@ -1313,6 +1518,7 @@ impl Uteke {
         &self,
         id_or_slug: &str,
         new_parent_slug: Option<&str>,
+        new_sort_order: Option<i64>,
     ) -> Result<usize, Error> {
         // Resolve by slug first, fall back to UUID lookup (#833).
         let doc = match self.store.get_document_by_slug(id_or_slug)? {
@@ -1338,7 +1544,8 @@ impl Uteke {
         };
 
         let parent_id_ref = new_parent_id.as_deref();
-        self.store.move_document(&doc.id, parent_id_ref, None)
+        self.store
+            .move_document(&doc.id, parent_id_ref, new_sort_order)
     }
 
     /// Delete a document by ID or slug (#438).
@@ -1638,6 +1845,7 @@ impl Uteke {
         entity_filter: Option<&str>,
         category_filter: Option<&str>,
         enrich: bool,
+        strategy: RecallStrategy,
     ) -> Result<Vec<UnifiedSearchResult>, Error> {
         let limit = limit.min(50);
         let ns = namespace.unwrap_or(DEFAULT_NAMESPACE);
@@ -1651,9 +1859,12 @@ impl Uteke {
                 min_score,
                 entity_filter,
                 category_filter,
+                strategy,
             ),
             SearchType::Document => self.recall_unified_documents(query, limit, ns, min_score),
-            SearchType::All => self.recall_unified_all(query, limit, tags_filter, ns, min_score),
+            SearchType::All => {
+                self.recall_unified_all(query, limit, tags_filter, ns, min_score, strategy)
+            }
         }?;
 
         if enrich {
@@ -1681,18 +1892,57 @@ impl Uteke {
         min_score: f32,
         entity_filter: Option<&str>,
         category_filter: Option<&str>,
+        strategy: RecallStrategy,
     ) -> Result<Vec<UnifiedSearchResult>, Error> {
-        let results = self.recall(
+        // Use recall_hybrid with the caller's strategy so that --strategy
+        // fts5/hybrid/graph is honoured on the unified path (#900).
+        // entity_filter and category_filter are not natively supported by
+        // recall_hybrid, so we apply them as post-filters here (#900 cora review).
+        //
+        // Over-fetch when post-filtering to compensate for rows that will be
+        // discarded by entity/category filters (CodeCora alert). A 3× multiplier
+        // is a pragmatic heuristic — it covers most selective filters without
+        // excessive DB load for small result sets.
+        let fetch_limit = if entity_filter.is_some() || category_filter.is_some() {
+            (limit.saturating_mul(3)).max(limit + 10)
+        } else {
+            limit
+        };
+        let results = self.recall_hybrid(
             query,
-            limit,
+            fetch_limit,
             tags_filter,
             namespace,
+            strategy,
             min_score,
-            entity_filter,
-            category_filter,
         )?;
-        Ok(results
+        let results = results
             .into_iter()
+            .filter(|sr| {
+                if let Some(ent) = entity_filter {
+                    let matches = sr
+                        .memory
+                        .metadata
+                        .get("entity")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|e| e == ent);
+                    if !matches {
+                        return false;
+                    }
+                }
+                if let Some(cat) = category_filter {
+                    let matches = sr
+                        .memory
+                        .metadata
+                        .get("category")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|c| c == cat);
+                    if !matches {
+                        return false;
+                    }
+                }
+                true
+            })
             .map(|sr| {
                 let m = &sr.memory;
                 UnifiedSearchResult {
@@ -1720,7 +1970,9 @@ impl Uteke {
                     linked_memory_ids: None,
                 }
             })
-            .collect())
+            .take(limit)
+            .collect();
+        Ok(results)
     }
 
     /// Unified search — documents only.
@@ -1785,12 +2037,13 @@ impl Uteke {
         tags_filter: Option<&[&str]>,
         ns: &str,
         min_score: f32,
+        strategy: RecallStrategy,
     ) -> Result<Vec<UnifiedSearchResult>, Error> {
         const RRF_K: u32 = 60;
 
-        // 1. Memory recall (vector + FTS5 hybrid)
+        // 1. Memory recall — use recall_hybrid with caller's strategy (#900)
         let mem_results =
-            match self.recall(query, limit * 2, tags_filter, Some(ns), 0.0, None, None) {
+            match self.recall_hybrid(query, limit * 2, tags_filter, Some(ns), strategy, 0.0) {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!(
@@ -2394,7 +2647,18 @@ mod tests {
 
         let recall = |q: &str| {
             uteke
-                .recall_unified(q, 2, None, None, 0.0, SearchType::All, None, None, false)
+                .recall_unified(
+                    q,
+                    2,
+                    None,
+                    None,
+                    0.0,
+                    SearchType::All,
+                    None,
+                    None,
+                    false,
+                    RecallStrategy::Vector,
+                )
                 .unwrap()
         };
         let matching = recall("rust memory safety");
@@ -2579,6 +2843,7 @@ mod tests {
                 None,
                 None,
                 true, // enrich=true
+                RecallStrategy::Vector,
             )
             .unwrap();
 
@@ -2622,6 +2887,7 @@ mod tests {
                 None,
                 None,
                 true, // enrich=true
+                RecallStrategy::Vector,
             )
             .unwrap();
 
@@ -2660,6 +2926,7 @@ mod tests {
                 None,
                 None,
                 false, // enrich=false
+                RecallStrategy::Vector,
             )
             .unwrap();
 
@@ -2731,6 +2998,7 @@ mod tests {
                 None,
                 None,
                 true, // enrich=true
+                RecallStrategy::Vector,
             )
             .unwrap();
 
@@ -2812,6 +3080,7 @@ mod tests {
                 None,
                 None,
                 true,
+                RecallStrategy::Vector,
             )
             .unwrap();
 
@@ -2822,6 +3091,69 @@ mod tests {
             let _ = &r.linked_doc_slugs;
             let _ = &r.linked_memory_ids;
         }
+    }
+
+    /// #900: Strategy flag must be honoured by recall_unified.
+    /// Previously recall_unified_memories called self.recall() (vector-only)
+    /// instead of self.recall_hybrid(), silently ignoring the strategy.
+    #[test]
+    #[serial]
+    fn recall_unified_honours_fts5_strategy() {
+        let dir = tempfile::tempdir().unwrap();
+        let uteke = Uteke::open(dir.path().join("test.uteke")).unwrap();
+
+        // Insert a memory with a distinctive keyword for FTS5,
+        // but a zero-vector embedding (no possible vector match).
+        let now = chrono::Utc::now();
+        let m1 = Memory {
+            id: "fts5-target".to_string(),
+            content: "The quick brown fox jumps over the lazy dog".to_string(),
+            embedding: vec![0.0; 768],
+            tags: vec![],
+            metadata: serde_json::json!({}),
+            created_at: now,
+            updated_at: now,
+            namespace: DEFAULT_NAMESPACE.to_string(),
+            access_count: 0,
+            last_accessed: None,
+            deprecated: false,
+            valid_from: None,
+            valid_until: None,
+            memory_type: "fact".to_string(),
+            importance: 0.5,
+            pinned: false,
+            content_type: "text".to_string(),
+            slug: None,
+            source: None,
+            source_type: "user".to_string(),
+        };
+        uteke.store.insert(&m1).unwrap();
+
+        // FTS5 strategy should find it via keyword match.
+        let results = uteke
+            .recall_unified(
+                "quick brown fox",
+                5,
+                None,
+                None,
+                0.0,
+                SearchType::All,
+                None,
+                None,
+                false,
+                RecallStrategy::Fts5,
+            )
+            .unwrap();
+
+        assert!(
+            !results.is_empty(),
+            "FTS5 strategy must return results for keyword match"
+        );
+        assert_eq!(
+            results[0].memory_id.as_deref(),
+            Some("fts5-target"),
+            "FTS5 should find the keyword-matched memory"
+        );
     }
 }
 

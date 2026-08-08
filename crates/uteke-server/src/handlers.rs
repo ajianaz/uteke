@@ -202,6 +202,18 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         // ── Recall (semantic search) ────────────────────────────────────
         (Method::Post, "/recall") => match read_body::<RecallRequest>(req.as_reader()) {
             Ok(req_data) => {
+                // #907: Reject empty/whitespace queries — they return misleading
+                // results (top-N by recency, not relevance).
+                if req_data.query.trim().is_empty() {
+                    return ctx.error_response_for(
+                        req,
+                        400,
+                        "Query must not be empty or whitespace-only",
+                    );
+                }
+                // #903: Cap limit to prevent DoS via unbounded queries.
+                let limit = req_data.limit.min(MAX_LIMIT);
+
                 let tag_refs: Vec<&str> = req_data.tags.iter().map(|s| s.as_str()).collect();
                 let tags_filter = if tag_refs.is_empty() {
                     None
@@ -248,10 +260,43 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                 let entity_filter = req_data.entity.as_deref();
                 let category_filter = req_data.category.as_deref();
 
+                // #902: Parse temporal range filters (before/after RFC3339).
+                let after_ts = match req_data.after.as_deref() {
+                    Some(ts) => match chrono::DateTime::parse_from_rfc3339(ts) {
+                        Ok(dt) => Some(dt.with_timezone(&chrono::Utc)),
+                        Err(_) => {
+                            return ctx.error_response_for(
+                                req,
+                                400,
+                                format!(
+                                    "Invalid 'after' timestamp: {ts}. Use RFC3339 format (e.g. 2026-01-01T00:00:00Z)"
+                                ),
+                            );
+                        }
+                    },
+                    None => None,
+                };
+                let before_ts = match req_data.before.as_deref() {
+                    Some(ts) => match chrono::DateTime::parse_from_rfc3339(ts) {
+                        Ok(dt) => Some(dt.with_timezone(&chrono::Utc)),
+                        Err(_) => {
+                            return ctx.error_response_for(
+                                req,
+                                400,
+                                format!(
+                                    "Invalid 'before' timestamp: {ts}. Use RFC3339 format (e.g. 2026-01-01T00:00:00Z)"
+                                ),
+                            );
+                        }
+                    },
+                    None => None,
+                };
+                let has_temporal = after_ts.is_some() || before_ts.is_some();
+
                 let recall_result = if let Some(pit) = point_in_time {
                     uteke.recall_at_time(
                         &req_data.query,
-                        req_data.limit,
+                        limit,
                         tags_filter,
                         ns(&req_data.namespace),
                         pit,
@@ -262,7 +307,7 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                 } else {
                     uteke.recall(
                         &req_data.query,
-                        req_data.limit,
+                        limit,
                         tags_filter,
                         ns(&req_data.namespace),
                         min_score,
@@ -289,9 +334,25 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                             );
                         }
                     };
+                    // Parse strategy (#900)
+                    let strategy = match req_data.strategy.as_deref() {
+                        Some("fts5") => uteke_core::RecallStrategy::Fts5,
+                        Some("hybrid") => uteke_core::RecallStrategy::Hybrid,
+                        Some("graph") => uteke_core::RecallStrategy::Graph,
+                        Some("vector") | None => uteke_core::RecallStrategy::Vector,
+                        Some(other) => {
+                            return ctx.error_response_for(
+                                req,
+                                400,
+                                format!(
+                                    "Invalid strategy: '{other}'. Use 'vector', 'fts5', 'hybrid', or 'graph'."
+                                ),
+                            );
+                        }
+                    };
                     Some(uteke.recall_unified(
                         &req_data.query,
-                        req_data.limit,
+                        limit,
                         tags_filter,
                         ns(&req_data.namespace),
                         min_score,
@@ -299,6 +360,7 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                         entity_filter,
                         category_filter,
                         req_data.enrich,
+                        strategy,
                     ))
                 } else {
                     None
@@ -306,7 +368,17 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
 
                 // Prefer unified results when available (#531)
                 match unified_result {
-                    Some(Ok(results)) => {
+                    Some(Ok(mut results)) => {
+                        // #902: Post-filter by temporal range (before/after).
+                        if has_temporal {
+                            results.retain(|r| {
+                                let ts = r.created_at.as_ref();
+                                ts.is_some_and(|t| {
+                                    after_ts.is_none_or(|a| t >= &a)
+                                        && before_ts.is_none_or(|b| t <= &b)
+                                })
+                            });
+                        }
                         if api_version == Some(ApiVersion::V1) {
                             // v1: flat format [{id, content, score, ...}]
                             let v1_results: Vec<serde_json::Value> =
@@ -324,7 +396,15 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                         // Memory-only recall path — entity/category filtering
                         // is already applied in the core recall candidate loop (#663).
                         match recall_result {
-                            Ok(results) => {
+                            Ok(mut results) => {
+                                // #902: Post-filter by temporal range (before/after).
+                                if has_temporal {
+                                    results.retain(|r| {
+                                        let t = &r.memory.created_at;
+                                        after_ts.is_none_or(|a| t >= &a)
+                                            && before_ts.is_none_or(|b| t <= &b)
+                                    });
+                                }
                                 if results.is_empty() && min_score > 0.0 {
                                     ctx.ok_response_for(
                                         req,
@@ -510,6 +590,86 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                     Ok(stats) => ctx.ok_response_for(req, &stats),
                     Err(e) => {
                         error!("Internal error: {e}");
+                        ctx.error_response_for(req, 500, "Internal server error")
+                    }
+                },
+                Err(e) => ctx.error_response_for(req, 400, e),
+            }
+        }
+
+        // ── Lifecycle (#936): status, cycle, promote ──────────────────
+        (Method::Get, p) if p == "/lifecycle/status" || p.starts_with("/lifecycle/status?") => {
+            let query = req.url().split('?').nth(1).unwrap_or("");
+            let params: std::collections::HashMap<String, String> = query
+                .split('&')
+                .filter_map(|pair| {
+                    let mut kv = pair.splitn(2, '=');
+                    Some((kv.next()?.to_string(), kv.next()?.to_string()))
+                })
+                .collect();
+            let ns_param = params.get("namespace").map(|s| s.as_str());
+            let active = match uteke.store().count_active(ns_param) {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("lifecycle status error: {e}");
+                    return ctx.error_response_for(req, 500, "Internal server error");
+                }
+            };
+            let deprecated = match uteke.store().count_deprecated(ns_param) {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("lifecycle status error: {e}");
+                    return ctx.error_response_for(req, 500, "Internal server error");
+                }
+            };
+            #[derive(serde::Serialize)]
+            struct LifecycleStatusResponse {
+                active: usize,
+                deprecated: usize,
+            }
+            ctx.ok_response_for(req, &LifecycleStatusResponse { active, deprecated })
+        }
+
+        (Method::Post, "/lifecycle/cycle") => {
+            #[derive(Deserialize)]
+            struct CycleReq {
+                namespace: Option<String>,
+            }
+            match read_body::<CycleReq>(req.as_reader()) {
+                Ok(req_data) => match uteke.lifecycle_cycle(ns(&req_data.namespace)) {
+                    Ok(result) => ctx.ok_response_for(req, &result),
+                    Err(e) => {
+                        error!("lifecycle cycle error: {e}");
+                        ctx.error_response_for(req, 500, "Internal server error")
+                    }
+                },
+                Err(e) => ctx.error_response_for(req, 400, e),
+            }
+        }
+
+        (Method::Post, "/lifecycle/promote") => {
+            #[derive(Deserialize)]
+            struct PromoteReq {
+                id: String,
+            }
+            match read_body::<PromoteReq>(req.as_reader()) {
+                Ok(req_data) => match uteke.promote(&req_data.id) {
+                    Ok(restored) => {
+                        #[derive(serde::Serialize)]
+                        struct PromoteResponse {
+                            promoted: bool,
+                            id: String,
+                        }
+                        ctx.ok_response_for(
+                            req,
+                            &PromoteResponse {
+                                promoted: restored,
+                                id: req_data.id,
+                            },
+                        )
+                    }
+                    Err(e) => {
+                        error!("lifecycle promote error: {e}");
                         ctx.error_response_for(req, 500, "Internal server error")
                     }
                 },
@@ -1467,7 +1627,8 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
             Ok(req_data) => match resolve_doc_id_move(&req_data) {
                 Ok(id_or_slug) => {
                     let new_parent = req_data.new_parent.as_deref();
-                    match uteke.doc_move(id_or_slug, new_parent) {
+                    let new_sort_order = req_data.new_sort_order;
+                    match uteke.doc_move(id_or_slug, new_parent, new_sort_order) {
                         Ok(moved) => ctx.ok_response_for(req, &serde_json::json!({"moved": moved})),
                         Err(e) => {
                             if e.to_string().contains("not found") {
@@ -1948,6 +2109,7 @@ fn resolve_extraction_config(
 ) -> uteke_core::extraction::ExtractionConfig {
     let base = ctx.extraction_config.clone().unwrap_or_default();
     uteke_core::extraction::ExtractionConfig {
+        mode: base.mode,
         model: req_model.map(String::from).unwrap_or(base.model),
         api_key: req_api_key.map(String::from).unwrap_or(base.api_key),
         base_url: base.base_url,

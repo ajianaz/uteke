@@ -274,14 +274,25 @@ pub struct ExportEntry {
     /// The text content.
     pub content: String,
     /// Tags for categorization.
+    #[serde(default)]
     pub tags: Vec<String>,
     /// Arbitrary JSON metadata.
+    #[serde(default = "default_metadata")]
     pub metadata: serde_json::Value,
     /// When this memory was originally created.
+    #[serde(default = "default_created_at")]
     pub created_at: chrono::DateTime<chrono::Utc>,
     /// Optional source provenance (#348).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+}
+
+fn default_metadata() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
+}
+
+fn default_created_at() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now()
 }
 
 /// Result of an import operation.
@@ -335,6 +346,27 @@ pub struct PruneResult {
     pub deprecated: usize,
     /// IDs of deprecated memories.
     pub deprecated_ids: Vec<String>,
+}
+
+/// Result of a lifecycle cycle run (#933).
+///
+/// Combines the soft-deprecate phase (cap-limited) and the auto-prune phase.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LifecycleCycleResult {
+    /// Total active memories before the cycle.
+    pub total_active: usize,
+    /// Number of candidates eligible for deprecation.
+    pub candidates: usize,
+    /// Effective cap applied (percentage-based, clamped to min/max).
+    pub cap: usize,
+    /// Number of memories deprecated in this cycle.
+    pub deprecated: usize,
+    /// IDs of deprecated memories.
+    pub deprecated_ids: Vec<String>,
+    /// Number of expired deprecated memories pruned (hard delete).
+    pub pruned: usize,
+    /// IDs of pruned memories.
+    pub pruned_ids: Vec<String>,
 }
 
 /// Result of a contradiction check.

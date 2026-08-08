@@ -50,6 +50,19 @@ pub struct RepairReport {
     pub index_after: usize,
 }
 
+/// Result of `uteke repair --reembed`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReembedReport {
+    /// Total memories scanned.
+    pub total_scanned: usize,
+    /// Memories that had missing/empty embeddings.
+    pub missing_count: usize,
+    /// Memories successfully re-embedded.
+    pub reembedded: usize,
+    /// Memories that failed re-embedding.
+    pub failed: usize,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

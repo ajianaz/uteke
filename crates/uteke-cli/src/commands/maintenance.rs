@@ -28,14 +28,75 @@ pub(crate) fn run_verify(cli: &Cli, uteke: &Uteke) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn run_repair(cli: &Cli, uteke: &Uteke) -> Result<(), String> {
-    tracing::info!("Running repair");
+pub(crate) fn run_repair(
+    cli: &Cli,
+    uteke: &Uteke,
+    rebuild: bool,
+    reembed: bool,
+    config: &crate::Config,
+) -> Result<(), String> {
+    if rebuild {
+        tracing::info!("Running repair --rebuild (deleting index files first)");
+
+        // Determine index path: cli --store override or config default.
+        let store_dir = cli
+            .store
+            .as_deref()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| crate::Config::expand_tilde(&config.store.path));
+
+        let index_path = std::path::PathBuf::from(&store_dir).join("uteke_index.usearch");
+        let keys_path = std::path::PathBuf::from(&store_dir).join("uteke_index.keys");
+
+        // Delete both index files so the store opens cleanly.
+        if index_path.exists() {
+            tracing::info!("Removing {}", index_path.display());
+            std::fs::remove_file(&index_path)
+                .map_err(|e| format!("Failed to remove index file: {e}"))?;
+        }
+        if keys_path.exists() {
+            tracing::info!("Removing {}", keys_path.display());
+            std::fs::remove_file(&keys_path)
+                .map_err(|e| format!("Failed to remove keys file: {e}"))?;
+        }
+    } else {
+        tracing::info!("Running repair");
+    }
+
     let report = uteke.repair().map_err(|e| format!("Repair failed: {e}"))?;
     if cli.json {
         output::print_json(&report);
     } else {
         output::print_repair_human(&report);
     }
+
+    // Optional: re-embed memories with missing vectors.
+    if reembed {
+        tracing::info!("Running repair --reembed (regenerating missing embeddings)");
+        let reembed_report = uteke
+            .reembed_missing()
+            .map_err(|e| format!("Re-embed failed: {e}"))?;
+        if cli.json {
+            output::print_json(&reembed_report);
+        } else {
+            println!();
+            if reembed_report.missing_count == 0 {
+                println!(
+                    "✓ All {} memories have embeddings — nothing to re-embed.",
+                    reembed_report.total_scanned
+                );
+            } else {
+                println!(
+                    "Re-embedded {}/{} memories ({} failed) out of {} total scanned.",
+                    reembed_report.reembedded,
+                    reembed_report.missing_count,
+                    reembed_report.failed,
+                    reembed_report.total_scanned
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -200,9 +261,9 @@ pub(crate) fn run_import(
     };
 
     let result = match detected_format.as_str() {
-        "jsonl" => uteke
+        "jsonl" | "json" => uteke
             .import(&content, ns)
-            .map_err(|e| format!("Failed to import JSONL: {e}"))?,
+            .map_err(|e| format!("Failed to import JSON: {e}"))?,
         "markdown" | "text" => {
             let tag_refs: Vec<&str> = tags.iter().map(|s| s.as_str()).collect();
             import_text(uteke, &content, &tag_refs, ns)?
@@ -226,11 +287,15 @@ pub(crate) fn run_import(
 }
 
 /// Resolve extraction settings (CLI flag > env-merged config > built-in
-/// default), call the LLM to distill facts, and store each fact as a memory.
+/// default), dispatch to offline or LLM extractor, and store each fact.
 ///
-/// API-key resolution falls back to the embedding/OpenAI key so users who
-/// already configured an OpenAI-compatible setup for embeddings don't have to
-/// duplicate the credential.
+/// When config `mode` is "offline" (or empty/unconfigured), uses the
+/// zero-dependency rule-based extractor. When `mode` is "llm" and an API
+/// key is available, uses the OpenAI-compatible LLM extractor.
+///
+/// API-key resolution for LLM mode falls back to the embedding/OpenAI key
+/// so users who already configured an OpenAI-compatible setup for embeddings
+/// don't have to duplicate the credential.
 fn import_with_extraction(
     uteke: &Uteke,
     content: &str,
@@ -241,37 +306,63 @@ fn import_with_extraction(
     use uteke_core::ImportResult;
 
     let cfg = opts.cfg;
-    let model = opts
-        .model
-        .clone()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| cfg.model.clone());
-    let base_url = opts
-        .base_url
-        .clone()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| cfg.base_url.clone());
-    let api_key = opts
-        .api_key
-        .clone()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| cfg.api_key.clone());
+    let mode = cfg.mode.as_str();
     let max_facts = opts.max_facts.unwrap_or(cfg.max_facts);
 
-    let ext_config = uteke_core::extraction::ExtractionConfig {
-        model,
-        api_key,
-        base_url,
-        endpoint_path: cfg.endpoint_path.clone(),
-        max_facts,
+    // Determine extraction mode: explicit mode in config, or infer from
+    // whether an API key is available.
+    let use_llm = if mode == "llm" {
+        true
+    } else if mode == "offline" {
+        false
+    } else {
+        // Unconfigured — try LLM if API key available, else offline.
+        let api_key = opts
+            .api_key
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| cfg.api_key.clone());
+        !api_key.is_empty()
     };
 
-    let extractor = uteke_core::extraction::Extractor::new(&ext_config)
-        .map_err(|e| format!("Failed to initialize extractor: {e}"))?;
+    let facts = if use_llm {
+        // LLM extraction path
+        let model = opts
+            .model
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| cfg.model.clone());
+        let base_url = opts
+            .base_url
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| cfg.base_url.clone());
+        let api_key = opts
+            .api_key
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| cfg.api_key.clone());
 
-    let facts = extractor
-        .extract(content)
-        .map_err(|e| format!("Extraction failed: {e}"))?;
+        let ext_config = uteke_core::extraction::ExtractionConfig {
+            mode: "llm".to_string(),
+            model,
+            api_key,
+            base_url,
+            endpoint_path: cfg.endpoint_path.clone(),
+            max_facts,
+        };
+
+        let extractor = uteke_core::extraction::Extractor::new(&ext_config)
+            .map_err(|e| format!("Failed to initialize extractor: {e}"))?;
+
+        extractor
+            .extract(content)
+            .map_err(|e| format!("Extraction failed: {e}"))?
+    } else {
+        // Offline extraction path — zero API calls
+        tracing::info!("Using offline rule-based extraction (zero API)");
+        uteke_core::offline_extraction::extract_facts(content, max_facts)
+    };
 
     if facts.is_empty() {
         tracing::warn!("Extraction produced no facts from input");
@@ -301,7 +392,7 @@ fn detect_format(filename: &str, content: &str) -> String {
     // Check file extension
     let ext = filename.rsplit('.').next().unwrap_or("");
     match ext {
-        "jsonl" => "jsonl".to_string(),
+        "jsonl" | "json" => "jsonl".to_string(),
         "md" | "markdown" => "markdown".to_string(),
         "txt" => "text".to_string(),
         "csv" => "text".to_string(), // treat CSV as text for now

@@ -589,6 +589,34 @@ pub const ENDPOINTS: &[Endpoint] = &[
         excludes_deprecated: true,
         issues: &[],
     },
+    // ── Lifecycle ───────────────────────────────────────────────────────
+    Endpoint {
+        method: "POST",
+        path: "/lifecycle/cycle",
+        description: "Run lifecycle aging cycle: deprecate old memories, optionally prune expired ones.",
+        request_type: None,
+        response_type: None,
+        excludes_deprecated: false,
+        issues: &["#935"],
+    },
+    Endpoint {
+        method: "POST",
+        path: "/lifecycle/promote",
+        description: "Restore a deprecated memory back to active status.",
+        request_type: None,
+        response_type: None,
+        excludes_deprecated: false,
+        issues: &["#935"],
+    },
+    Endpoint {
+        method: "GET",
+        path: "/lifecycle/status",
+        description: "Get lifecycle status: active/deprecated counts and current configuration.",
+        request_type: None,
+        response_type: None,
+        excludes_deprecated: false,
+        issues: &["#935"],
+    },
 ];
 
 #[cfg(test)]

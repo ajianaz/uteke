@@ -118,12 +118,25 @@ install_uteke() {
     cp "${binary}" "${INSTALL_DIR}/${BINARY_NAME}"
     chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
 
+    # Post-install: verify binary actually runs (GLIBC compatibility check)
     info "Installed to ${INSTALL_DIR}/${BINARY_NAME}"
 
-    # Verify
+    local installed_version
+    installed_version=$("${INSTALL_DIR}/${BINARY_NAME}" --version 2>&1 | head -1 || true)
+
+    if echo "${installed_version}" | grep -qi "GLIBC.*not found"; then
+        # GLIBC too old — binary downloaded but can't execute
+        echo ""
+        error "${installed_version}
+
+Your system's GLIBC is too old for the prebuilt binary.
+Options:
+  1. Build from source: curl -fsSL https://raw.githubusercontent.com/${REPO}/develop/scripts/install.sh | sh -s -- --from-source
+  2. Upgrade your OS to Ubuntu 22.04+ or Debian 12+
+  3. Use Docker: docker run --rm ghcr.io/${REPO}:latest"
+    fi
+
     if command -v "${BINARY_NAME}" &>/dev/null; then
-        local installed_version
-        installed_version=$("${BINARY_NAME}" --version 2>/dev/null || echo "unknown")
         info "✓ Uteke ${installed_version} installed successfully!"
     else
         warn "Uteke installed but not in PATH."
@@ -170,11 +183,17 @@ main() {
     echo "  https://github.com/${REPO}"
     echo ""
 
+    # Check for --from-source flag
+    if [[ "${1:-}" == "--from-source" ]]; then
+        install_from_source
+        return
+    fi
+
     # Try binary release first, fallback to source
     if install_uteke 2>/dev/null; then
         :
     else
-        warn "Binary release not available for your platform."
+        warn "Binary release not available or incompatible."
         info "Falling back to building from source..."
         install_from_source
     fi

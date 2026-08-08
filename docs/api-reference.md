@@ -74,6 +74,24 @@ Update an existing memory's content and/or metadata.
 
 Get graph edges for a memory. Accepts `?id=...` query param.
 
+#### 🟡 `POST` `/lifecycle/cycle`
+
+Run lifecycle aging cycle: deprecate old memories, optionally prune expired ones.
+
+*Related: `#935`*
+
+#### 🟡 `POST` `/lifecycle/promote`
+
+Restore a deprecated memory back to active status.
+
+*Related: `#935`*
+
+#### 🟢 `GET` `/lifecycle/status`
+
+Get lifecycle status: active/deprecated counts and current configuration.
+
+*Related: `#935`*
+
 
 ## 📦 Import/Export
 
@@ -449,6 +467,7 @@ Detailed field definitions for each request type.
 |-------|------|----------|-------------|
 | `id` | any | No |  |
 | `new_parent` | any | No |  |
+| `new_sort_order` | any | No | Optional sort order for the moved document (#sort-order). |
 | `slug` | any | No |  |
 
 
@@ -589,7 +608,11 @@ Request for memory feedback / trust scoring (#718).
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `after` | any | No | Temporal range filter: only return memories created at or after this
+RFC3339 timestamp (#902). |
 | `at` | any | No | Time-travel: query memories that existed at this RFC3339 timestamp. |
+| `before` | any | No | Temporal range filter: only return memories created at or before this
+RFC3339 timestamp (#902). |
 | `category` | any | No | Filter by category metadata. |
 | `enrich` | `boolean` | No | Enrich results with cross-entity links (doc↔memory) (#689).
 When true, populates `linked_doc_slugs` on memory results and
@@ -600,6 +623,7 @@ When true, populates `linked_doc_slugs` on memory results and
 | `namespace` | any | No |  |
 | `query` | `string` | Yes |  |
 | `search_type` | any | No | Search type filter: "all" (default, unified), "memory", or "doc" (#531). |
+| `strategy` | any | No | Recall strategy: "vector" (default), "fts5", "hybrid", or "graph" (#900). |
 | `strict` | `boolean` | No | Use strict threshold (defaults to 0.5 if min_score not set). |
 | `tags` | ``string``[] | No |  |
 

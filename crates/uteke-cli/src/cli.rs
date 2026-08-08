@@ -149,6 +149,12 @@ pub enum Commands {
         #[arg(long)]
         enrich: bool,
     },
+    /// Show project context summary (memory counts, top tags, recent activity)
+    Context {
+        /// Namespace to summarize (default: resolved namespace)
+        #[arg(long)]
+        namespace: Option<String>,
+    },
     /// Search memories by content keywords (text search)
     Search {
         /// Keywords to search for
@@ -218,8 +224,20 @@ pub enum Commands {
         #[arg(long)]
         binary: String,
     },
-    /// Repair index by rebuilding from SQLite
-    Repair,
+    /// Repair index by rebuilding from SQLite.
+    /// Use --rebuild to delete corrupt index files first.
+    /// Use --reembed to regenerate embeddings for memories missing them.
+    Repair {
+        /// Delete existing index files before rebuilding (ignores corrupt index).
+        /// Use when the index is corrupted and normal repair fails.
+        #[arg(long)]
+        rebuild: bool,
+
+        /// Re-generate embeddings for memories with missing/empty vectors.
+        /// Makes previously invisible memories searchable via semantic recall.
+        #[arg(long)]
+        reembed: bool,
+    },
     /// Export all memories to JSONL file (no embeddings — portable)
     Export {
         /// Output file path (use - for stdout)
@@ -237,17 +255,23 @@ pub enum Commands {
         /// Import format: auto, jsonl, markdown, text (default: auto-detect)
         #[arg(long, default_value = "auto")]
         format: String,
-        /// Distill the input into atomic facts with an LLM before storing
-        /// (opt-in; requires an OpenAI-compatible endpoint + API key).
+        /// Distill the input into atomic facts before storing.
+        ///
+        /// Extraction mode depends on config:
+        /// - offline (default): rule-based, zero API calls, no key needed.
+        /// - llm: requires an OpenAI-compatible endpoint + API key.
         #[arg(long)]
         extract: bool,
-        /// Override the extraction model (else [extraction] model / UTEKE_EXTRACTION_MODEL)
+        /// Override the extraction model (only used in LLM mode;
+        /// else [extraction] model / UTEKE_EXTRACTION_MODEL)
         #[arg(long)]
         extract_model: Option<String>,
-        /// Override the extraction API key (else config / UTEKE_EXTRACTION_API_KEY / OPENAI_API_KEY)
+        /// Override the extraction API key (only used in LLM mode;
+        /// else config / UTEKE_EXTRACTION_API_KEY / OPENAI_API_KEY)
         #[arg(long)]
         extract_api_key: Option<String>,
-        /// Override the extraction base URL (e.g. http://localhost:11434/v1 for Ollama)
+        /// Override the extraction base URL for LLM mode
+        /// (e.g. http://localhost:11434/v1 for Ollama)
         #[arg(long)]
         extract_base_url: Option<String>,
         /// Max facts to keep per document (0 = default)
@@ -316,6 +340,11 @@ pub enum Commands {
         /// Dry run — show what would be pruned without deleting
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Memory lifecycle management (#935): cycle, promote, status
+    Lifecycle {
+        #[command(subcommand)]
+        command: LifecycleCommands,
     },
     /// Consolidate near-duplicate memories
     Consolidate {
@@ -674,12 +703,21 @@ pub enum RoomCommands {
         room_id: String,
     },
     /// Recall all memories in a room (cross-namespace)
+    ///
+    /// Examples:
+    ///   uteke room recall engineering                    # all memories
+    ///   uteke room recall engineering "caching strategy" # semantic search
+    ///   uteke room recall engineering --author alice     # filter by author
     Recall {
         /// Room ID
         room_id: String,
-        /// Semantic query — rank memories by relevance instead of chronological
-        #[arg(long)]
+        /// Semantic query (optional positional) — rank memories by relevance.
+        /// Equivalent to --query. Use when you want natural `room recall <id> "<query>"` syntax.
         query: Option<String>,
+        /// Semantic query (flag form) — same as positional query.
+        /// If both are given, positional takes precedence.
+        #[arg(long = "query", visible_alias = "query-flag")]
+        query_flag: Option<String>,
         /// Filter by author
         #[arg(long)]
         author: Option<String>,
@@ -759,5 +797,30 @@ pub enum AgingCommands {
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
+        /// Preview what would be deleted without actually deleting
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+/// Subcommands for memory lifecycle management (#935).
+#[derive(Subcommand)]
+pub enum LifecycleCommands {
+    /// Run one lifecycle cycle: soft-deprecate aged memories (cap-limited) + auto-prune
+    Cycle {
+        /// Namespace to target (default: all)
+        #[arg(long)]
+        namespace: Option<String>,
+    },
+    /// Promote a deprecated memory back to active
+    Promote {
+        /// Memory ID to promote
+        id: String,
+    },
+    /// Show lifecycle status: active vs deprecated counts, config summary
+    Status {
+        /// Namespace to check (default: all)
+        #[arg(long)]
+        namespace: Option<String>,
     },
 }

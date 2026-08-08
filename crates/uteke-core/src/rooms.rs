@@ -73,7 +73,13 @@ impl crate::Uteke {
     /// Semantic recall within room context using hybrid search (vector + FTS5).
     ///
     /// Returns room memories ranked by relevance to query, with scores.
-    /// Algorithm: over-fetch via recall_hybrid, post-filter to room members, truncate.
+    ///
+    /// Algorithm (two-stage, bounded):
+    /// 1. **Primary**: hybrid search with adaptive bounded limit, post-filter to room IDs.
+    /// 2. **Fallback**: if primary returns fewer room memories than the room contains,
+    ///    load remaining room memories directly and score them with cosine similarity
+    ///    against the query embedding. This guarantees complete room coverage without
+    ///    unbounded global fetch (#894 follow-up).
     pub fn recall_room_semantic(
         &self,
         room_id: &str,
@@ -87,46 +93,97 @@ impl crate::Uteke {
         if room_ids.is_empty() {
             return Ok(Vec::new());
         }
+        let room_size = room_ids.len();
         let id_set: std::collections::HashSet<String> = room_ids.into_iter().collect();
 
-        // 2. Over-fetch via hybrid recall (no namespace filter — rooms are cross-ns).
-        // Cap at 200 to prevent unbounded searches for large rooms (#546).
-        // limit=0 means "return all" — use a generous fetch limit (#623).
+        // 2. Adaptive bounded fetch_limit.
+        //
+        // Scale with room size (×10 gives generous over-fetch for post-filter)
+        // and caller limit (×5). Hard cap at MAX_ROOM_FETCH prevents unbounded
+        // scans on large databases (50K+ memories).
+        const MAX_ROOM_FETCH: usize = 5_000;
         let effective_limit = if limit == 0 { 1000 } else { limit };
-        let fetch_limit = (effective_limit * 5).min(200).max(effective_limit);
-        let results = self.recall_hybrid(
+        let total_memories = self.store.count_all_memories()?;
+        let fetch_limit = (room_size * 10)
+            .max(effective_limit * 5)
+            .min(total_memories)
+            .min(MAX_ROOM_FETCH);
+
+        // 3. Primary: hybrid search → post-filter to room IDs
+        let hybrid_results = self.recall_hybrid(
             query,
             fetch_limit,
             None, // no tag filter
             None, // no namespace filter — rooms are cross-namespace
             RecallStrategy::Hybrid,
-            0.0, // no min_score at fetch stage, we filter after
+            0.0,
         )?;
 
-        // 3. Post-filter: only keep results whose memory ID is in the room
-        let mut filtered: Vec<SearchResult> = results
+        let mut results: Vec<SearchResult> = hybrid_results
             .into_iter()
             .filter(|sr| id_set.contains(&sr.memory.id))
             .collect();
 
-        // 4. Apply min_score filter
-        if min_score > 0.0 {
-            filtered.retain(|sr| sr.score >= min_score);
+        // 4. Fallback: if hybrid missed some room memories, score them directly.
+        //
+        // This happens when room memories rank below the fetch_limit boundary in
+        // global search (e.g. small room in a large DB — the original #894 bug).
+        // We embed the query and compute cosine similarity for the missing IDs.
+        let found_ids: std::collections::HashSet<&str> =
+            results.iter().map(|sr| sr.memory.id.as_str()).collect();
+        let missing_ids: Vec<&str> = id_set
+            .iter()
+            .filter(|id| !found_ids.contains(id.as_str()))
+            .map(|s| s.as_str())
+            .collect();
+
+        if !missing_ids.is_empty() {
+            // Load missing room memories (includes embeddings)
+            let mut missing_memories = Vec::new();
+            for id in &missing_ids {
+                if let Some(mem) = self.store.get_by_id(id)? {
+                    if !mem.deprecated {
+                        missing_memories.push(mem);
+                    }
+                }
+            }
+
+            if !missing_memories.is_empty() {
+                // Embed query and score each missing memory by cosine similarity.
+                self.ensure_embedder()?;
+                let query_emb = self
+                    .embedder
+                    .lock()
+                    .map_err(|_| Error::lock("embedder in room fallback"))?
+                    .as_ref()
+                    .expect("embedder ensured above")
+                    .embed(query)?;
+
+                for mem in missing_memories {
+                    let score = crate::consolidate::cosine_similarity(&query_emb, &mem.embedding);
+                    results.push(SearchResult { memory: mem, score });
+                }
+            }
         }
 
-        // 5. Sort by score descending (already sorted by recall_hybrid, but re-sort after filtering)
-        filtered.sort_by(|a, b| {
+        // 5. Apply min_score filter
+        if min_score > 0.0 {
+            results.retain(|sr| sr.score >= min_score);
+        }
+
+        // 6. Sort by score descending
+        results.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // 6. Truncate to limit (0 = return all, no truncation)
+        // 7. Truncate to limit (0 = return all, no truncation)
         if limit > 0 {
-            filtered.truncate(limit);
+            results.truncate(limit);
         }
 
-        Ok(filtered)
+        Ok(results)
     }
 
     /// Delete a room and all its memory links.
@@ -296,6 +353,82 @@ mod tests {
     fn room_document_nonexistent_returns_none() {
         let uteke = open_in_memory();
         assert!(uteke.room_summary_document("nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn count_all_memories_empty() {
+        let uteke = open_in_memory();
+        assert_eq!(uteke.store.count_all_memories().unwrap(), 0);
+    }
+
+    #[test]
+    #[ignore = "requires ONNX embedder (model download) in CI"]
+    fn count_all_memories_with_data() {
+        let uteke = open_in_memory();
+        uteke
+            .remember_in_room("Fact one", &[], None, None, "fact", "r", "a")
+            .unwrap();
+        uteke
+            .remember_in_room("Fact two", &[], None, None, "fact", "r", "a")
+            .unwrap();
+        assert_eq!(uteke.store.count_all_memories().unwrap(), 2);
+    }
+
+    /// Regression test for #894: semantic room recall must return results
+    /// even when the room has few memories in a large database.
+    /// The old fixed cap of 200 caused small rooms to return zero.
+    #[test]
+    #[ignore = "requires ONNX embedder (model download) in CI"]
+    fn recall_room_semantic_small_room_large_db() {
+        let uteke = open_in_memory();
+
+        // Fill DB with 30+ unrelated memories to ensure the room's memories
+        // are a small fraction of the total. The old fixed cap of 200 would
+        // miss them; the new dynamic fetch_limit scales to total_memories.
+        for i in 0..30 {
+            uteke
+                .remember(
+                    &format!("Noise memory number {i} about weather and cooking"),
+                    &[],
+                    None,
+                    Some("noise-ns"),
+                )
+                .unwrap();
+        }
+
+        // Create a small room with 2 memories
+        uteke
+            .remember_in_room(
+                "Rust is a systems programming language",
+                &[],
+                None,
+                None,
+                "fact",
+                "small-room",
+                "alice",
+            )
+            .unwrap();
+        uteke
+            .remember_in_room(
+                "Rust uses ownership for memory safety",
+                &[],
+                None,
+                None,
+                "fact",
+                "small-room",
+                "alice",
+            )
+            .unwrap();
+
+        // Semantic recall must find room memories despite small room size
+        let results = uteke
+            .recall_room_semantic("small-room", "Rust programming", 10, None, 0.0)
+            .unwrap();
+        assert!(
+            !results.is_empty(),
+            "small room must return semantic results (#894)"
+        );
+        assert!(results.iter().any(|r| r.memory.content.contains("Rust")));
     }
 
     // ── Room ↔ Document junction ──────────────────────────────────

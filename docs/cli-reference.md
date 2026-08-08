@@ -4,7 +4,7 @@ title: CLI Reference
 
 # CLI Reference
 
-Complete reference for all uteke commands. Version **0.12.0**.
+Complete reference for all uteke commands. Version **0.13.0**.
 
 ## Global Flags
 
@@ -19,13 +19,13 @@ Config file path is auto-resolved (`~/.codecora/uteke/uteke.toml` + `.uteke/utek
 
 ## uteke onboard
 
-Interactive onboarding wizard — guides new users from zero to productive. Detects install, picks agent, toggles features, writes config, installs agent integration, and shows a feature showcase.
+Interactive onboarding wizard — guides new users from zero to productive. Detects install, picks agent, configures extraction mode, toggles features, writes config, installs agent integration, runs a memory test, and introduces Rooms.
 
 ```bash
 # Interactive (recommended for first-time users)
 uteke onboard
 
-# Non-interactive (defaults: agent=hermes, namespace=default, tool mode)
+# Non-interactive (defaults: agent=hermes, namespace=default, tool mode, offline extraction)
 uteke onboard --yes
 
 # Pre-select agent and namespace
@@ -228,6 +228,39 @@ uteke prune --ttl 30 --dry-run
 # Prune deprecated/expired memories
 uteke prune --ttl 30
 ```
+
+## uteke lifecycle
+
+Safe memory lifecycle management: deprecate, promote, and inspect lifecycle status.
+
+```bash
+# Show lifecycle status (active vs deprecated counts + config)
+uteke lifecycle status
+
+# Scoped to a namespace
+uteke lifecycle status --namespace my-agent
+
+# Run a lifecycle cycle (deprecate aged + prune expired)
+uteke lifecycle cycle
+
+# Scoped cycle
+uteke lifecycle cycle --namespace my-agent
+
+# Promote a deprecated memory back to active
+uteke lifecycle promote <memory-id>
+
+# Restore is an alias for promote
+uteke lifecycle restore <memory-id>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `status` | Show active/deprecated counts and lifecycle config |
+| `cycle` | Run lifecycle cycle (deprecate aged memories + prune expired) |
+| `promote <id>` | Restore a deprecated memory to active status |
+| `restore <id>` | Alias for `promote` |
+
+See [Configuration → Memory Lifecycle](/configuration#memory-lifecycle) for lifecycle config options.
 
 ## uteke namespace
 
@@ -718,6 +751,8 @@ uteke timeline <memory-id> --json
 | `uteke verify` | Verify DB and index consistency |
 | `uteke verify-checksums --binary <path>` | Verify binary integrity against SHA256 checksums |
 | `uteke repair` | Rebuild index from SQLite |
+| `uteke repair --rebuild` | Rebuild index from SQLite (explicit) |
+| `uteke repair --reembed` | Regenerate missing embeddings for memories without vectors (#906) |
 | `uteke namespace list` | List all namespaces with memory counts |
 | `uteke namespace stats <name>` | Show stats for a namespace |
 | `uteke namespace switch <name>` | Set default namespace in config |

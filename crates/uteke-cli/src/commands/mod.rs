@@ -7,6 +7,7 @@ mod dream;
 mod edges;
 mod forget;
 pub(crate) mod graph;
+mod lifecycle;
 mod list;
 mod maintenance;
 mod namespace;
@@ -17,6 +18,7 @@ mod room;
 mod server;
 mod tags;
 mod timeline;
+pub(crate) mod update_check;
 pub(crate) mod upgrade;
 
 use crate::Config;
@@ -108,6 +110,17 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
             *enrich,
         ),
 
+        Commands::Context { namespace } => {
+            let effective_ns = namespace.as_deref().or(ns);
+            match uteke.build_context(effective_ns) {
+                Ok(summary) => {
+                    println!("{summary}");
+                    Ok(())
+                }
+                Err(e) => Err(format!("Failed to build context: {e}")),
+            }
+        }
+
         Commands::Search { query, limit, tags } => {
             recall::run_search(cli, uteke, ns, query, *limit, tags)
         }
@@ -158,7 +171,9 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
 
         Commands::Verify => maintenance::run_verify(cli, uteke),
 
-        Commands::Repair => maintenance::run_repair(cli, uteke),
+        Commands::Repair { rebuild, reembed } => {
+            maintenance::run_repair(cli, uteke, *rebuild, *reembed, config)
+        }
 
         Commands::Tags { command } => tags::run(cli, uteke, ns, command),
 
@@ -167,6 +182,8 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
         Commands::Consolidate { threshold, dry_run } => {
             maintenance::run_consolidate(cli, uteke, ns, *threshold, *dry_run)
         }
+
+        Commands::Lifecycle { command } => lifecycle::run(cli, uteke, ns, command),
 
         Commands::Export { output } => maintenance::run_export(cli, uteke, ns, output),
 

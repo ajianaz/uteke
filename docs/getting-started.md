@@ -16,7 +16,7 @@ See the [Installation guide](/install) for all methods (Cargo, binary, Docker).
 
 ## Interactive Onboarding
 
-New to uteke? Run the onboarding wizard — it detects your install, asks which AI agent you use, toggles features on/off, writes your config, and shows a full feature showcase:
+New to uteke? Run the onboarding wizard — it detects your install, configures extraction, tests your memory system, and introduces Rooms:
 
 ```bash
 uteke onboard
@@ -34,10 +34,13 @@ The wizard covers:
 2. **Agent selection** — Hermes, Claude, Cursor, Pi, or OpenCode
 3. **Integration mode** — manual tool (explicit calls) vs memory-provider (auto recall + extraction)
 4. **Namespace** — for multi-agent isolation
-5. **Feature toggles** — Aging, Auto-maintenance, Graph rerank, Salience/Recency boost, Server mode
-6. **Config write** — generates `~/.codecora/uteke/uteke.toml` with your choices
-7. **Agent init** — runs `uteke init --agent <your-choice>` automatically
-8. **Feature showcase** — prints all uteke commands grouped by category
+5. **Extraction configuration** — choose offline (rule-based, zero API), external LLM (OpenAI-compatible), or manual-only
+6. **Feature toggles** — Aging, Auto-maintenance, Graph rerank, Salience/Recency boost, Server mode
+7. **Config write** — generates `~/.codecora/uteke/uteke.toml` with your choices
+8. **Agent init** — runs `uteke init --agent <your-choice>` automatically
+9. **Memory system test** — stores and recalls a test memory to verify everything works
+10. **Rooms intro** — optionally creates your first Room for multi-agent memory sharing
+11. **Feature showcase** — prints all uteke commands grouped by category
 
 ## Your First Memory
 
@@ -177,7 +180,7 @@ Copy the entire folder to back up or transfer to another machine.
 ## Next Steps
 
 - [Installation](/install) — all install methods
-- [Rooms](/rooms) — group memories by context
+- [Rooms](/rooms) — **multi-agent shared memory with author attribution**
 - [Time-Travel Queries](/time-travel) — recall memories at any point in time
 - [Smart Decay](/smart-decay) — pinning, importance scoring, aging
 - [Relationship Graph](/relationship-graph) — link and traverse memories

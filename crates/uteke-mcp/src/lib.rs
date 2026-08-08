@@ -840,6 +840,7 @@ fn exec_recall(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
             None,
             None,
             false,
+            uteke_core::RecallStrategy::Vector, // #900: default vector, MCP doesn't expose strategy yet
         )
         .map_err(|e| format!("Failed: {e}"))?;
 
@@ -1183,7 +1184,7 @@ fn exec_doc_move(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
     let parent = args["parent"].as_str();
 
     let moved = uteke
-        .doc_move(id, parent)
+        .doc_move(id, parent, None)
         .map_err(|e| format!("Failed: {e}"))?;
 
     let msg = match parent {
