@@ -4,7 +4,7 @@ title: Memory Lifecycle
 
 # Memory Lifecycle
 
-Uteke protects your memories with a **safe lifecycle model**. No automated process ever hard-deletes a memory — instead, memories transition through a reviewable soft-delete state before eventual pruning.
+Uteke uses a soft-delete lifecycle model for memory management. No automated process hard-deletes a memory. Memories transition through a reviewable soft-delete state before eventual pruning.
 
 ## How It Works
 
@@ -22,21 +22,21 @@ remember() → ACTIVE → soft_deprecate() → DEPRECATED (hidden, restorable) �
 
 1. **Auto-lifecycle cycle** (server background thread, every 7 days by default)
 2. **Manual `uteke lifecycle cycle`** command
-3. **Explicit `delete()` / `forget()`** — redirected to soft-delete when `soft_delete_only = true` (default)
-4. **Dream consolidation** — duplicate memories are deprecated, not deleted
+3. **Explicit `delete()` / `forget()`**: redirected to soft-delete when `soft_delete_only = true` (default)
+4. **Dream consolidation**: duplicate memories are deprecated, not deleted
 
 ### What triggers hard delete (prune)?
 
 Only **two controlled paths** can hard-delete:
 
-1. **`prune()`** — Expired deprecated memories (past `deprecated_ttl_days`). Runs automatically during lifecycle cycle when `auto_prune_enabled = true`.
-2. **`forget()`** — Only when `soft_delete_only = false` (NOT the default).
+1. **`prune()`**: Expired deprecated memories (past `deprecated_ttl_days`). Runs automatically during lifecycle cycle when `auto_prune_enabled = true`.
+2. **`forget()`**: Only when `soft_delete_only = false` (not the default).
 
 ## Configuration
 
 See [Configuration → Memory Lifecycle](/configuration#memory-lifecycle) for the full config reference.
 
-Default settings are conservative — 1% max deprecation per cycle, 90-day minimum age, 30-day TTL:
+Default settings: 1% max deprecation per cycle, 90-day minimum age, 30-day TTL:
 
 ```toml
 [lifecycle]
@@ -80,8 +80,8 @@ See [HTTP API Reference → Lifecycle](/api-reference#lifecycle) for request/res
 
 ### Production deployments
 
-- **Keep `soft_delete_only = true`** (default). This is your safety net — no data loss from bugs, misconfigured agents, or accidental deletes.
-- **Tune `max_deprecate_percent`** based on your memory volume. For large stores (10K+ memories), 1% per cycle is 100 memories/week — adjust if too aggressive or too conservative.
+- **Keep `soft_delete_only = true`** (default). This is your safety net: no data loss from bugs, misconfigured agents, or accidental deletes.
+- **Tune `max_deprecate_percent`** based on your memory volume. For large stores (10K+ memories), 1% per cycle is 100 memories/week. Adjust if that feels too aggressive or too conservative.
 - **Monitor deprecated count** via `/lifecycle/status` or `uteke lifecycle status`. A growing deprecated count without corresponding pruning may indicate a TTL misconfiguration.
 
 ### Development / testing
@@ -102,8 +102,8 @@ Memories will still be soft-deleted on explicit `delete()`/`forget()`, but no au
 
 Existing databases are automatically migrated:
 
-- A `deprecate_reason` column is added to the `memories` table (nullable, uses `column_exists()` migration pattern — no schema version bump).
-- All existing memories remain ACTIVE — no behavior change on upgrade.
+- A `deprecate_reason` column is added to the `memories` table (nullable, uses `column_exists()` migration pattern, no schema version bump).
+- All existing memories remain ACTIVE, no behavior change on upgrade.
 - The auto-lifecycle background thread starts with default settings on first server boot.
 
 No manual migration steps required.

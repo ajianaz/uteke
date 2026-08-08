@@ -486,7 +486,7 @@ When an update is available, a banner is printed to **stderr** (does not interfe
 
 ## Memory Lifecycle (#928–#937)
 
-Uteke uses a **safe memory lifecycle** model. Memories are never hard-deleted by automated processes — instead, they transition through a soft-delete (deprecated) state before eventual pruning.
+Uteke uses a soft-delete lifecycle model. Memories are never hard-deleted directly by automated processes. They transition through a deprecated state before eventual pruning.
 
 ### Lifecycle States
 
@@ -505,7 +505,7 @@ remember() → ACTIVE → soft_deprecate() → DEPRECATED (hidden, restorable) �
 ```toml
 [lifecycle]
 # Master switch: when true, ALL delete operations become soft-deletes.
-# forget(), bulk_forget, aging_cleanup, consolidate, delete() — all redirect to deprecate.
+# forget(), bulk_forget, aging_cleanup, consolidate, delete() all redirect to deprecate.
 soft_delete_only = true
 
 # Auto-lifecycle background thread (server mode only).
@@ -516,16 +516,16 @@ auto_aging_interval_hours = 168          # Run cycle every 7 days
 min_age_days = 90                        # Must be at least 90 days old
 max_access_count = 3                     # Accessed 3 times or fewer
 
-# Rate limiting — max % of active memories deprecated per cycle.
+# Rate limiting: max % of active memories deprecated per cycle.
 max_deprecate_percent = 1.0              # 1% of active per cycle
 min_deprecate_per_cycle = 1              # Floor (always at least 1)
 max_deprecate_per_cycle = 50             # Ceiling (never more than 50)
 
-# Deprecated TTL — how long before soft-deleted memories are pruned (hard delete).
+# Deprecated TTL: how long before soft-deleted memories are pruned (hard delete).
 deprecated_ttl_days = 30                 # 30 days in deprecated state
 auto_prune_enabled = true                # Auto-prune expired deprecated memories
 
-# Dream dedup — when consolidating duplicates, soft-delete instead of hard delete.
+# Dream dedup: when consolidating duplicates, soft-delete instead of hard delete.
 dream_dedup_soft_delete = true
 ```
 
@@ -533,7 +533,7 @@ dream_dedup_soft_delete = true
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `soft_delete_only` | true | Master switch — all deletes become soft-deletes |
+| `soft_delete_only` | true | Master switch: all deletes become soft-deletes |
 | `auto_aging_enabled` | true | Enable auto-lifecycle background thread (server) |
 | `auto_aging_interval_hours` | 168 | Hours between auto-lifecycle cycles |
 | `min_age_days` | 90 | Minimum age (days) to be eligible for deprecation |
@@ -562,7 +562,7 @@ cap = clamp(total_active × max_deprecate_percent / 100, min_per_cycle, max_per_
 
 Hard delete only occurs in **two explicitly controlled paths**:
 
-1. **`prune()`** — Deletes deprecated memories whose TTL has expired. Only runs when `auto_prune_enabled = true`.
-2. **`forget()`** — Bypasses soft-delete only when `soft_delete_only = false` (default is `true`, so forget = soft-delete by default).
+1. **`prune()`**: Deletes deprecated memories whose TTL has expired. Only runs when `auto_prune_enabled = true`.
+2. **`forget()`**: Bypasses soft-delete only when `soft_delete_only = false` (default is `true`, so forget = soft-delete by default).
 
 All other paths (`delete()`, `bulk_delete()`, `aging_cleanup()`, `consolidate()`) respect `soft_delete_only` and deprecate instead.
