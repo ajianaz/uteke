@@ -4,7 +4,7 @@ title: CLI Reference
 
 # CLI Reference
 
-Complete reference for all uteke commands. Version **0.12.0**.
+Complete reference for all uteke commands. Version **0.13.0**.
 
 ## Global Flags
 
@@ -231,7 +231,7 @@ uteke prune --ttl 30
 
 ## uteke lifecycle
 
-Safe memory lifecycle management — deprecate, promote, and inspect lifecycle status.
+Safe memory lifecycle management: deprecate, promote, and inspect lifecycle status.
 
 ```bash
 # Show lifecycle status (active vs deprecated counts + config)

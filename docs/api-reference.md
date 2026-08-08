@@ -404,7 +404,7 @@ MCP (Model Context Protocol) bridge endpoint for AI agent tool calls.
 
 #### 🟢 `GET` `/lifecycle/status`
 
-Get lifecycle status — active vs deprecated memory counts.
+Get lifecycle status: active vs deprecated memory counts.
 
 Accepts `?namespace=X` query param to scope to a namespace.
 
@@ -418,7 +418,7 @@ Accepts `?namespace=X` query param to scope to a namespace.
 
 #### 🟡 `POST` `/lifecycle/cycle`
 
-Run a lifecycle cycle — deprecate aged memories (respecting percentage cap) and prune expired deprecated memories.
+Run a lifecycle cycle: deprecate aged memories (respecting percentage cap) and prune expired deprecated memories.
 
 **Request body**:
 ```json
@@ -468,6 +468,13 @@ Detailed field definitions for each request type.
 
 ### `ConsolidateRequest`
 
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `dry_run` | `boolean` | No |  |
+| `namespace` | any | No |  |
+| `threshold` | `number` | No |  |
+
+
 ### `LifecycleCycleResult`
 
 | Field | Type | Description |
@@ -479,12 +486,6 @@ Detailed field definitions for each request type.
 | `deprecated_ids` | `string`[] | IDs of deprecated memories |
 | `pruned` | `integer` | Expired deprecated memories hard-deleted |
 | `pruned_ids` | `string`[] | IDs of pruned memories |
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `dry_run` | `boolean` | No |  |
-| `namespace` | any | No |  |
-| `threshold` | `number` | No |  |
 
 
 ### `DocCreateRequest`

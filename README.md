@@ -5,7 +5,7 @@
 <h1 align="center">Uteke</h1>
 <p align="center"><strong>Give your AI a memory that never leaves your machine.</strong></p>
 <p align="center">
-  Your AI forgets everything between sessions. Uteke fixes that — one binary, fully offline, ~45ms recall.
+  Local-first by default. One binary, fully offline, ~45ms recall. Want cloud or team deployments? Docker ready.
 </p>
 
 <p align="center">
@@ -37,9 +37,13 @@ uteke remember "Deploy v2.1 to staging at 3pm"
 uteke recall "when do we deploy?"
 ```
 
-**That's it.** No API keys. No Docker. No Python. No cloud.
+**That's it.** No API keys, no Python, no cloud required. First run downloads the embedding model (~188MB, one-time) and you're running.
 
-First run downloads the embedding model (~188MB, one-time) and you're running.
+> **Want Docker or server mode?** Uteke ships as a single binary by default, but Docker is ready when you need it:
+> ```bash
+> docker run -d -p 127.0.0.1:8767:8767 -v uteke-data:/data ghcr.io/codecoradev/uteke:latest
+> ```
+> 📖 [Docker docs](docs/docker.md)
 
 Want richer memories? Add metadata:
 
@@ -234,7 +238,8 @@ uteke recall "caching decision" --room engineering
 
 | Feature | What it does |
 |---------|-------------|
-| 📦 **Single Binary** | Zero dependencies. No Docker needed, no database server, no Python, no API keys. |
+| 📦 **Single Binary** | Zero dependencies. No Python, no API keys. Local-first by default. |
+| 🐳 **Docker Ready** | Official image on GHCR. Run as a shared service for teams or cloud deployments. |
 | 🔒 **Fully Offline** | Local ONNX embeddings (EmbeddingGemma Q4, 768d). No telemetry, no cloud. |
 | ⚡ **Recall Cache** | LRU cache eliminates redundant embedding for repeated queries. |
 | 🔥 **Tiered Memory** | Hot/Warm/Cold tracking with auto-cleanup of stale memories. |
@@ -254,6 +259,44 @@ For Claude Desktop, Hermes, and HTTP transport, see [MCP docs](docs/mcp.md).
 </details>
 
 📖 [Full documentation](docs/getting-started.md) · [CLI reference](docs/cli-reference.md) · [Configuration](docs/configuration.md)
+
+---
+
+## 📦 Deployment Modes
+
+Uteke runs the same everywhere. Pick the mode that fits your setup.
+
+### Local-first (default)
+
+Single binary, zero infrastructure. Everything runs in-process on your machine:
+
+```bash
+curl -sSL codecora.dev/install | sh
+uteke remember "first memory"
+```
+
+No Docker, no Python, no database server. Your data stays in `~/.codecora/uteke/`. This is what most users need.
+
+### Docker / Server mode
+
+Running Uteke as a shared service for a team, or deploying to a server? Docker keeps it simple:
+
+```bash
+docker run -d \
+  -p 127.0.0.1:8767:8767 \
+  -v uteke-data:/data \
+  ghcr.io/codecoradev/uteke:latest
+```
+
+Prefer the binary directly? Run it as a daemon:
+
+```bash
+uteke serve --host 0.0.0.0 --port 8767
+```
+
+Both expose the same HTTP API. Other agents and tools connect via `http://your-host:8767`. Rooms work across agents whether they're on the same machine or connecting remotely.
+
+📖 **[Docker setup guide](docs/docker.md)** · [Server mode docs](docs/configuration.md#server-mode)
 
 ---
 
@@ -339,7 +382,7 @@ Yes. Uteke ships with an MCP server that works with Claude Code, Cursor, and Her
 <details>
 <summary><strong>Is it production-ready?</strong></summary>
 
-Uteke is at v0.12.0 with 432 tests, CI/CD on every commit, and benchmark harness. It's used in production by the CodeCora team and other early adopters. Still in 0.x — expect rough edges, but the core is stable.
+Uteke is at v0.13.0 with 460+ tests, CI/CD on every commit, and benchmark harness. It's used in production by the CodeCora team and other early adopters. Still in 0.x, so expect rough edges, but the core is stable.
 </details>
 
 ---
@@ -348,7 +391,7 @@ Uteke is at v0.12.0 with 432 tests, CI/CD on every commit, and benchmark harness
 
 ```bash
 cargo build --workspace        # Build
-cargo test --workspace         # Test (431 tests)
+cargo test --workspace         # Test (460+ tests)
 cargo clippy -- -D warnings    # Lint
 cargo fmt                      # Format
 ```
