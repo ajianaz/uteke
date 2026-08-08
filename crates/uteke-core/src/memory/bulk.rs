@@ -168,12 +168,28 @@ impl super::Store {
     /// The reason is stored for audit trail and pending-review display.
     pub fn deprecate_with_reason(&self, id: &str, reason: &str) -> Result<(), Error> {
         let now = chrono::Utc::now().to_rfc3339();
-        self.conn
+        let rows = self
+            .conn
             .execute(
-                "UPDATE memories SET deprecated = 1, valid_until = ?1, deprecate_reason = ?2, updated_at = ?1 WHERE id = ?3",
+                "UPDATE memories SET deprecated = 1, valid_until = ?1, deprecate_reason = ?2, updated_at = ?1 WHERE id = ?3 AND deprecated = 0",
                 params![now, reason, id],
             )
             .map_err(|e| Error::db("database operation", e))?;
+        if rows == 0 {
+            // Check if the memory exists at all (already deprecated or not found)
+            let exists: bool = self
+                .conn
+                .query_row("SELECT 1 FROM memories WHERE id = ?1", params![id], |_| {
+                    Ok(true)
+                })
+                .unwrap_or(false);
+            if !exists {
+                return Err(Error::db_msg(format!(
+                    "Memory with id='{id}' not found in store. Nothing was deprecated."
+                )));
+            }
+            // Already deprecated: idempotent success
+        }
         Ok(())
     }
 

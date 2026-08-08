@@ -654,7 +654,7 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
             }
             match read_body::<PromoteReq>(req.as_reader()) {
                 Ok(req_data) => match uteke.promote(&req_data.id) {
-                    Ok(_) => {
+                    Ok(restored) => {
                         #[derive(serde::Serialize)]
                         struct PromoteResponse {
                             promoted: bool,
@@ -663,7 +663,7 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                         ctx.ok_response_for(
                             req,
                             &PromoteResponse {
-                                promoted: true,
+                                promoted: restored,
                                 id: req_data.id,
                             },
                         )
