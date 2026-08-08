@@ -109,14 +109,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64 — ubuntu-22.04 provides GLIBC 2.35 (Ubuntu 22.04+,
-          # Debian 12+, RHEL 9+). System GCC handles numkong SIMD probes.
-          - os: ubuntu-22.04
+          # Linux x86_64 — ubuntu-24.04 provides GCC 14 (needed for numkong
+          # 7.7.0 SIMD probes: AVX512-FP16, AMX, AVX10.2). GLIBC 2.39.
+          # Compatibility: Ubuntu 24.04+, Debian 13+, RHEL 10+.
+          # For older distros, use the Docker image (based on Debian 12).
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             artifact: uteke-x86_64-unknown-linux-gnu
             ext: tar.gz
-          # Linux ARM64 — same ubuntu-22.04 baseline
-          - os: ubuntu-22.04-arm
+          # Linux ARM64 — same ubuntu-24.04 baseline
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact: uteke-aarch64-unknown-linux-gnu
             ext: tar.gz
@@ -194,7 +196,7 @@ jobs:
           objdump -T "$BIN_DIR/uteke" | grep -oP 'GLIBC_[\d.]+' | sort -V -u
           echo ""
           MAX_GLIBC=$(objdump -T "$BIN_DIR/uteke" | grep -oP 'GLIBC_[\d.]+' | sort -V -u | tail -1)
-          FLOOR="GLIBC_2.35"
+          FLOOR="GLIBC_2.39"
           echo "Highest GLIBC requirement: ${MAX_GLIBC:-<none>}"
           echo "Floor:                     $FLOOR"
           if [ -z "$MAX_GLIBC" ]; then
@@ -204,7 +206,7 @@ jobs:
           if [[ "$(echo -e "$MAX_GLIBC\n$FLOOR" | sort -V | tail -1)" != "$FLOOR" ]]; then
             echo "::warning::Binary requires $MAX_GLIBC > $FLOOR. Compatibility limited to newer distros."
           fi
-          echo "✅ Binary built on ubuntu-22.04 (GLIBC 2.35)"
+          echo "✅ Binary built on ubuntu-24.04 (GLIBC 2.39, GCC 14)"
 
       - name: Extract version
         id: version
