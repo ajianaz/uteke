@@ -164,7 +164,7 @@ jobs:
           # Add both to PATH (for this step)
           export PATH="$USER_BIN:$ZIG_DIR:$PATH"
           zig version
-          cargo zigbuild --version
+          cargo zigbuild --help >/dev/null 2>&1 && echo "cargo-zigbuild OK"
 
       - name: Download prebuilt ORT shared library
         shell: bash
