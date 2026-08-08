@@ -16,13 +16,14 @@ jobs:
       - name: Fetch & check CLA signature
         id: check
         run: |
-          # Clone .cla/ folder from public repo (no auth needed)
-          git clone --no-checkout --depth 1 https://github.com/codecoradev/.github.git cla-store 2>&1
-          cd cla-store && git sparse-checkout set .cla && git checkout 2>&1
-          cd ..
-          cp cla-store/.cla/signatures.json signatures.json 2>/dev/null || echo '{"signatures":[]}' > signatures.json
-          echo "Loaded signatures:"
-          python3 -c "import json; d=json.load(open('signatures.json')); print(f'  {len(d.get(\"signatures\",[]))} entries')"
+          # Fetch signatures.json directly from raw GitHub (public repo)
+          # Use wget as primary (handles 200-with-404-body better than curl)
+          wget -q -O signatures.json "https://raw.githubusercontent.com/codecoradev/.github/main/.cla/signatures.json" 2>/dev/null \
+            || curl -sfL "https://raw.githubusercontent.com/codecoradev/.github/main/.cla/signatures.json" -o signatures.json 2>/dev/null \
+            || echo '{"signatures":[]}' > signatures.json
+          # Validate JSON — if invalid, use empty
+          python3 -c "import json; json.load(open('signatures.json'))" 2>/dev/null \
+            || echo '{"signatures":[]}' > signatures.json
           python3 - << 'EOF'
           import json, os
 
