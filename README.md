@@ -148,10 +148,6 @@ Full benchmarks: `uteke bench --counts 100,1000,10000 --json` · [Benchmark deta
 
 </details>
 
-<p align="center">
-  <img src="docs/assets/uteke-comparison.png" alt="Uteke compared to other memory tools" width="640" />
-</p>
-
 ---
 
 ## 💡 What Can You Do With Uteke?
@@ -324,10 +320,6 @@ graph LR
 3. **RRF** (k=60): merges both ranked lists → best of both worlds
 
 Everything runs in-process. No network. No cloud. No server required (unless you want server mode).
-
-<p align="center">
-  <img src="docs/assets/uteke-architecture.png" alt="Uteke architecture diagram" width="640" />
-</p>
 
 ---
 
