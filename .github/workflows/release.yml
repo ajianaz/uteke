@@ -148,9 +148,9 @@ jobs:
       - name: Install Zig + cargo-zigbuild (Linux only)
         if: matrix.zigbuild == true
         run: |
-          pip install cargo-zigbuild==0.23.0
-          # Zig is pre-installed on ubuntu-24.04 runners; verify
-          zig version || sudo snap install zig --classic
+          # Pin both packages for reproducible builds.
+          # ziglang provides the Zig compiler binary used by cargo-zigbuild.
+          pip install cargo-zigbuild==0.23.0 ziglang==0.14.1
           zig version
 
       - name: Download prebuilt ORT shared library
@@ -209,12 +209,16 @@ jobs:
         if: matrix.zigbuild == true
         run: |
           echo "=== GLIBC version requirement ==="
-          objdump -T target/${{ matrix.target }}/release/uteke | grep GLIBC | awk '{print $5}' | sort -V -u | tail -5
+          objdump -T target/${{ matrix.target }}/release/uteke | grep -oP 'GLIBC_[\d.]+' | sort -V -u
           echo ""
+          # Use sort -V for proper version comparison (handles 2.100 > 2.99)
           MAX_GLIBC=$(objdump -T target/${{ matrix.target }}/release/uteke | grep -oP 'GLIBC_[\d.]+' | sort -V -u | tail -1)
+          FLOOR="GLIBC_2.17"
           echo "Highest GLIBC requirement: $MAX_GLIBC"
-          if [[ "$MAX_GLIBC" > "GLIBC_2.17" ]]; then
-            echo "::error::Binary requires GLIBC > 2.17 ($MAX_GLIBC). zigbuild target not working."
+          echo "Floor:                     $FLOOR"
+          # If MAX_GLIBC sorts after FLOOR, binary needs newer GLIBC
+          if [[ "$(echo -e "$MAX_GLIBC\n$FLOOR" | sort -V | tail -1)" != "$FLOOR" ]]; then
+            echo "::error::Binary requires $MAX_GLIBC > $FLOOR. zigbuild target not working."
             exit 1
           fi
           echo "✅ Binary compatible with GLIBC 2.17+"
