@@ -1,0 +1,129 @@
+name: CLA Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  contents: read
+  statuses: write
+
+jobs:
+  cla-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch & check CLA signature
+        id: check
+        run: |
+          # Fetch signatures.json directly from raw GitHub (public repo)
+          # Use wget as primary (handles 200-with-404-body better than curl)
+          wget -q -O signatures.json "https://raw.githubusercontent.com/codecoradev/.github/main/.cla/signatures.json" 2>/dev/null \
+            || curl -sfL "https://raw.githubusercontent.com/codecoradev/.github/main/.cla/signatures.json" -o signatures.json 2>/dev/null \
+            || echo '{"signatures":[]}' > signatures.json
+          # Validate JSON — if invalid, use empty
+          python3 -c "import json; json.load(open('signatures.json'))" 2>/dev/null \
+            || echo '{"signatures":[]}' > signatures.json
+          python3 - << 'EOF'
+          import json, os
+
+          author = os.environ["PR_AUTHOR"]
+          with open("signatures.json") as f:
+              data = json.load(f)
+
+          signatures = data.get("signatures", [])
+          found = any(
+              s.get("github_username", "").lower() == author.lower()
+              for s in signatures
+          )
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"signed={'true' if found else 'false'}\n")
+
+          print(f"CLA signed by @{author}: {found}")
+          EOF
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const signed = '${{ steps.check.outputs.signed }}' === 'true';
+            const author = '${{ github.event.pull_request.user.login }}';
+            const prNumber = ${{ github.event.pull_request.number }};
+
+            // Find existing CLA bot comment
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const botComment = comments.data.find(c =>
+              c.user.login === 'github-actions[bot]' &&
+              c.body.includes('CodeCoraDev CLA Bot')
+            );
+
+            const body = signed
+              ? [
+                  '## ✅ CodeCoraDev CLA Bot',
+                  '',
+                  `Thank you @${author}! Your CLA is on file. 🎉`,
+                  '',
+                  'Your contribution can now be reviewed.',
+                ].join('\n')
+              : [
+                  '## ⚠️ CodeCoraDev CLA Bot',
+                  '',
+                  `Hi @${author}! Thanks for your contribution.`,
+                  '',
+                  'Before this PR can be reviewed, please sign our Contributor License Agreement:',
+                  '',
+                  '- 📋 **Individual?** → [Sign CLA Individual](https://codecoradev.github.io/cla/?type=individual)',
+                  '- 🏢 **Corporate?** → [Sign CLA Corporate](https://codecoradev.github.io/cla/?type=corporate)',
+                  '',
+                  '---',
+                  '<sub>By signing, you agree to the terms in [CLA_INDIVIDUAL.md](https://github.com/codecoradev/.github/blob/main/CLA_INDIVIDUAL.md) or [CLA_CORPORATE.md](https://github.com/codecoradev/.github/blob/main/CLA_CORPORATE.md).</sub>',
+                ].join('\n');
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
+
+      - name: Set commit status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const signed = '${{ steps.check.outputs.signed }}' === 'true';
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: '${{ github.event.pull_request.head.sha }}',
+              state: signed ? 'success' : 'failure',
+              context: 'CLA Check',
+              description: signed
+                ? '✅ CLA signed'
+                : '❌ CLA not signed — sign at https://codecoradev.github.io/cla',
+              target_url: signed
+                ? 'https://github.com/codecoradev/.github/blob/main/.cla/signatures.json'
+                : 'https://codecoradev.github.io/cla',
+            });
+
+      - name: Fail if not signed
+        if: steps.check.outputs.signed != 'true'
+        run: |
+          echo "❌ CLA not signed by ${{ github.event.pull_request.user.login }}"
+          exit 1
