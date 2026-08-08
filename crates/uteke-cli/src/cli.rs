@@ -341,6 +341,11 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Memory lifecycle management (#935): cycle, promote, status
+    Lifecycle {
+        #[command(subcommand)]
+        command: LifecycleCommands,
+    },
     /// Consolidate near-duplicate memories
     Consolidate {
         /// Similarity threshold (0.0-1.0) for detecting duplicates
@@ -795,5 +800,27 @@ pub enum AgingCommands {
         /// Preview what would be deleted without actually deleting
         #[arg(long)]
         dry_run: bool,
+    },
+}
+
+/// Subcommands for memory lifecycle management (#935).
+#[derive(Subcommand)]
+pub enum LifecycleCommands {
+    /// Run one lifecycle cycle: soft-deprecate aged memories (cap-limited) + auto-prune
+    Cycle {
+        /// Namespace to target (default: all)
+        #[arg(long)]
+        namespace: Option<String>,
+    },
+    /// Promote a deprecated memory back to active
+    Promote {
+        /// Memory ID to promote
+        id: String,
+    },
+    /// Show lifecycle status: active vs deprecated counts, config summary
+    Status {
+        /// Namespace to check (default: all)
+        #[arg(long)]
+        namespace: Option<String>,
     },
 }

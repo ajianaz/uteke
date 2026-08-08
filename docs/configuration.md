@@ -483,3 +483,86 @@ update_check = true    # Set to false to disable startup update notification
 | `update_check` | true | Enable background update notification on startup |
 
 When an update is available, a banner is printed to **stderr** (does not interfere with stdout pipes). The check is non-blocking — it runs in a background thread joined before process exit, so it never delays command execution.
+
+## Memory Lifecycle (#928–#937)
+
+Uteke uses a **safe memory lifecycle** model. Memories are never hard-deleted by automated processes — instead, they transition through a soft-delete (deprecated) state before eventual pruning.
+
+### Lifecycle States
+
+```
+remember() → ACTIVE → soft_deprecate() → DEPRECATED (hidden, restorable) → prune() → HARD DELETE
+```
+
+| State | Visible in recall? | Restorable? | TTL |
+|-------|-------------------|-------------|-----|
+| **ACTIVE** | ✅ Yes | N/A | — |
+| **DEPRECATED** | ❌ Hidden | ✅ `promote()` | 30 days (configurable) |
+| **PRUNED** | ❌ Gone | ❌ No | — |
+
+### Configuration
+
+```toml
+[lifecycle]
+# Master switch: when true, ALL delete operations become soft-deletes.
+# forget(), bulk_forget, aging_cleanup, consolidate, delete() — all redirect to deprecate.
+soft_delete_only = true
+
+# Auto-lifecycle background thread (server mode only).
+auto_aging_enabled = true
+auto_aging_interval_hours = 168          # Run cycle every 7 days
+
+# What qualifies as "aged" → candidate for deprecation.
+min_age_days = 90                        # Must be at least 90 days old
+max_access_count = 3                     # Accessed 3 times or fewer
+
+# Rate limiting — max % of active memories deprecated per cycle.
+max_deprecate_percent = 1.0              # 1% of active per cycle
+min_deprecate_per_cycle = 1              # Floor (always at least 1)
+max_deprecate_per_cycle = 50             # Ceiling (never more than 50)
+
+# Deprecated TTL — how long before soft-deleted memories are pruned (hard delete).
+deprecated_ttl_days = 30                 # 30 days in deprecated state
+auto_prune_enabled = true                # Auto-prune expired deprecated memories
+
+# Dream dedup — when consolidating duplicates, soft-delete instead of hard delete.
+dream_dedup_soft_delete = true
+```
+
+### Field Reference
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `soft_delete_only` | true | Master switch — all deletes become soft-deletes |
+| `auto_aging_enabled` | true | Enable auto-lifecycle background thread (server) |
+| `auto_aging_interval_hours` | 168 | Hours between auto-lifecycle cycles |
+| `min_age_days` | 90 | Minimum age (days) to be eligible for deprecation |
+| `max_access_count` | 3 | Max access count for deprecation eligibility |
+| `max_deprecate_percent` | 1.0 | Max % of active memories deprecated per cycle |
+| `min_deprecate_per_cycle` | 1 | Floor for per-cycle deprecation cap |
+| `max_deprecate_per_cycle` | 50 | Ceiling for per-cycle deprecation cap |
+| `deprecated_ttl_days` | 30 | Days before deprecated memories are pruned |
+| `auto_prune_enabled` | true | Auto-prune expired deprecated memories in lifecycle cycle |
+| `dream_dedup_soft_delete` | true | Consolidation soft-deletes instead of hard-deletes |
+
+### How the Lifecycle Cycle Works
+
+Each cycle runs two phases:
+
+1. **Deprecate phase**: Find aged memories (old + rarely accessed) → apply percentage cap → batch deprecate.
+2. **Prune phase**: Find deprecated memories past TTL → hard delete (irreversible).
+
+The percentage cap ensures **at most 1–2% of active memories** are deprecated per cycle, preventing sudden data loss. The cap is calculated as:
+
+```
+cap = clamp(total_active × max_deprecate_percent / 100, min_per_cycle, max_per_cycle)
+```
+
+### Hard Delete Paths
+
+Hard delete only occurs in **two explicitly controlled paths**:
+
+1. **`prune()`** — Deletes deprecated memories whose TTL has expired. Only runs when `auto_prune_enabled = true`.
+2. **`forget()`** — Bypasses soft-delete only when `soft_delete_only = false` (default is `true`, so forget = soft-delete by default).
+
+All other paths (`delete()`, `bulk_delete()`, `aging_cleanup()`, `consolidate()`) respect `soft_delete_only` and deprecate instead.

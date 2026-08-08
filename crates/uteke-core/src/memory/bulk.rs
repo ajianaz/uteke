@@ -35,6 +35,29 @@ impl super::Store {
         Ok(ids)
     }
 
+    /// Find IDs of memories by tag (for soft-delete path, #932).
+    ///
+    /// Same query as `bulk_delete_by_tag` but SELECT instead of DELETE.
+    pub fn find_ids_by_tag(
+        &self,
+        tag: &str,
+        namespace: Option<&str>,
+    ) -> Result<Vec<String>, Error> {
+        let ns = namespace.unwrap_or(DEFAULT_NAMESPACE);
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT memories.id FROM memories WHERE namespace = ?1 AND deprecated = 0 AND EXISTS (SELECT 1 FROM memory_tags WHERE memory_id = memories.id AND tag = ?2)",
+            )
+            .map_err(|e| Error::db("database operation", e))?;
+        let ids: Vec<String> = stmt
+            .query_map(params![ns, tag], |row| row.get(0))
+            .map_err(|e| Error::db("database operation", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(ids)
+    }
+
     /// Bulk delete all cold memories (not accessed in warm_days+ days or never accessed).
     ///
     /// Uses a single DELETE query with `RETURNING id` for efficiency.
@@ -86,6 +109,47 @@ impl super::Store {
         Ok(ids)
     }
 
+    /// Find IDs of cold memories (for soft-delete path, #932).
+    ///
+    /// Same criteria as `bulk_delete_cold` but SELECT instead of DELETE.
+    pub fn find_ids_cold(
+        &self,
+        namespace: Option<&str>,
+        warm_days: i64,
+    ) -> Result<Vec<String>, Error> {
+        let ns = namespace.unwrap_or(DEFAULT_NAMESPACE);
+        let warm_cutoff = (chrono::Utc::now() - chrono::Duration::days(warm_days)).to_rfc3339();
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id FROM memories WHERE namespace = ?1 AND deprecated = 0 AND (last_accessed < ?2 OR last_accessed IS NULL)",
+            )
+            .map_err(|e| Error::db("database operation", e))?;
+        let ids: Vec<String> = stmt
+            .query_map(params![ns, warm_cutoff], |row| row.get(0))
+            .map_err(|e| Error::db("database operation", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(ids)
+    }
+
+    /// Find all memory IDs in a namespace (for soft-delete path, #932).
+    ///
+    /// Same query as `bulk_delete_all` but SELECT instead of DELETE.
+    pub fn find_ids_all(&self, namespace: Option<&str>) -> Result<Vec<String>, Error> {
+        let ns = namespace.unwrap_or(DEFAULT_NAMESPACE);
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM memories WHERE namespace = ?1 AND deprecated = 0")
+            .map_err(|e| Error::db("database operation", e))?;
+        let ids: Vec<String> = stmt
+            .query_map(params![ns], |row| row.get(0))
+            .map_err(|e| Error::db("database operation", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(ids)
+    }
+
     /// Deprecate a memory by ID. Sets deprecated=1 and valid_until=now.
     pub fn deprecate(&self, id: &str) -> Result<(), Error> {
         let now = chrono::Utc::now().to_rfc3339();
@@ -96,6 +160,68 @@ impl super::Store {
             )
             .map_err(|e| Error::db("database operation", e))?;
         Ok(())
+    }
+
+    /// Deprecate a memory with a human-readable reason (#929).
+    ///
+    /// Sets deprecated=1, valid_until=now, deprecate_reason=reason.
+    /// The reason is stored for audit trail and pending-review display.
+    pub fn deprecate_with_reason(&self, id: &str, reason: &str) -> Result<(), Error> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn
+            .execute(
+                "UPDATE memories SET deprecated = 1, valid_until = ?1, deprecate_reason = ?2, updated_at = ?1 WHERE id = ?3",
+                params![now, reason, id],
+            )
+            .map_err(|e| Error::db("database operation", e))?;
+        Ok(())
+    }
+
+    /// Bulk deprecate by IDs with a shared reason (#929).
+    ///
+    /// Soft-delete variant of `delete_by_ids`. Returns count of deprecated rows.
+    pub fn deprecate_by_ids(&self, ids: &[String], reason: &str) -> Result<usize, Error> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        let placeholders: String = ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 3))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "UPDATE memories SET deprecated = 1, valid_until = ?1, deprecate_reason = ?2, updated_at = ?1 WHERE id IN ({placeholders}) AND deprecated = 0"
+        );
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(now), Box::new(reason.to_string())];
+        for id in ids {
+            params_vec.push(Box::new(id.clone()));
+        }
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
+        let count = self
+            .conn
+            .execute(&sql, rusqlite::params_from_iter(param_refs))
+            .map_err(|e| Error::db("database operation", e))?;
+        Ok(count)
+    }
+
+    /// Restore a deprecated memory to active state (#929).
+    ///
+    /// Clears deprecated flag, valid_until, and deprecate_reason.
+    /// Returns false if the memory was not deprecated or doesn't exist.
+    pub fn undeprecate(&self, id: &str) -> Result<bool, Error> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE memories SET deprecated = 0, valid_until = NULL, deprecate_reason = NULL, updated_at = ?1 WHERE id = ?2 AND deprecated = 1",
+                params![now, id],
+            )
+            .map_err(|e| Error::db("database operation", e))?;
+        Ok(rows > 0)
     }
 
     /// Find memories that contradict a new embedding (high similarity, same namespace).
