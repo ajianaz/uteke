@@ -14,18 +14,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Fetch CLA signatures
-        run: |
-          # Fetch via GitHub REST API (unauthenticated, public repo)
-          curl -sfL "https://api.github.com/repos/codecoradev/.github/contents/.cla/signatures.json" \
-            | python3 -c "import json,sys,base64; d=json.load(sys.stdin); sys.stdout.buffer.write(base64.b64decode(d['content']))" > signatures.json 2>/dev/null \
-            || echo '{"signatures":[]}' > signatures.json
-          # Validate JSON
-          python3 -c "import json; json.load(open('signatures.json'))" 2>/dev/null \
-            || echo '{"signatures":[]}' > signatures.json
+        uses: actions/checkout@v4
+        with:
+          repository: codecoradev/.github
+          path: cla-store
+          sparse-checkout: .cla
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check CLA signature
         id: check
         run: |
+          cp cla-store/.cla/signatures.json signatures.json 2>/dev/null || echo '{"signatures":[]}' > signatures.json
           python3 - << 'EOF'
           import json, os
 
