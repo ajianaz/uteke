@@ -13,18 +13,16 @@ jobs:
   cla-check:
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch CLA signatures
-        uses: actions/checkout@v4
-        with:
-          repository: codecoradev/.github
-          path: cla-store
-          sparse-checkout: .cla
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Check CLA signature
+      - name: Fetch & check CLA signature
         id: check
         run: |
+          # Clone .cla/ folder from public repo (no auth needed)
+          git clone --no-checkout --depth 1 https://github.com/codecoradev/.github.git cla-store 2>&1
+          cd cla-store && git sparse-checkout set .cla && git checkout 2>&1
+          cd ..
           cp cla-store/.cla/signatures.json signatures.json 2>/dev/null || echo '{"signatures":[]}' > signatures.json
+          echo "Loaded signatures:"
+          python3 -c "import json; d=json.load(open('signatures.json')); print(f'  {len(d.get(\"signatures\",[]))} entries')"
           python3 - << 'EOF'
           import json, os
 
