@@ -8,11 +8,11 @@ Uteke provides first-class namespace support for running multiple AI agents, eac
 
 ## How Namespaces Work
 
-Every memory belongs to exactly one namespace. Namespaces are fully isolated — a recall in one namespace never returns results from another.
+Every memory belongs to exactly one namespace. Namespaces are fully isolated: a recall in one namespace never returns results from another.
 
-- **`default`** — Used when no `--namespace` flag is provided. Backward compatible with v0.0.1 databases.
-- **`hermes`** — Example: a planning agent that remembers architecture decisions.
-- **`pi-agent`** — Example: a coding agent that remembers project-specific context.
+- **`default`**: Used when no `--namespace` flag is provided. Backward compatible with v0.0.1 databases.
+- **`hermes`**: Example: a planning agent that remembers architecture decisions.
+- **`pi-agent`**: Example: a coding agent that remembers project-specific context.
 
 ## Usage
 
@@ -40,7 +40,7 @@ Existing databases from v0.0.1 are automatically migrated on first run:
 
 - ✓ `namespace` column added to SQLite
 - ✓ All existing memories assigned to `"default"` namespace
-- ✓ Zero data loss — your memories are preserved
+- ✓ Zero data loss: your memories are preserved
 
 ## Namespace Switching
 
@@ -85,17 +85,17 @@ The `--namespace` flag works on every command:
 
 ## Documents Are Global
 
-Unlike memories, **documents are global** (v0.7.0, #614/#615). Documents use unique slugs across all namespaces — no namespace isolation. This means:
+Unlike memories, **documents are global** (v0.7.0, #614/#615). Documents use unique slugs across all namespaces: no namespace isolation. This means:
 
 - Documents created in any namespace are visible in all namespaces via `uteke doc list`
 - Document commands (`create`, `get`, `update`, `search`, `list`, `delete`) do not accept `--namespace`
-- Slugs must be globally unique — a duplicate slug across namespaces will be auto-migrated on upgrade (schema v12→v13)
+- Slugs must be globally unique: a duplicate slug across namespaces will be auto-migrated on upgrade (schema v12→v13)
 
 This is intentional: documents represent shared knowledge (wiki, architecture guides, runbooks) that should be accessible to all agents regardless of their memory namespace.
 
 ## Best Practices
 
-- **One namespace per agent role** — Use descriptive names like "planner", "coder", "reviewer" instead of "agent-1", "agent-2".
-- **Use config files for defaults** — Set `default_namespace` in `uteke.toml` per project so agents don't need `--namespace` on every call.
-- **Shell hooks for project isolation** — Install shell hooks (`uteke hook install`) to auto-discover `.uteke/` in parent directories — each project gets isolated memory.
-- **Export for backup** — `uteke export --namespace my-agent > backup.jsonl` — backup per-agent memory independently.
+- **One namespace per agent role**: Use descriptive names like "planner", "coder", "reviewer" instead of "agent-1", "agent-2".
+- **Use config files for defaults**: Set `default_namespace` in `uteke.toml` per project so agents don't need `--namespace` on every call.
+- **Shell hooks for project isolation**: Install shell hooks (`uteke hook install`) to auto-discover `.uteke/` in parent directories. Each project gets isolated memory.
+- **Export for backup**: `uteke export --namespace my-agent > backup.jsonl`. Backup per-agent memory independently.

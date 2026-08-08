@@ -482,7 +482,7 @@ update_check = true    # Set to false to disable startup update notification
 |---------|---------|-------------|
 | `update_check` | true | Enable background update notification on startup |
 
-When an update is available, a banner is printed to **stderr** (does not interfere with stdout pipes). The check is non-blocking — it runs in a background thread joined before process exit, so it never delays command execution.
+When an update is available, a banner is printed to **stderr** (does not interfere with stdout pipes). The check is non-blocking: it runs in a background thread joined before process exit, so it never delays command execution.
 
 ## Memory Lifecycle (#928–#937)
 
