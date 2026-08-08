@@ -43,9 +43,13 @@ impl crate::Uteke {
     pub fn import(&self, input: &str, namespace: Option<&str>) -> Result<ImportResult, Error> {
         let trimmed = input.trim();
 
-        // Detect JSON array or single object (non-JSONL)
+        // Detect format: JSON array, single JSON object, or JSONL.
+        // Strategy:
+        //   1. starts_with('[') → JSON array
+        //   2. starts_with('{') → try single JSON object; if that fails, fall back to JSONL
+        //      (handles both JSONL lines starting with `{` and pretty-printed objects)
+        //   3. otherwise → JSONL
         let (entries, mut skipped): (Vec<ExportEntry>, usize) = if trimmed.starts_with('[') {
-            // JSON array mode
             match serde_json::from_str::<Vec<ExportEntry>>(trimmed) {
                 Ok(arr) => (arr, 0),
                 Err(e) => {
@@ -53,31 +57,16 @@ impl crate::Uteke {
                 }
             }
         } else if trimmed.starts_with('{') {
-            // Single JSON object (single-line or pretty-printed)
+            // Try single JSON object first (covers both compact and pretty-printed)
             match serde_json::from_str::<ExportEntry>(trimmed) {
                 Ok(entry) => (vec![entry], 0),
-                Err(e) => {
-                    return Err(Error::validation(format!("Invalid JSON object: {e}")));
+                Err(_) => {
+                    // Fall back to JSONL: each line should be a self-contained JSON object
+                    Self::parse_jsonl(input)
                 }
             }
         } else {
-            // JSONL mode: parse line by line, track parse failures
-            let mut entries = Vec::new();
-            let mut failed = 0;
-            for line in input.lines() {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-                match serde_json::from_str::<ExportEntry>(line) {
-                    Ok(e) => entries.push(e),
-                    Err(e) => {
-                        tracing::warn!("Skipping invalid JSONL line: {e}");
-                        failed += 1;
-                    }
-                }
-            }
-            (entries, failed)
+            Self::parse_jsonl(input)
         };
 
         let mut imported = 0;
@@ -169,6 +158,27 @@ impl crate::Uteke {
 
         Ok(ImportResult { imported, skipped })
     }
+
+    /// Parse JSONL input: one self-contained JSON object per line.
+    /// Lines that fail to parse are counted as skipped (not fatal).
+    fn parse_jsonl(input: &str) -> (Vec<ExportEntry>, usize) {
+        let mut entries = Vec::new();
+        let mut failed = 0;
+        for line in input.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<ExportEntry>(line) {
+                Ok(e) => entries.push(e),
+                Err(e) => {
+                    tracing::warn!("Skipping invalid JSONL line: {e}");
+                    failed += 1;
+                }
+            }
+        }
+        (entries, failed)
+    }
 }
 
 #[cfg(test)]
@@ -187,5 +197,39 @@ mod tests {
         let restored: ExportEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.content, "hello world");
         assert_eq!(restored.tags.len(), 1);
+    }
+
+    #[test]
+    fn test_import_jsonl_multiple_lines() {
+        let jsonl = r#"{"content":"first","tags":[],"metadata":{},"created_at":"2024-01-01T00:00:00Z","source":null}
+{"content":"second","tags":[],"metadata":{},"created_at":"2024-01-01T00:00:00Z","source":null}"#;
+        let (entries, failed) = crate::Uteke::parse_jsonl(jsonl);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(failed, 0);
+        assert_eq!(entries[0].content, "first");
+        assert_eq!(entries[1].content, "second");
+    }
+
+    #[test]
+    fn test_import_pretty_printed_single_object() {
+        use crate::memory::types::ExportEntry;
+        // Pretty-printed JSON object spanning multiple lines should parse as a single entry,
+        // NOT fall through to JSONL line-by-line parsing.
+        let pretty = r#"{
+  "content": "hello pretty",
+  "tags": ["test"],
+  "metadata": {},
+  "created_at": "2024-01-01T00:00:00Z",
+  "source": null
+}"#;
+        // Simulate the import detection logic
+        let trimmed = pretty.trim();
+        assert!(trimmed.starts_with('{'));
+        let result: Result<ExportEntry, _> = serde_json::from_str(trimmed);
+        assert!(
+            result.is_ok(),
+            "Pretty-printed JSON should parse as single object"
+        );
+        assert_eq!(result.unwrap().content, "hello pretty");
     }
 }
