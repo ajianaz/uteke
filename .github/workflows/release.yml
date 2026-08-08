@@ -198,21 +198,44 @@ jobs:
         if: matrix.zigbuild != true
         run: cargo build --release --target ${{ matrix.target }} -p uteke-cli -p uteke-server -p uteke-mcp
 
+      - name: Resolve binary directory
+        id: bindir
+        shell: bash
+        run: |
+          # cargo-zigbuild may output to suffixed path (target/x86_64-unknown-linux-gnu.2.17/release/)
+          # or standard path (target/x86_64-unknown-linux-gnu/release/) depending on version.
+          GLIBC_SUFFIX="${{ matrix.glibc }}"
+          SUFFIXED="target/${{ matrix.target }}.${GLIBC_SUFFIX}/release"
+          STANDARD="target/${{ matrix.target }}/release"
+          if [ -n "$GLIBC_SUFFIX" ] && [ -f "$SUFFIXED/uteke" ]; then
+            echo "path=$SUFFIXED" >> $GITHUB_OUTPUT
+            echo "Using suffixed path: $SUFFIXED"
+          elif [ -f "$STANDARD/uteke" ]; then
+            echo "path=$STANDARD" >> $GITHUB_OUTPUT
+            echo "Using standard path: $STANDARD"
+          else
+            echo "::error::Binaries not found in $SUFFIXED or $STANDARD"
+            find target -name 'uteke' -type f 2>/dev/null | head -5
+            exit 1
+          fi
+
       - name: Strip binaries (Unix)
         if: runner.os != 'Windows'
         run: |
-          strip target/${{ matrix.target }}/release/uteke || true
-          strip target/${{ matrix.target }}/release/uteke-serve || true
-          strip target/${{ matrix.target }}/release/uteke-mcp || true
+          BIN_DIR="${{ steps.bindir.outputs.path }}"
+          strip "$BIN_DIR/uteke" || true
+          strip "$BIN_DIR/uteke-serve" || true
+          strip "$BIN_DIR/uteke-mcp" || true
 
       - name: Verify GLIBC requirement (Linux zigbuild only)
         if: matrix.zigbuild == true
         run: |
+          BIN_DIR="${{ steps.bindir.outputs.path }}"
           echo "=== GLIBC version requirement ==="
-          objdump -T target/${{ matrix.target }}/release/uteke | grep -oP 'GLIBC_[\d.]+' | sort -V -u
+          objdump -T "$BIN_DIR/uteke" | grep -oP 'GLIBC_[\d.]+' | sort -V -u
           echo ""
           # Use sort -V for proper version comparison (handles 2.100 > 2.99)
-          MAX_GLIBC=$(objdump -T target/${{ matrix.target }}/release/uteke | grep -oP 'GLIBC_[\d.]+' | sort -V -u | tail -1)
+          MAX_GLIBC=$(objdump -T "$BIN_DIR/uteke" | grep -oP 'GLIBC_[\d.]+' | sort -V -u | tail -1)
           FLOOR="GLIBC_2.17"
           echo "Highest GLIBC requirement: $MAX_GLIBC"
           echo "Floor:                     $FLOOR"
@@ -231,9 +254,8 @@ jobs:
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
+          BIN_DIR="${{ steps.bindir.outputs.path }}"
           mkdir -p release
-          BIN_DIR="target/${{ matrix.target }}/release"
-          # Verify binaries exist (zigbuild outputs to same path without glibc suffix)
           ls -la "$BIN_DIR/uteke" "$BIN_DIR/uteke-serve" "$BIN_DIR/uteke-mcp"
           cp "$BIN_DIR/uteke" release/uteke
           cp "$BIN_DIR/uteke-serve" release/uteke-serve
