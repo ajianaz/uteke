@@ -1,6 +1,6 @@
-# Rooms — Shared Memory for Multi-Agent Collaboration
+# Rooms: Shared Memory for Multi-Agent Collaboration
 
-> **Other memory layers are single-player.** They store facts under a flat `user_id` and every recall is scoped to one agent's view. Uteke Rooms let multiple AI agents share a memory space — meeting notes, project decisions, architecture choices — searchable by everyone, attributed by author.
+> **Other memory layers are single-player.** They store facts under a flat `user_id` and every recall is scoped to one agent's view. Uteke Rooms let multiple AI agents share a memory space: meeting notes, project decisions, architecture choices, searchable by everyone, attributed by author.
 
 ## What is a Room?
 
@@ -24,7 +24,7 @@ uteke remember "Postgres migration deferred to Q4 due to testing capacity" \
   --room engineering \
   --author alice
 
-# Recall from the room — any agent can do this
+# Recall from the room. Any agent can do this
 uteke recall "postgres migration" --room engineering
 
 # List all rooms
@@ -40,9 +40,9 @@ uteke room summary engineering
 
 Traditional memory tools store everything under a flat `user_id`. This works for single-agent chatbots, but breaks down when:
 
-- **Multiple agents work on the same project** — Agent A can't see Agent B's memories
-- **A team shares an AI assistant** — everyone's memories are siloed
-- **You want cross-agent knowledge transfer** — there's no shared space
+- **Multiple agents work on the same project**: Agent A can't see Agent B's memories
+- **A team shares an AI assistant**: everyone's memories are siloed
+- **You want cross-agent knowledge transfer**: there's no shared space
 
 ### The Rooms Solution
 
@@ -173,7 +173,7 @@ Namespaces and Rooms are complementary. An agent has its own namespace for priva
 
 ## See Also
 
-- [Quick Start](/getting-started) — Get up and running in 30 seconds
-- [Multi-Agent](/multi-agent) — How multiple agents coexist with uteke
-- [CLI Reference](/cli-reference) — Full command documentation
-- [HTTP API](/api-reference) — REST API for server mode
+- [Quick Start](/getting-started): Get up and running in 30 seconds
+- [Multi-Agent](/multi-agent): How multiple agents coexist with uteke
+- [CLI Reference](/cli-reference): Full command documentation
+- [HTTP API](/api-reference): REST API for server mode
