@@ -348,6 +348,27 @@ pub struct PruneResult {
     pub deprecated_ids: Vec<String>,
 }
 
+/// Result of a lifecycle cycle run (#933).
+///
+/// Combines the soft-deprecate phase (cap-limited) and the auto-prune phase.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LifecycleCycleResult {
+    /// Total active memories before the cycle.
+    pub total_active: usize,
+    /// Number of candidates eligible for deprecation.
+    pub candidates: usize,
+    /// Effective cap applied (percentage-based, clamped to min/max).
+    pub cap: usize,
+    /// Number of memories deprecated in this cycle.
+    pub deprecated: usize,
+    /// IDs of deprecated memories.
+    pub deprecated_ids: Vec<String>,
+    /// Number of expired deprecated memories pruned (hard delete).
+    pub pruned: usize,
+    /// IDs of pruned memories.
+    pub pruned_ids: Vec<String>,
+}
+
 /// Result of a contradiction check.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContradictionResult {

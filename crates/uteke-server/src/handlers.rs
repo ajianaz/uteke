@@ -597,6 +597,86 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
             }
         }
 
+        // ── Lifecycle (#936): status, cycle, promote ──────────────────
+        (Method::Get, p) if p == "/lifecycle/status" || p.starts_with("/lifecycle/status?") => {
+            let query = req.url().split('?').nth(1).unwrap_or("");
+            let params: std::collections::HashMap<String, String> = query
+                .split('&')
+                .filter_map(|pair| {
+                    let mut kv = pair.splitn(2, '=');
+                    Some((kv.next()?.to_string(), kv.next()?.to_string()))
+                })
+                .collect();
+            let ns_param = params.get("namespace").map(|s| s.as_str());
+            let active = match uteke.store().count_active(ns_param) {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("lifecycle status error: {e}");
+                    return ctx.error_response_for(req, 500, "Internal server error");
+                }
+            };
+            let deprecated = match uteke.store().count_deprecated(ns_param) {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("lifecycle status error: {e}");
+                    return ctx.error_response_for(req, 500, "Internal server error");
+                }
+            };
+            #[derive(serde::Serialize)]
+            struct LifecycleStatusResponse {
+                active: usize,
+                deprecated: usize,
+            }
+            ctx.ok_response_for(req, &LifecycleStatusResponse { active, deprecated })
+        }
+
+        (Method::Post, "/lifecycle/cycle") => {
+            #[derive(Deserialize)]
+            struct CycleReq {
+                namespace: Option<String>,
+            }
+            match read_body::<CycleReq>(req.as_reader()) {
+                Ok(req_data) => match uteke.lifecycle_cycle(ns(&req_data.namespace)) {
+                    Ok(result) => ctx.ok_response_for(req, &result),
+                    Err(e) => {
+                        error!("lifecycle cycle error: {e}");
+                        ctx.error_response_for(req, 500, "Internal server error")
+                    }
+                },
+                Err(e) => ctx.error_response_for(req, 400, e),
+            }
+        }
+
+        (Method::Post, "/lifecycle/promote") => {
+            #[derive(Deserialize)]
+            struct PromoteReq {
+                id: String,
+            }
+            match read_body::<PromoteReq>(req.as_reader()) {
+                Ok(req_data) => match uteke.promote(&req_data.id) {
+                    Ok(_) => {
+                        #[derive(serde::Serialize)]
+                        struct PromoteResponse {
+                            promoted: bool,
+                            id: String,
+                        }
+                        ctx.ok_response_for(
+                            req,
+                            &PromoteResponse {
+                                promoted: true,
+                                id: req_data.id,
+                            },
+                        )
+                    }
+                    Err(e) => {
+                        error!("lifecycle promote error: {e}");
+                        ctx.error_response_for(req, 500, "Internal server error")
+                    }
+                },
+                Err(e) => ctx.error_response_for(req, 400, e),
+            }
+        }
+
         // ── Namespaces ──────────────────────────────────────────────────
         (Method::Get, p) if p == "/namespaces" || p.starts_with("/namespaces?") => {
             let with_counts = path.contains("with_counts=true");

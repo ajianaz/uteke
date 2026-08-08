@@ -1,7 +1,9 @@
 //! Maintenance operations: doctor, verify, repair, stats, aging, prune, shutdown.
 
 use crate::error::{Error, format_bytes};
-use crate::memory::types::{AgingStatus, CleanupResult, Memory, PruneResult, StoreStats};
+use crate::memory::types::{
+    AgingStatus, CleanupResult, LifecycleCycleResult, Memory, PruneResult, StoreStats,
+};
 use crate::types::{
     DoctorCheck, DoctorReport, DoctorStatus, ReembedReport, RepairReport, VerifyReport,
 };
@@ -300,7 +302,19 @@ impl crate::Uteke {
             .find_aged(older_than_days, max_access_count, namespace)
     }
 
-    /// Cleanup aged memories — deletes from SQLite AND removes from vector index.
+    /// Cleanup aged memories — deprecates (soft-delete) or deletes based on lifecycle config.
+    ///
+    /// When `soft_delete_only` is enabled (default, #930): deprecates aged memories
+    /// instead of hard-deleting them. The memories remain in SQLite but are hidden
+    /// from recall and restorable via `promote()`.
+    ///
+    /// When `soft_delete_only` is disabled: hard-deletes from SQLite AND vector index
+    /// (legacy behavior, use with caution).
+    ///
+    /// Safety limits (#933):
+    /// - Caps at `max_deprecate_percent`% of total memories per cycle
+    /// - Never more than `max_deprecate_per_cycle` items
+    /// - Never less than `min_deprecate_per_cycle` (if candidates exist)
     pub fn aging_cleanup(
         &self,
         older_than_days: u32,
@@ -311,37 +325,79 @@ impl crate::Uteke {
         let aged = self
             .store
             .find_aged(older_than_days, max_access_count, namespace)?;
-        // Safety limit: never delete more than 100 memories per cycle.
-        // This prevents mass deletion if thresholds are misconfigured.
-        const MAX_DELETE_PER_CYCLE: usize = 100;
-        let ids: Vec<String> = aged
-            .into_iter()
-            .take(MAX_DELETE_PER_CYCLE)
-            .map(|m| m.id)
-            .collect();
+
+        if aged.is_empty() {
+            return Ok(CleanupResult { deleted: 0 });
+        }
+
+        // Dynamic cap: limit deprecations to max_deprecate_percent of total memories.
+        let total = self.store.count(namespace)?;
+        let lc = &self.lifecycle_config;
+        let pct_cap = ((total as f64 * lc.max_deprecate_percent / 100.0).round() as usize)
+            .max(lc.min_deprecate_per_cycle)
+            .min(lc.max_deprecate_per_cycle);
+        let cap = pct_cap.min(aged.len());
+
+        let ids: Vec<String> = aged.into_iter().take(cap).map(|m| m.id).collect();
 
         if ids.is_empty() {
             return Ok(CleanupResult { deleted: 0 });
         }
 
-        // Delete by specific IDs to avoid TOCTOU race (not re-query by criteria)
-        let deleted = self.store.delete_by_ids(&ids)?;
+        if lc.soft_delete_only {
+            // Soft-delete: deprecate with reason (#930)
+            let reason = format!(
+                "auto-aging: older than {older_than_days} days, access count ≤ {max_access_count}"
+            );
+            let deprecated = self.store.deprecate_by_ids(&ids, &reason)?;
 
-        // Remove from vector index
-        {
-            let mut index = self
-                .index
-                .write()
-                .map_err(|_| Error::lock("index write lock during aging_cleanup"))?;
-            for id in &ids {
-                index.remove(id);
+            // Remove from vector index (so they don't appear in recall)
+            {
+                let mut index = self
+                    .index
+                    .write()
+                    .map_err(|_| Error::lock("index write lock during aging_cleanup"))?;
+                for id in &ids {
+                    index.remove(id);
+                }
+                if let Err(e) = index.save() {
+                    tracing::warn!("Failed to save index: {e}");
+                }
             }
-            if let Err(e) = index.save() {
-                tracing::warn!("Failed to save index: {e}");
+
+            tracing::info!(
+                "Aging cleanup (soft-delete): deprecated {} of {} candidates (cap={cap}, total={total})",
+                deprecated,
+                ids.len(),
+            );
+            Ok(CleanupResult {
+                deleted: deprecated,
+            })
+        } else {
+            // Hard delete (legacy behavior, only when soft_delete_only=false)
+            let deleted = self.store.delete_by_ids(&ids)?;
+
+            // Remove from vector index
+            {
+                let mut index = self
+                    .index
+                    .write()
+                    .map_err(|_| Error::lock("index write lock during aging_cleanup"))?;
+                for id in &ids {
+                    index.remove(id);
+                }
+                if let Err(e) = index.save() {
+                    tracing::warn!("Failed to save index: {e}");
+                }
             }
+
+            tracing::info!(
+                "Aging cleanup (hard delete): deleted {} of {} candidates (cap={cap}, total={total})",
+                deleted,
+                ids.len(),
+            );
+            Ok(CleanupResult { deleted })
         }
-
-        Ok(CleanupResult { deleted })
     }
 
     /// Prune deprecated memories older than TTL days.
@@ -388,6 +444,115 @@ impl crate::Uteke {
             ids: ids.clone(),
             deprecated: count,
             deprecated_ids: ids,
+        })
+    }
+
+    /// Run one lifecycle cycle (#933).
+    ///
+    /// Two-phase operation:
+    /// 1. **Deprecate phase**: find aged memories, cap to max N% of total active,
+    ///    soft-delete (deprecate) the oldest ones.
+    /// 2. **Prune phase**: hard-delete memories that have been deprecated longer
+    ///    than `deprecated_ttl_days`.
+    ///
+    /// The percentage cap (`max_deprecate_percent`) limits how many memories can
+    /// be deprecated per cycle — defaults to 1.0%, clamped between
+    /// `min_deprecate_per_cycle` and `max_deprecate_per_cycle`.
+    pub fn lifecycle_cycle(&self, namespace: Option<&str>) -> Result<LifecycleCycleResult, Error> {
+        let cfg = &self.lifecycle_config;
+
+        // Phase 1: Find candidates and apply percentage cap.
+        let total_active = self.store.count_active(namespace)?;
+        let candidates = self
+            .store
+            .find_aged(cfg.min_age_days, cfg.max_access_count, namespace)?;
+
+        // Calculate cap: percentage of total, clamped to [min, max].
+        let raw_cap = ((total_active as f64) * cfg.max_deprecate_percent / 100.0) as usize;
+        let cap = raw_cap
+            .max(cfg.min_deprecate_per_cycle)
+            .min(cfg.max_deprecate_per_cycle);
+
+        // Take oldest `cap` candidates (find_aged already sorts by created_at ASC).
+        let to_deprecate: Vec<String> = candidates.iter().take(cap).map(|m| m.id.clone()).collect();
+
+        let deprecated_ids = to_deprecate.clone();
+        let deprecated_count = if !to_deprecate.is_empty() {
+            let reason = "lifecycle_cycle: aged memory (auto-deprecate)";
+            self.store.deprecate_by_ids(&to_deprecate, reason)?
+        } else {
+            0
+        };
+
+        // Remove deprecated from vector index.
+        if !to_deprecate.is_empty() {
+            let mut index = self
+                .index
+                .write()
+                .map_err(|_| Error::lock("index write lock during lifecycle_cycle"))?;
+            for id in &to_deprecate {
+                index.remove(id);
+            }
+            if let Err(e) = index.save() {
+                tracing::warn!("Failed to persist index after lifecycle deprecate: {e}");
+            }
+        }
+
+        // Invalidate recall cache.
+        if let Some(ns) = namespace {
+            self.recall_cache.invalidate_namespace(ns);
+        } else {
+            self.recall_cache.clear();
+        }
+
+        tracing::info!(
+            "Lifecycle cycle: {} of {} candidates deprecated (cap={}, total_active={})",
+            deprecated_count,
+            candidates.len(),
+            cap,
+            total_active
+        );
+
+        // Phase 2: Auto-prune expired deprecated memories.
+        let (pruned, pruned_ids) = if cfg.auto_prune_enabled {
+            let expired = self
+                .store
+                .find_deprecated_for_prune(cfg.deprecated_ttl_days, namespace)?;
+            let expired_ids: Vec<String> = expired.iter().map(|m| m.id.clone()).collect();
+            if expired_ids.is_empty() {
+                (0, vec![])
+            } else {
+                let pruned_count = self.store.delete_by_ids(&expired_ids)?;
+                // Remove from vector index.
+                let mut index = self
+                    .index
+                    .write()
+                    .map_err(|_| Error::lock("index write lock during lifecycle prune"))?;
+                for id in &expired_ids {
+                    index.remove(id);
+                }
+                if let Err(e) = index.save() {
+                    tracing::warn!("Failed to persist index after lifecycle prune: {e}");
+                }
+                tracing::info!(
+                    "Lifecycle cycle: pruned {} expired deprecated memories (ttl={}d)",
+                    pruned_count,
+                    cfg.deprecated_ttl_days
+                );
+                (pruned_count, expired_ids)
+            }
+        } else {
+            (0, vec![])
+        };
+
+        Ok(LifecycleCycleResult {
+            total_active,
+            candidates: candidates.len(),
+            cap,
+            deprecated: deprecated_count,
+            deprecated_ids,
+            pruned,
+            pruned_ids,
         })
     }
 

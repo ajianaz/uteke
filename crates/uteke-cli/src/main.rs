@@ -168,6 +168,8 @@ fn main() {
                 dedup_threshold: config.dream.dedup_threshold,
                 orphan_importance_threshold: config.dream.orphan_importance_threshold,
             });
+            // #928: apply lifecycle configuration from config
+            u.set_lifecycle_config(config.lifecycle.to_core());
             u
         }
         Err(e) => {

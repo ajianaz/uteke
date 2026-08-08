@@ -270,9 +270,21 @@ impl crate::Uteke {
                 }
             };
 
-            self.store
-                .delete(to_remove)
-                .map_err(|e| Error::db("consolidate delete", e))?;
+            // Deprecate (soft-delete) or hard-delete the older memory (#931).
+            // When dream_dedup_soft_delete is enabled (default), the older duplicate
+            // is deprecated instead of permanently deleted, preserving data safety.
+            let dream_soft = self.lifecycle_config.dream_dedup_soft_delete;
+            if dream_soft {
+                let reason =
+                    format!("dream dedup: superseded by {to_keep} (similarity ≥ threshold)");
+                self.store
+                    .deprecate_with_reason(to_remove, &reason)
+                    .map_err(|e| Error::db("consolidate soft-delete", e))?;
+            } else {
+                self.store
+                    .delete(to_remove)
+                    .map_err(|e| Error::db("consolidate delete", e))?;
+            }
             // SQLite first (source of truth), then vector index.
             let mut index = self
                 .index

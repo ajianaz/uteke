@@ -400,6 +400,57 @@ MCP (Model Context Protocol) bridge endpoint for AI agent tool calls.
 **Request body**: JSON object (see handler source for fields)
 
 
+## 🔄 Lifecycle
+
+#### 🟢 `GET` `/lifecycle/status`
+
+Get lifecycle status — active vs deprecated memory counts.
+
+Accepts `?namespace=X` query param to scope to a namespace.
+
+**Response**:
+```json
+{
+  "active": 1240,
+  "deprecated": 37
+}
+```
+
+#### 🟡 `POST` `/lifecycle/cycle`
+
+Run a lifecycle cycle — deprecate aged memories (respecting percentage cap) and prune expired deprecated memories.
+
+**Request body**:
+```json
+{
+  "namespace": "default"
+}
+```
+
+`namespace` is optional (omit for all namespaces).
+
+**Response**: [`LifecycleCycleResult`](#lifecyclecycleresult)
+
+#### 🟡 `POST` `/lifecycle/promote`
+
+Promote a deprecated memory back to active status. Re-indexes the embedding vector.
+
+**Request body**:
+```json
+{
+  "id": "memory-uuid"
+}
+```
+
+**Response**:
+```json
+{
+  "promoted": true,
+  "id": "memory-uuid"
+}
+```
+
+
 ## Request/Response Schemas
 
 Detailed field definitions for each request type.
@@ -416,6 +467,18 @@ Detailed field definitions for each request type.
 
 
 ### `ConsolidateRequest`
+
+### `LifecycleCycleResult`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `total_active` | `integer` | Active memories before cycle |
+| `candidates` | `integer` | Aged memories found eligible |
+| `cap` | `integer` | Max deprecations applied (clamped) |
+| `deprecated` | `integer` | Memories deprecated this cycle |
+| `deprecated_ids` | `string`[] | IDs of deprecated memories |
+| `pruned` | `integer` | Expired deprecated memories hard-deleted |
+| `pruned_ids` | `string`[] | IDs of pruned memories |
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
