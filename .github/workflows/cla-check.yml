@@ -1,0 +1,14 @@
+name: CLA Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  cla:
+    uses: codecoradev/.github/.github/workflows/cla-check.yml@main
+    with:
+      pr-number: ${{ github.event.pull_request.number }}
+      pr-author: ${{ github.event.pull_request.user.login }}
+      pr-head-sha: ${{ github.event.pull_request.head.sha }}
+    secrets: inherit
