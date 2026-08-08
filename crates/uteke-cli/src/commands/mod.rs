@@ -183,7 +183,7 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
             maintenance::run_consolidate(cli, uteke, ns, *threshold, *dry_run)
         }
 
-        Commands::Lifecycle { command } => lifecycle::run(uteke, ns, command),
+        Commands::Lifecycle { command } => lifecycle::run(cli, uteke, ns, command),
 
         Commands::Export { output } => maintenance::run_export(cli, uteke, ns, output),
 

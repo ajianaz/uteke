@@ -1570,7 +1570,7 @@ mod forget_tests {
     use crate::Uteke;
 
     /// Insert a memory with a fake embedding (bypassing ONNX), then forget it.
-    /// Verifies the memory is gone from both store and index (#926).
+    /// Verifies the memory is soft-deleted (deprecated) by default (#926, #932).
     #[test]
     fn test_forget_deletes_memory() {
         let uteke = Uteke::open(":memory:").unwrap();
@@ -1587,14 +1587,16 @@ mod forget_tests {
             )
             .unwrap();
 
-        // Verify it exists
-        assert!(uteke.get_by_id(&id).unwrap().is_some());
+        // Verify it exists and is active
+        let mem = uteke.get_by_id(&id).unwrap().unwrap();
+        assert!(!mem.deprecated, "memory should be active before forget");
 
-        // Forget it
+        // Forget it (soft-delete by default: soft_delete_only=true)
         uteke.forget(&id).unwrap();
 
-        // Verify it's gone from store
-        assert!(uteke.get_by_id(&id).unwrap().is_none());
+        // Memory still exists but is now deprecated (soft-delete)
+        let mem = uteke.get_by_id(&id).unwrap().unwrap();
+        assert!(mem.deprecated, "memory should be deprecated after forget");
     }
 
     /// Forgetting a non-existent ID should return an error, not Ok(()) (#926).
@@ -1608,7 +1610,7 @@ mod forget_tests {
         );
     }
 
-    /// Forget → re-insert should work (no stale state) (#926).
+    /// Forget → re-insert should work (soft-deleted memory stays, new ID for re-insert) (#926).
     #[test]
     fn test_forget_then_reinsert() {
         let uteke = Uteke::open(":memory:").unwrap();
@@ -1625,10 +1627,12 @@ mod forget_tests {
             )
             .unwrap();
 
+        // Soft-delete: memory becomes deprecated, not removed
         uteke.forget(&id).unwrap();
-        assert!(uteke.get_by_id(&id).unwrap().is_none());
+        let mem = uteke.get_by_id(&id).unwrap().unwrap();
+        assert!(mem.deprecated, "original memory should be deprecated");
 
-        // Re-insert with same content — should get a new ID
+        // Re-insert with same content: should get a new ID (deprecated memories don't block re-insert)
         let id2 = uteke
             .remember_precomputed(
                 "forget then reinsert",
@@ -1641,7 +1645,8 @@ mod forget_tests {
             )
             .unwrap();
         assert_ne!(id, id2, "re-inserted memory should have a new ID");
-        assert!(uteke.get_by_id(&id2).unwrap().is_some());
+        let mem2 = uteke.get_by_id(&id2).unwrap().unwrap();
+        assert!(!mem2.deprecated, "new memory should be active");
     }
 }
 
