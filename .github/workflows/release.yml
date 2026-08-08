@@ -147,15 +147,24 @@ jobs:
 
       - name: Install Zig + cargo-zigbuild (Linux only)
         if: matrix.zigbuild == true
+        shell: bash
         run: |
+          set -ex
           # Pin both packages for reproducible builds.
-          # ziglang provides the Zig compiler binary used by cargo-zigbuild.
           pip install cargo-zigbuild==0.23.0 ziglang==0.14.1
-          # Add user site-packages bin to PATH for THIS step and subsequent steps
-          SITE_BIN="$(python3 -m site --user-base)/bin"
-          echo "$SITE_BIN" >> $GITHUB_PATH
-          export PATH="$SITE_BIN:$PATH"
+          # cargo-zigbuild installs to user-base/bin
+          USER_BIN="$(python3 -m site --user-base)/bin"
+          # zig binary is inside the ziglang Python package
+          ZIG_DIR="$(python3 -c "import ziglang, os; print(os.path.dirname(ziglang.__file__))")"
+          echo "USER_BIN=$USER_BIN"
+          echo "ZIG_DIR=$ZIG_DIR"
+          # Add both to GITHUB_PATH (for subsequent steps)
+          echo "$USER_BIN" >> "$GITHUB_PATH"
+          echo "$ZIG_DIR" >> "$GITHUB_PATH"
+          # Add both to PATH (for this step)
+          export PATH="$USER_BIN:$ZIG_DIR:$PATH"
           zig version
+          cargo zigbuild --version
 
       - name: Download prebuilt ORT shared library
         shell: bash
