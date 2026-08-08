@@ -74,6 +74,24 @@ Update an existing memory's content and/or metadata.
 
 Get graph edges for a memory. Accepts `?id=...` query param.
 
+#### 🟡 `POST` `/lifecycle/cycle`
+
+Run lifecycle aging cycle: deprecate old memories, optionally prune expired ones.
+
+*Related: `#935`*
+
+#### 🟡 `POST` `/lifecycle/promote`
+
+Restore a deprecated memory back to active status.
+
+*Related: `#935`*
+
+#### 🟢 `GET` `/lifecycle/status`
+
+Get lifecycle status: active/deprecated counts and current configuration.
+
+*Related: `#935`*
+
 
 ## 📦 Import/Export
 
