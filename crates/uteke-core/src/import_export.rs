@@ -43,7 +43,8 @@ impl crate::Uteke {
     pub fn import(&self, input: &str, namespace: Option<&str>) -> Result<ImportResult, Error> {
         let trimmed = input.trim();
 
-        // Detect JSON array or single object (non-JSONL)
+        // Detect JSON array, single JSON object, or JSONL (one object per line)
+        let line_count = input.lines().filter(|l| !l.trim().is_empty()).count();
         let (entries, mut skipped): (Vec<ExportEntry>, usize) = if trimmed.starts_with('[') {
             // JSON array mode
             match serde_json::from_str::<Vec<ExportEntry>>(trimmed) {
@@ -52,8 +53,8 @@ impl crate::Uteke {
                     return Err(Error::validation(format!("Invalid JSON array: {e}")));
                 }
             }
-        } else if trimmed.starts_with('{') {
-            // Single JSON object (single-line or pretty-printed)
+        } else if trimmed.starts_with('{') && line_count == 1 {
+            // Single JSON object (single-line)
             match serde_json::from_str::<ExportEntry>(trimmed) {
                 Ok(entry) => (vec![entry], 0),
                 Err(e) => {
@@ -62,6 +63,7 @@ impl crate::Uteke {
             }
         } else {
             // JSONL mode: parse line by line, track parse failures
+            // Also catches multi-line pretty-printed JSON objects (re-join braces)
             let mut entries = Vec::new();
             let mut failed = 0;
             for line in input.lines() {
