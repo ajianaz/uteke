@@ -1,22 +1,59 @@
 ## [0.13.0] — 2026-08-08
 
+Major release: safe memory lifecycle, offline extraction, persistent embedding cache, repair tooling, and 20+ bug fixes across recall, import, and HTTP API.
+
 ### Added
-- **Safe memory lifecycle (#928–#937)** — Memories now transition through a reviewable soft-delete state before any hard deletion. The flow: `ACTIVE → DEPRECATED (hidden, restorable, 30-day TTL) → PRUNED`. Hard delete is confined to exactly two controlled paths — `prune()` (expired TTL) and `forget()` (only when `soft_delete_only = false`). Everything else redirects to soft-delete by default.
+
+#### Safe Memory Lifecycle
+- **Safe memory lifecycle (#928–#935, #937)** — Memories transition through a reviewable soft-delete state before any hard deletion. The flow: `ACTIVE → DEPRECATED (hidden, restorable, 30-day TTL) → PRUNED`. Hard delete is confined to exactly two controlled paths: `prune()` (expired TTL) and `forget()` (only when `soft_delete_only = false`). Everything else redirects to soft-delete by default.
 - **`LifecycleConfig` (#928)** — 11 configurable fields governing deprecation age thresholds, per-cycle percentage cap (default 1%), TTL, and auto-cycle scheduling. Conservative defaults out of the box.
-- **CLI lifecycle commands (#935)** — `uteke lifecycle status`, `uteke lifecycle cycle`, `uteke lifecycle promote <id>`, `uteke lifecycle restore <id>`.
-- **HTTP API lifecycle endpoints (#936)** — `GET /lifecycle/status`, `POST /lifecycle/cycle`, `POST /lifecycle/promote`.
-- **Memory Lifecycle docs page** — New `/memory-lifecycle` page with best practices, migration notes, and configuration reference.
+- **CLI lifecycle commands (#935)** — `uteke lifecycle status`, `uteke lifecycle cycle`, `uteke lifecycle promote <id>`, `uteke lifecycle restore <id>`. All support `--json` output.
+- **HTTP API lifecycle endpoints (#935)** — `GET /lifecycle/status`, `POST /lifecycle/cycle`, `POST /lifecycle/promote`.
+- **Memory Lifecycle docs page (#937)** — New `/memory-lifecycle` page with best practices, migration notes, and configuration reference.
+
+#### Extraction & Onboarding
+- **Offline rule-based extractor as default (#890)** — New extraction mode that works without an LLM. Handles version splits, header-only facts, and parenthetical qualifiers. No API key required for basic knowledge capture.
+- **Onboarding wizard improvements (#889)** — Extraction config step, memory test step, and rooms intro added to `uteke init` flow.
+
+#### Performance & Repair
+- **Persistent embedding cache (#896)** — Embedding results cached to disk. Repeated `remember()` calls with identical content skip ONNX inference entirely. Lazy ONNX load: model only loads on first embedding, not on startup.
+- **`repair --reembed` (#919)** — Regenerates missing or corrupted embeddings. Scans for memories with null/empty vectors and re-embeds them in batches.
+- **`repair --rebuild` (#901)** — Rebuilds the usearch index from scratch when corruption is detected. Graceful fallback: corrupt index no longer crashes the server.
+
+#### CLI & UX
+- **CLI `context` subcommand (#908)** — Inspect what Uteke knows about a given query without running a full recall. Includes strict strategy validation.
+- **Startup update notification (#917)** — Checks for new releases once per 24h (cached). Non-intrusive: prints a one-line notice if an update is available.
 
 ### Changed
-- **All delete paths now respect `soft_delete_only` (#930–#932)** — `aging_cleanup()`, `consolidate()`, `delete()`, `bulk_delete()`, `forget()`, and `bulk_forget_*()` all redirect to `deprecate()` when `soft_delete_only = true` (the default). This means no automated process — not aging, not dream dedup, not bulk operations — can hard-delete a memory.
-- **Server auto-aging thread → auto-lifecycle thread (#934)** — The background maintenance thread now runs the full 2-phase lifecycle cycle (deprecate + prune) instead of just aging cleanup.
+- **All delete paths now respect `soft_delete_only` (#930–#932)** — `aging_cleanup()`, `consolidate()`, `delete()`, `bulk_delete()`, `forget()`, and `bulk_forget_*()` all redirect to `deprecate()` when `soft_delete_only = true` (the default). No automated process can hard-delete a memory.
+- **Server auto-aging thread → auto-lifecycle thread (#934)** — Background maintenance thread now runs the full 2-phase lifecycle cycle (deprecate + prune) instead of just aging cleanup.
 - **Dynamic per-cycle cap (#933)** — Each cycle deprecates at most `max_deprecate_percent` (default 1%) of active memories, clamped to `[1, 50]`. Prevents sudden data loss on large stores.
+- **Linux release builds pinned to ubuntu-22.04** — Ensures GLIBC backward compatibility for older Linux distributions.
 
 ### Fixed
-- **Migration: `deprecate_reason` column** — Added via `column_exists()` pattern. No schema version bump, no manual migration steps. Existing databases upgrade transparently.
+
+#### Recall & Search
+- **`recall_semantic` returns zero results for small rooms (#894)** — Room search in large stores with small rooms returned empty results. Now falls back to exhaustive search when bounded search yields insufficient coverage.
+- **Recall strategy flag ignored in unified search (#900)** — `--strategy` flag was silently overridden. Now properly routes through the correct search path.
+- **HTTP temporal filters, limit cap, empty query guard (#902, #903, #907)** — Date-range filters now work correctly. Result limit capped to prevent memory exhaustion. Empty query strings no longer cause 500 errors.
+- **Aging count discrepancy across namespaces (#905)** — `count_active()` counted deprecated memories in some namespaces. Fixed with `--dry-run` flag to preview changes.
+
+#### Import & Embedding
+- **Import JSON array/object support (#904)** — Previously only JSONL was accepted. Now handles JSON arrays, single objects, and validates minimum required fields.
+- **Import JSONL fallback strategy (#940)** — Robust parsing with line-by-line recovery. Malformed lines are skipped with warnings instead of aborting the entire import.
+- **Embedder lock scope (#920)** — Lock was held too long during re-embed loops, blocking concurrent reads. Moved outside the loop.
+- **ONNX auto-detect Python site-packages** — Resolves ORT shared library from Python virtualenvs automatically. No manual `ORT_LIB_PATH` needed for pip installs.
+
+#### Lifecycle & Safety
+- **Bounded lock timeout + forget error propagation (#922, #926, #927)** — Lock contention no longer hangs indefinitely. `forget()` on non-existent IDs now returns an error instead of silently succeeding.
+- **Migration: `deprecate_reason` column** — Added via `column_exists()` pattern. No schema version bump. Existing databases upgrade transparently.
+- **Offline extraction edge cases (#895)** — Version splits, header-only facts, and parenthetical qualifiers now parsed correctly.
+
+#### Comparison Docs
+- **Competitor comparison validated against source repos (#924)** — All 8 competitors verified against their actual README/BENCHMARKS/Cargo.toml. Corrected mismatched claims and stale versions.
 
 ### Contributors
-- [@ajianaz](https://github.com/ajianaz) — full lifecycle system design and implementation
+- [@ajianaz](https://github.com/ajianaz) — lifecycle system, offline extractor, embedding cache, repair tooling, recall/import fixes, comparison validation
 
 ## [0.12.0] — 2026-08-05
 
