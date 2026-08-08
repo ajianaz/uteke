@@ -212,6 +212,124 @@ impl Default for DreamConfig {
     }
 }
 
+/// Memory lifecycle configuration (#928).
+///
+/// Controls how memories transition through their lifecycle:
+/// `ACTIVE → DEPRECATED (hidden, restorable) → PRUNED (hard delete)`.
+///
+/// All destructive operations (aging_cleanup, dream dedup/compact,
+/// consolidate, CRUD delete) route through soft-delete (`deprecate`)
+/// when `soft_delete_only` is `true` (the default). Hard delete is
+/// reserved for `prune()` after the TTL expires and explicit `forget()`.
+///
+/// ## Defaults (conservative)
+///
+/// ```toml
+/// [lifecycle]
+/// soft_delete_only = true           # route destructive ops through deprecate
+/// auto_aging_interval_hours = 168   # weekly
+/// min_age_days = 90                 # don't touch memories < 90 days old
+/// max_access_count = 3              # only deprecate rarely-accessed
+/// max_deprecate_percent = 1.0       # max 1% of total per cycle
+/// min_deprecate_per_cycle = 1       # always allow at least 1
+/// max_deprecate_per_cycle = 50      # hard ceiling
+/// deprecated_ttl_days = 30         # deprecated → prune after 30 days
+/// auto_prune_enabled = true         # auto-prune expired deprecated
+/// dream_dedup_soft_delete = true    # dream dedup → deprecate, not delete
+/// dream_compact_soft_delete = true  # dream compact → deprecate, not delete
+/// ```
+#[derive(Clone, Copy, Debug)]
+pub struct LifecycleConfig {
+    /// When `true`, all destructive operations route through `deprecate()`
+    /// instead of `delete()`. Set to `false` to restore pre-v0.13 hard-delete
+    /// behavior (not recommended).
+    pub soft_delete_only: bool,
+
+    /// When `true`, automatic lifecycle cycles run at the configured interval.
+    /// Default: true. Set to `false` to disable background lifecycle cycles
+    /// (memories will still be preserved — just no auto-deprecation/pruning).
+    pub auto_aging_enabled: bool,
+
+    /// Interval in hours between automatic lifecycle cycles.
+    /// Default: 168 (weekly). Only effective in server mode.
+    pub auto_aging_interval_hours: u64,
+
+    /// Minimum age in days before a memory is eligible for deprecation.
+    /// Memories younger than this are always preserved. Default: 90.
+    pub min_age_days: u32,
+
+    /// Maximum access count for a memory to be considered "cold".
+    /// Memories accessed more than this are preserved. Default: 3.
+    pub max_access_count: u32,
+
+    /// Maximum percentage of total memories that can be deprecated in
+    /// a single cycle. E.g. 1.0 = at most 1% of 1000 = 10 memories.
+    /// Default: 1.0 (conservative).
+    pub max_deprecate_percent: f64,
+
+    /// Minimum number of memories to deprecate per cycle, even if the
+    /// percentage cap would result in 0. Default: 1. Set to 0 to allow
+    /// zero-deprecation cycles.
+    pub min_deprecate_per_cycle: usize,
+
+    /// Hard ceiling on deprecations per cycle, regardless of percentage.
+    /// Prevents mass-deprecation on very large stores. Default: 50.
+    pub max_deprecate_per_cycle: usize,
+
+    /// Days after deprecation before a memory is eligible for pruning
+    /// (hard delete). This is the "review window" — deprecated memories
+    /// can be promoted back to active during this period.
+    /// Default: 30.
+    pub deprecated_ttl_days: u32,
+
+    /// When `true`, expired deprecated memories are automatically pruned
+    /// during lifecycle cycles. Default: true.
+    pub auto_prune_enabled: bool,
+
+    /// When `true`, dream dedup phase uses soft-delete instead of hard-delete.
+    /// Default: true.
+    pub dream_dedup_soft_delete: bool,
+
+    /// when `true`, dream compact phase uses soft-delete instead of hard-delete.
+    /// Default: true.
+    pub dream_compact_soft_delete: bool,
+}
+
+impl Default for LifecycleConfig {
+    fn default() -> Self {
+        Self {
+            soft_delete_only: true,
+            auto_aging_enabled: true,
+            auto_aging_interval_hours: 168,
+            min_age_days: 90,
+            max_access_count: 3,
+            max_deprecate_percent: 1.0,
+            min_deprecate_per_cycle: 1,
+            max_deprecate_per_cycle: 50,
+            deprecated_ttl_days: 30,
+            auto_prune_enabled: true,
+            dream_dedup_soft_delete: true,
+            dream_compact_soft_delete: true,
+        }
+    }
+}
+
+impl LifecycleConfig {
+    /// Calculate the maximum number of memories to deprecate in a single
+    /// cycle, based on the percentage cap and min/max bounds.
+    ///
+    /// - `total_memories` — current active (non-deprecated) count.
+    ///
+    /// Returns a value in `[min_deprecate_per_cycle, max_deprecate_per_cycle]`,
+    /// clamped after percentage calculation.
+    pub fn cycle_deprecate_cap(&self, total_memories: usize) -> usize {
+        let pct_based = (total_memories as f64 * self.max_deprecate_percent / 100.0) as usize;
+        pct_based
+            .max(self.min_deprecate_per_cycle)
+            .min(self.max_deprecate_per_cycle)
+    }
+}
+
 /// Resolve uteke data directory.
 ///
 /// Uses `UTEKE_HOME` environment variable when set, otherwise falls back to
@@ -431,6 +549,9 @@ pub struct Uteke {
     /// Dream pipeline thresholds (#731). Used by contradiction scan,
     /// dedup/consolidate, and orphan detection phases.
     dream_config: DreamConfig,
+    /// Memory lifecycle configuration (#928). Controls soft-delete behavior,
+    /// dynamic deprecation caps, and TTL-based pruning.
+    lifecycle_config: LifecycleConfig,
     /// Recall cache — avoids redundant embedding computation for repeated queries.
     recall_cache: recall_cache::RecallCache,
     /// Path to the persistent embedding cache DB (`embed_cache.db`).
@@ -439,6 +560,16 @@ pub struct Uteke {
 }
 
 impl Uteke {
+    /// Borrow the underlying store (for CLI/advanced use).
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
+
+    /// Borrow lifecycle configuration (read-only).
+    pub fn get_lifecycle_config(&self) -> &LifecycleConfig {
+        &self.lifecycle_config
+    }
+
     /// Open or create a Uteke memory store.
     ///
     /// `path` can be a directory path (will create `uteke.db` inside)
@@ -614,6 +745,7 @@ impl Uteke {
             recall_cache: recall_cache::RecallCache::new(recall_cache::RecallCacheConfig::default()),
             jaccard_weight: 0.0,
             dream_config: DreamConfig::default(),
+            lifecycle_config: LifecycleConfig::default(),
             embed_cache_path,
         })
     }
@@ -654,6 +786,19 @@ impl Uteke {
     /// startup from CLI/server config.
     pub fn set_dream_config(&mut self, config: DreamConfig) {
         self.dream_config = config;
+    }
+
+    /// Set memory lifecycle configuration (#928).
+    ///
+    /// Controls soft-delete behavior, dynamic deprecation caps, and
+    /// TTL-based pruning. Called once at startup from CLI/server config.
+    pub fn set_lifecycle_config(&mut self, config: LifecycleConfig) {
+        self.lifecycle_config = config;
+    }
+
+    /// Get the current lifecycle configuration (#928).
+    pub fn lifecycle_config(&self) -> LifecycleConfig {
+        self.lifecycle_config
     }
 
     /// Configure cloud embedding fallback.

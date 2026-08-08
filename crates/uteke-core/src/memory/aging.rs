@@ -19,6 +19,42 @@ impl super::Store {
         Ok(())
     }
 
+    /// Count active (non-deprecated) memories in a namespace.
+    pub fn count_active(&self, namespace: Option<&str>) -> Result<usize, Error> {
+        let count: i64 = match namespace {
+            Some(ns) => self.conn.query_row(
+                "SELECT COUNT(*) FROM memories WHERE namespace = ?1 AND deprecated = 0",
+                params![ns],
+                |row| row.get(0),
+            ),
+            None => self.conn.query_row(
+                "SELECT COUNT(*) FROM memories WHERE deprecated = 0",
+                [],
+                |row| row.get(0),
+            ),
+        }
+        .map_err(|e| Error::db("database operation", e))?;
+        Ok(count as usize)
+    }
+
+    /// Count deprecated memories in a namespace.
+    pub fn count_deprecated(&self, namespace: Option<&str>) -> Result<usize, Error> {
+        let count: i64 = match namespace {
+            Some(ns) => self.conn.query_row(
+                "SELECT COUNT(*) FROM memories WHERE namespace = ?1 AND deprecated = 1",
+                params![ns],
+                |row| row.get(0),
+            ),
+            None => self.conn.query_row(
+                "SELECT COUNT(*) FROM memories WHERE deprecated = 1",
+                [],
+                |row| row.get(0),
+            ),
+        }
+        .map_err(|e| Error::db("database operation", e))?;
+        Ok(count as usize)
+    }
+
     /// Find aged memories eligible for cleanup.
     ///
     /// Returns memories matching: older than `older_than_days`, access_count <= max_access_count,

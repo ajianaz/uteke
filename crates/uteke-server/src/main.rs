@@ -252,6 +252,51 @@ fn main() {
                         .unwrap_or(defaults.orphan_importance_threshold),
                 );
             }
+
+            // Apply lifecycle config from uteke.toml [lifecycle] section (#928)
+            if let Some(ref lc) = config.lifecycle {
+                let defaults = uteke_core::LifecycleConfig::default();
+                u.set_lifecycle_config(uteke_core::LifecycleConfig {
+                    soft_delete_only: lc.soft_delete_only.unwrap_or(defaults.soft_delete_only),
+                    auto_aging_enabled: lc
+                        .auto_aging_enabled
+                        .unwrap_or(defaults.auto_aging_enabled),
+                    auto_aging_interval_hours: lc
+                        .auto_aging_interval_hours
+                        .unwrap_or(defaults.auto_aging_interval_hours),
+                    min_age_days: lc.min_age_days.unwrap_or(defaults.min_age_days),
+                    max_access_count: lc.max_access_count.unwrap_or(defaults.max_access_count),
+                    max_deprecate_percent: lc
+                        .max_deprecate_percent
+                        .unwrap_or(defaults.max_deprecate_percent),
+                    min_deprecate_per_cycle: lc
+                        .min_deprecate_per_cycle
+                        .unwrap_or(defaults.min_deprecate_per_cycle),
+                    max_deprecate_per_cycle: lc
+                        .max_deprecate_per_cycle
+                        .unwrap_or(defaults.max_deprecate_per_cycle),
+                    deprecated_ttl_days: lc
+                        .deprecated_ttl_days
+                        .unwrap_or(defaults.deprecated_ttl_days),
+                    auto_prune_enabled: lc
+                        .auto_prune_enabled
+                        .unwrap_or(defaults.auto_prune_enabled),
+                    dream_dedup_soft_delete: lc
+                        .dream_dedup_soft_delete
+                        .unwrap_or(defaults.dream_dedup_soft_delete),
+                    dream_compact_soft_delete: lc
+                        .dream_compact_soft_delete
+                        .unwrap_or(defaults.dream_compact_soft_delete),
+                });
+                info!(
+                    "Lifecycle config loaded: soft_delete_only={}, ttl={}d, max_deprecate={:.1}%",
+                    lc.soft_delete_only.unwrap_or(defaults.soft_delete_only),
+                    lc.deprecated_ttl_days
+                        .unwrap_or(defaults.deprecated_ttl_days),
+                    lc.max_deprecate_percent
+                        .unwrap_or(defaults.max_deprecate_percent),
+                );
+            }
             Arc::new(Mutex::new(u))
         }
         Err(e) => {
@@ -309,62 +354,56 @@ fn main() {
         info!("CORS: allowing origins: {:?}", cors_origins);
     }
 
-    // Auto-aging background thread (#442 enhancement).
-    // Runs aging cleanup periodically to remove cold, low-importance memories.
-    let aging_enabled = config
-        .maintenance
+    // Auto-lifecycle background thread (#934 — replaces auto-aging #442).
+    // Runs lifecycle_cycle periodically: soft-deprecate aged memories (cap-limited)
+    // + auto-prune expired deprecated memories.
+    let lifecycle_enabled = config
+        .lifecycle
         .as_ref()
-        .and_then(|m| m.auto_aging_enabled)
+        .and_then(|lc| lc.auto_aging_enabled)
         .unwrap_or(true);
-    let aging_hours = config
-        .maintenance
+    let lifecycle_hours = config
+        .lifecycle
         .as_ref()
-        .and_then(|m| m.auto_aging_interval_hours)
-        .unwrap_or(6)
+        .and_then(|lc| lc.auto_aging_interval_hours)
+        .unwrap_or(168) // weekly by default
         .max(1); // Minimum 1 hour to prevent busy loop
-    let aging_uteke = Arc::clone(&uteke);
-    let aging_config = config.aging.clone();
-    if aging_enabled {
-        info!("Auto-aging: enabled (every {aging_hours}h)");
+    let lifecycle_uteke = Arc::clone(&uteke);
+    if lifecycle_enabled {
+        info!("Auto-lifecycle: enabled (every {lifecycle_hours}h)");
         std::thread::spawn(move || {
-            let interval = std::time::Duration::from_secs(aging_hours * 60 * 60);
+            let interval = std::time::Duration::from_secs(lifecycle_hours * 60 * 60);
             loop {
                 std::thread::sleep(interval);
                 if SHUTDOWN.load(Ordering::SeqCst) {
                     break;
                 }
-                match aging_uteke.lock() {
-                    Ok(u) => {
-                        let age_days = aging_config
-                            .as_ref()
-                            .and_then(|a| a.max_age_days)
-                            .unwrap_or(365);
-                        let max_access = aging_config
-                            .as_ref()
-                            .and_then(|a| a.max_access_count)
-                            .unwrap_or(10);
-                        match u.aging_cleanup(age_days, max_access, None) {
-                            Ok(result) => {
-                                if result.deleted > 0 {
-                                    info!(
-                                        "Auto-aging: cleaned up {} stale memories (age>{age_days}d, access<{max_access})",
-                                        result.deleted
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                warn!("Auto-aging failed: {e}");
+                match lifecycle_uteke.lock() {
+                    Ok(u) => match u.lifecycle_cycle(None) {
+                        Ok(result) => {
+                            if result.deprecated > 0 || result.pruned > 0 {
+                                info!(
+                                    "Auto-lifecycle: deprecated {}/{} (cap={}, total_active={}), pruned {} expired",
+                                    result.deprecated,
+                                    result.candidates,
+                                    result.cap,
+                                    result.total_active,
+                                    result.pruned
+                                );
                             }
                         }
-                    }
+                        Err(e) => {
+                            warn!("Auto-lifecycle failed: {e}");
+                        }
+                    },
                     Err(_) => {
-                        tracing::debug!("Auto-aging: lock busy, skipping cycle");
+                        tracing::debug!("Auto-lifecycle: lock busy, skipping cycle");
                     }
                 }
             }
         });
     } else {
-        info!("Auto-aging: disabled");
+        info!("Auto-lifecycle: disabled");
     }
 
     // Auto-dream background thread (#442 enhancement).
@@ -473,11 +512,16 @@ struct ServerFileConfig {
     recall: Option<RecallFileSection>,
     extraction: Option<uteke_core::extraction::ExtractionConfig>,
     maintenance: Option<MaintenanceFileSection>,
+    /// Deprecated: superseded by [lifecycle] section (#934). Kept for backward-compat deserialization.
+    #[allow(dead_code)]
     aging: Option<AgingFileSection>,
     dream: Option<DreamFileSection>,
+    lifecycle: Option<LifecycleFileSection>,
 }
 
+/// Deprecated: superseded by [lifecycle] section (#934). Kept for backward-compat deserialization.
 #[derive(serde::Deserialize, Default, Clone)]
+#[allow(dead_code)]
 struct AgingFileSection {
     max_age_days: Option<u32>,
     max_access_count: Option<u32>,
@@ -485,7 +529,11 @@ struct AgingFileSection {
 
 #[derive(serde::Deserialize, Default, Clone)]
 struct MaintenanceFileSection {
+    /// Deprecated: moved to [lifecycle] section. Kept for backward-compat.
+    #[allow(dead_code)]
     auto_aging_enabled: Option<bool>,
+    /// Deprecated: moved to [lifecycle] section. Kept for backward-compat.
+    #[allow(dead_code)]
     auto_aging_interval_hours: Option<u64>,
     auto_dream_enabled: Option<bool>,
     auto_dream_interval_days: Option<u64>,
@@ -499,6 +547,23 @@ struct DreamFileSection {
     contradict_max_memories: Option<usize>,
     dedup_threshold: Option<f32>,
     orphan_importance_threshold: Option<f64>,
+}
+
+/// Memory lifecycle config from uteke.toml [lifecycle] section (#928).
+#[derive(serde::Deserialize, Default, Clone)]
+struct LifecycleFileSection {
+    soft_delete_only: Option<bool>,
+    auto_aging_enabled: Option<bool>,
+    auto_aging_interval_hours: Option<u64>,
+    min_age_days: Option<u32>,
+    max_access_count: Option<u32>,
+    max_deprecate_percent: Option<f64>,
+    min_deprecate_per_cycle: Option<usize>,
+    max_deprecate_per_cycle: Option<usize>,
+    deprecated_ttl_days: Option<u32>,
+    auto_prune_enabled: Option<bool>,
+    dream_dedup_soft_delete: Option<bool>,
+    dream_compact_soft_delete: Option<bool>,
 }
 
 #[derive(serde::Deserialize, Default)]

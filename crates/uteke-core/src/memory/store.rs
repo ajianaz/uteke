@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS memories (
     access_count INTEGER NOT NULL DEFAULT 0,
     last_accessed TEXT,
     deprecated INTEGER NOT NULL DEFAULT 0,
+    deprecate_reason TEXT,
     valid_from TEXT,
     valid_until TEXT,
     memory_type TEXT NOT NULL DEFAULT 'fact',

@@ -347,6 +347,82 @@ impl Default for DreamConfig {
     }
 }
 
+/// Memory lifecycle configuration (#928).
+///
+/// Controls how memories transition through their lifecycle:
+/// `ACTIVE → DEPRECATED (hidden, restorable) → PRUNED (hard delete)`.
+///
+/// All destructive operations route through soft-delete when
+/// `soft_delete_only = true` (the default).
+#[derive(serde::Deserialize, Clone)]
+#[serde(default)]
+pub struct LifecycleConfig {
+    /// Route all destructive ops through `deprecate()` instead of `delete()`.
+    /// Default: true. Set to `false` to restore pre-v0.13 hard-delete behavior.
+    pub soft_delete_only: bool,
+    /// Whether auto lifecycle cycles are enabled. Default: true.
+    pub auto_aging_enabled: bool,
+    /// Hours between automatic lifecycle cycles (server mode). Default: 168 (weekly).
+    pub auto_aging_interval_hours: u64,
+    /// Minimum age in days before eligible for deprecation. Default: 90.
+    pub min_age_days: u32,
+    /// Maximum access count for "cold" eligibility. Default: 3.
+    pub max_access_count: u32,
+    /// Max percentage of total memories deprecable per cycle. Default: 1.0.
+    pub max_deprecate_percent: f64,
+    /// Minimum deprecations per cycle. Default: 1.
+    pub min_deprecate_per_cycle: usize,
+    /// Hard ceiling on deprecations per cycle. Default: 50.
+    pub max_deprecate_per_cycle: usize,
+    /// Days after deprecation before eligible for pruning (hard delete). Default: 30.
+    pub deprecated_ttl_days: u32,
+    /// Auto-prune expired deprecated memories during cycles. Default: true.
+    pub auto_prune_enabled: bool,
+    /// Dream dedup phase uses soft-delete. Default: true.
+    pub dream_dedup_soft_delete: bool,
+    /// Dream compact phase uses soft-delete. Default: true.
+    pub dream_compact_soft_delete: bool,
+}
+
+impl Default for LifecycleConfig {
+    fn default() -> Self {
+        Self {
+            soft_delete_only: true,
+            auto_aging_enabled: true,
+            auto_aging_interval_hours: 168,
+            min_age_days: 90,
+            max_access_count: 3,
+            max_deprecate_percent: 1.0,
+            min_deprecate_per_cycle: 1,
+            max_deprecate_per_cycle: 50,
+            deprecated_ttl_days: 30,
+            auto_prune_enabled: true,
+            dream_dedup_soft_delete: true,
+            dream_compact_soft_delete: true,
+        }
+    }
+}
+
+impl LifecycleConfig {
+    /// Convert CLI config to core config.
+    pub fn to_core(&self) -> uteke_core::LifecycleConfig {
+        uteke_core::LifecycleConfig {
+            soft_delete_only: self.soft_delete_only,
+            auto_aging_enabled: self.auto_aging_enabled,
+            auto_aging_interval_hours: self.auto_aging_interval_hours,
+            min_age_days: self.min_age_days,
+            max_access_count: self.max_access_count,
+            max_deprecate_percent: self.max_deprecate_percent,
+            min_deprecate_per_cycle: self.min_deprecate_per_cycle,
+            max_deprecate_per_cycle: self.max_deprecate_per_cycle,
+            deprecated_ttl_days: self.deprecated_ttl_days,
+            auto_prune_enabled: self.auto_prune_enabled,
+            dream_dedup_soft_delete: self.dream_dedup_soft_delete,
+            dream_compact_soft_delete: self.dream_compact_soft_delete,
+        }
+    }
+}
+
 /// Full uteke configuration, loaded from `uteke.toml`.
 #[derive(serde::Deserialize, Clone)]
 #[serde(default)]
@@ -363,6 +439,7 @@ pub struct Config {
     pub limits: LimitsConfig,
     pub maintenance: MaintenanceConfig,
     pub dream: DreamConfig,
+    pub lifecycle: LifecycleConfig,
     /// Enable background update notification on startup. Default: true.
     /// Set to `false` to disable.
     #[serde(default = "default_true")]
@@ -389,6 +466,7 @@ impl Default for Config {
             limits: LimitsConfig::default(),
             maintenance: MaintenanceConfig::default(),
             dream: DreamConfig::default(),
+            lifecycle: LifecycleConfig::default(),
             update_check: true,
         }
     }

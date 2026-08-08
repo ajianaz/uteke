@@ -931,6 +931,12 @@ impl crate::Uteke {
     /// Holds the index write lock for the entire operation to prevent
     /// concurrent processes from reading a partially-updated index (#621).
     pub fn forget(&self, id: &str) -> Result<(), Error> {
+        // When soft_delete_only is enabled (default), redirect to soft-delete (#932).
+        if self.lifecycle_config.soft_delete_only {
+            return self.soft_forget(id, "user forget() — soft-delete via lifecycle config");
+        }
+
+        // --- Legacy hard-delete path (only when soft_delete_only=false) ---
         // Look up namespace before delete for targeted cache invalidation.
         // If lookup succeeds, invalidate only that namespace.
         // If the memory simply doesn't exist, no invalidation needed.
@@ -992,13 +998,91 @@ impl crate::Uteke {
         )))
     }
 
-    /// Bulk delete memories by tag. Also removes from index.
+    /// Soft-delete (deprecate) a memory with reason (#929).
+    ///
+    /// When `soft_delete_only` is enabled (default), this replaces `forget()`.
+    /// The memory is marked deprecated but remains in the database,
+    /// hidden from recall, and restorable via `promote()`.
+    pub fn soft_forget(&self, id: &str, reason: &str) -> Result<(), Error> {
+        self.store.deprecate_with_reason(id, reason)?;
+        // Remove from vector index so it doesn't appear in recall.
+        let mut index = self
+            .index
+            .write()
+            .map_err(|_| Error::lock("index write lock during soft_forget"))?;
+        if !index.remove(id) {
+            tracing::debug!(
+                "Vector index entry not found during soft_forget for id={id} (ok if never embedded)"
+            );
+        }
+        // Invalidate recall cache for this memory's namespace.
+        if let Some(memory) = self.store.get_by_id(id).ok().flatten() {
+            self.recall_cache.invalidate_namespace(&memory.namespace);
+        }
+        tracing::info!("Soft-deleted memory id={id}: {reason}");
+        Ok(())
+    }
+
+    /// Restore a deprecated memory to active state (#929).
+    ///
+    /// Re-adds the memory to the vector index and clears the deprecated flag.
+    /// Returns false if the memory was not deprecated or doesn't exist.
+    pub fn promote(&self, id: &str) -> Result<bool, Error> {
+        let restored = self.store.undeprecate(id)?;
+        if !restored {
+            return Ok(false);
+        }
+        // Re-add to vector index.
+        if let Some(memory) = self.store.get_by_id(id).ok().flatten() {
+            if !memory.embedding.is_empty() {
+                let mut index = self
+                    .index
+                    .write()
+                    .map_err(|_| Error::lock("index write lock during promote"))?;
+                if let Err(e) = index.insert(&memory.id, &memory.embedding) {
+                    tracing::warn!(
+                        "Failed to re-insert memory id={} into vector index during promote: {e}",
+                        memory.id
+                    );
+                }
+                let _ = index.save();
+            }
+            self.recall_cache.invalidate_namespace(&memory.namespace);
+        }
+        tracing::info!("Promoted (restored) memory id={id}");
+        Ok(true)
+    }
+
+    /// Bulk delete memories by tag. Hard or soft-delete based on lifecycle config (#932).
     pub fn bulk_forget_by_tag(
         &self,
         tag: &str,
         namespace: Option<&str>,
     ) -> Result<BulkDeleteResult, Error> {
-        // Acquire index write lock BEFORE SQLite delete to narrow inconsistency window.
+        if self.lifecycle_config.soft_delete_only {
+            let ids = self.store.find_ids_by_tag(tag, namespace)?;
+            let reason = format!("bulk forget by tag='{tag}' — soft-delete via lifecycle config");
+            let count = self.store.deprecate_by_ids(&ids, &reason)?;
+            let mut index = self
+                .index
+                .write()
+                .map_err(|_| Error::lock("index write lock during bulk_forget_by_tag"))?;
+            for id in &ids {
+                index.remove(id);
+            }
+            persist_index_after_delete(&mut index, "bulk_forget_by_tag (soft)")?;
+            if let Some(ns) = namespace {
+                self.recall_cache.invalidate_namespace(ns);
+            } else {
+                self.recall_cache.clear();
+            }
+            return Ok(BulkDeleteResult {
+                deleted: count,
+                ids,
+            });
+        }
+
+        // Legacy hard-delete path
         let mut index = self
             .index
             .write()
@@ -1018,9 +1102,34 @@ impl crate::Uteke {
         })
     }
 
-    /// Bulk delete all cold memories. Also removes from index.
+    /// Bulk delete all cold memories. Hard or soft-delete based on lifecycle config (#932).
     pub fn bulk_forget_cold(&self, namespace: Option<&str>) -> Result<BulkDeleteResult, Error> {
-        // Acquire index write lock BEFORE SQLite delete to narrow inconsistency window.
+        if self.lifecycle_config.soft_delete_only {
+            let ids = self
+                .store
+                .find_ids_cold(namespace, self.tier_config.warm_days)?;
+            let reason = "bulk forget cold — soft-delete via lifecycle config".to_string();
+            let count = self.store.deprecate_by_ids(&ids, &reason)?;
+            let mut index = self
+                .index
+                .write()
+                .map_err(|_| Error::lock("index write lock during bulk_forget_cold"))?;
+            for id in &ids {
+                index.remove(id);
+            }
+            persist_index_after_delete(&mut index, "bulk_forget_cold (soft)")?;
+            if let Some(ns) = namespace {
+                self.recall_cache.invalidate_namespace(ns);
+            } else {
+                self.recall_cache.clear();
+            }
+            return Ok(BulkDeleteResult {
+                deleted: count,
+                ids,
+            });
+        }
+
+        // Legacy hard-delete path
         let mut index = self
             .index
             .write()
@@ -1040,9 +1149,32 @@ impl crate::Uteke {
         })
     }
 
-    /// Bulk delete all memories in a namespace. Also removes from index.
+    /// Bulk delete all memories in a namespace. Hard or soft-delete based on lifecycle config (#932).
     pub fn bulk_forget_all(&self, namespace: Option<&str>) -> Result<BulkDeleteResult, Error> {
-        // Acquire index write lock BEFORE SQLite delete to narrow inconsistency window.
+        if self.lifecycle_config.soft_delete_only {
+            let ids = self.store.find_ids_all(namespace)?;
+            let reason = "bulk forget all — soft-delete via lifecycle config".to_string();
+            let count = self.store.deprecate_by_ids(&ids, &reason)?;
+            let mut index = self
+                .index
+                .write()
+                .map_err(|_| Error::lock("index write lock during bulk_forget_all"))?;
+            for id in &ids {
+                index.remove(id);
+            }
+            persist_index_after_delete(&mut index, "bulk_forget_all (soft)")?;
+            if let Some(ns) = namespace {
+                self.recall_cache.invalidate_namespace(ns);
+            } else {
+                self.recall_cache.clear();
+            }
+            return Ok(BulkDeleteResult {
+                deleted: count,
+                ids,
+            });
+        }
+
+        // Legacy hard-delete path
         let mut index = self
             .index
             .write()
@@ -1438,7 +1570,7 @@ mod forget_tests {
     use crate::Uteke;
 
     /// Insert a memory with a fake embedding (bypassing ONNX), then forget it.
-    /// Verifies the memory is gone from both store and index (#926).
+    /// Verifies the memory is soft-deleted (deprecated) by default (#926, #932).
     #[test]
     fn test_forget_deletes_memory() {
         let uteke = Uteke::open(":memory:").unwrap();
@@ -1455,14 +1587,16 @@ mod forget_tests {
             )
             .unwrap();
 
-        // Verify it exists
-        assert!(uteke.get_by_id(&id).unwrap().is_some());
+        // Verify it exists and is active
+        let mem = uteke.get_by_id(&id).unwrap().unwrap();
+        assert!(!mem.deprecated, "memory should be active before forget");
 
-        // Forget it
+        // Forget it (soft-delete by default: soft_delete_only=true)
         uteke.forget(&id).unwrap();
 
-        // Verify it's gone from store
-        assert!(uteke.get_by_id(&id).unwrap().is_none());
+        // Memory still exists but is now deprecated (soft-delete)
+        let mem = uteke.get_by_id(&id).unwrap().unwrap();
+        assert!(mem.deprecated, "memory should be deprecated after forget");
     }
 
     /// Forgetting a non-existent ID should return an error, not Ok(()) (#926).
@@ -1476,7 +1610,7 @@ mod forget_tests {
         );
     }
 
-    /// Forget → re-insert should work (no stale state) (#926).
+    /// Forget → re-insert should work (soft-deleted memory stays, new ID for re-insert) (#926).
     #[test]
     fn test_forget_then_reinsert() {
         let uteke = Uteke::open(":memory:").unwrap();
@@ -1493,10 +1627,12 @@ mod forget_tests {
             )
             .unwrap();
 
+        // Soft-delete: memory becomes deprecated, not removed
         uteke.forget(&id).unwrap();
-        assert!(uteke.get_by_id(&id).unwrap().is_none());
+        let mem = uteke.get_by_id(&id).unwrap().unwrap();
+        assert!(mem.deprecated, "original memory should be deprecated");
 
-        // Re-insert with same content — should get a new ID
+        // Re-insert with same content: should get a new ID (deprecated memories don't block re-insert)
         let id2 = uteke
             .remember_precomputed(
                 "forget then reinsert",
@@ -1509,7 +1645,8 @@ mod forget_tests {
             )
             .unwrap();
         assert_ne!(id, id2, "re-inserted memory should have a new ID");
-        assert!(uteke.get_by_id(&id2).unwrap().is_some());
+        let mem2 = uteke.get_by_id(&id2).unwrap().unwrap();
+        assert!(!mem2.deprecated, "new memory should be active");
     }
 }
 
