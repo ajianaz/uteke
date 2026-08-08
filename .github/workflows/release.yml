@@ -110,22 +110,16 @@ jobs:
       matrix:
         include:
           # Linux x86_64
-          # IMPORTANT: Pin to ubuntu-22.04 (GLIBC 2.35) for backward compatibility.
-          # ubuntu-latest = 24.04 (GLIBC 2.39) — binary won't run on Debian 12,
-          # Ubuntu 22.04, RHEL 9, or any system with GLIBC < 2.39.
-          # See: https://github.com/codecoradev/uteke issues — GLIBC_2.39 not found.
-          #
-          # EOL: Ubuntu 22.04 standard support ends April 2027.
-          # Before that date, migrate to cargo-zigbuild targeting GLIBC 2.17,
-          # which covers Ubuntu 18.04+, Debian 10+, RHEL 8+ and is runner-independent.
-          # (musl static is NOT viable — ort crate has no static-link feature,
-          #  and musl binary dlopen-ing glibc-linked ORT .so risks ABI conflicts.)
-          - os: ubuntu-22.04
+          # ubuntu-24.04 required: numkong 7.7.0 SIMD probes need GCC 14 + binutils 2.40+
+          # (ubuntu-22.04 max GCC 13 from PPA, but its binutils 2.38 GAS can't
+          # assemble AMX-FP16 / AVX10 / SVE2 dotprod instructions).
+          # TODO: migrate to cargo-zigbuild targeting GLIBC 2.17 for broader compat.
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             artifact: uteke-x86_64-unknown-linux-gnu
             ext: tar.gz
           # Linux ARM64
-          - os: ubuntu-22.04-arm
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact: uteke-aarch64-unknown-linux-gnu
             ext: tar.gz
@@ -146,17 +140,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Install gcc-13 from PPA on ubuntu-22.04 (numkong SIMD probes need newer GCC)
-        if: matrix.os == 'ubuntu-22.04' || matrix.os == 'ubuntu-22.04-arm'
-        run: |
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq gcc-13 g++-13
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 130
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 130
-          echo "CC=gcc-13" >> $GITHUB_ENV
-          echo "CXX=g++-13" >> $GITHUB_ENV
 
       - name: Download prebuilt ORT shared library
         shell: bash
