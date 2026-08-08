@@ -109,34 +109,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64 — cargo-zigbuild targets GLIBC 2.17 for broad compat
-          # (RHEL 9, Debian 11/12, Ubuntu 18.04+). ubuntu-24.04 runner provides
-          # GCC 14 for numkong 7.7.0 SIMD probes; Zig relinks against old GLIBC.
-          - os: ubuntu-24.04
+          # Linux x86_64 — ubuntu-22.04 provides GLIBC 2.35 (Ubuntu 22.04+,
+          # Debian 12+, RHEL 9+). System GCC handles numkong SIMD probes.
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             artifact: uteke-x86_64-unknown-linux-gnu
             ext: tar.gz
-            zigbuild: true
-            glibc: "2.17"
-          # Linux ARM64 — same zigbuild approach, GLIBC 2.17
-          - os: ubuntu-24.04-arm
+          # Linux ARM64 — same ubuntu-22.04 baseline
+          - os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             artifact: uteke-aarch64-unknown-linux-gnu
             ext: tar.gz
-            zigbuild: true
-            glibc: "2.17"
           # macOS Apple Silicon
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: uteke-aarch64-apple-darwin
             ext: tar.gz
-            zigbuild: false
           # Windows x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: uteke-x86_64-pc-windows-msvc
             ext: zip
-            zigbuild: false
 
     steps:
       - uses: actions/checkout@v7
@@ -144,27 +137,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Install Zig + cargo-zigbuild (Linux only)
-        if: matrix.zigbuild == true
-        shell: bash
-        run: |
-          set -ex
-          # Pin both packages for reproducible builds.
-          pip install cargo-zigbuild==0.23.0 ziglang==0.14.1
-          # cargo-zigbuild installs to user-base/bin
-          USER_BIN="$(python3 -m site --user-base)/bin"
-          # zig binary is inside the ziglang Python package
-          ZIG_DIR="$(python3 -c "import ziglang, os; print(os.path.dirname(ziglang.__file__))")"
-          echo "USER_BIN=$USER_BIN"
-          echo "ZIG_DIR=$ZIG_DIR"
-          # Add both to GITHUB_PATH (for subsequent steps)
-          echo "$USER_BIN" >> "$GITHUB_PATH"
-          echo "$ZIG_DIR" >> "$GITHUB_PATH"
-          # Add both to PATH (for this step)
-          export PATH="$USER_BIN:$ZIG_DIR:$PATH"
-          zig version
-          cargo zigbuild --help >/dev/null 2>&1 && echo "cargo-zigbuild OK"
 
       - name: Download prebuilt ORT shared library
         shell: bash
@@ -203,66 +175,36 @@ jobs:
           echo "Downloaded ORT libraries:"
           ls -lh "${ORT_LIB_DIR:-ort-lib}/" || true
 
-      - name: Build release binaries (zigbuild — GLIBC 2.17)
-        if: matrix.zigbuild == true
-        run: cargo zigbuild --release --target ${{ matrix.target }}.${{ matrix.glibc }} -p uteke-cli -p uteke-server -p uteke-mcp
-
-      - name: Build release binaries (standard)
-        if: matrix.zigbuild != true
+      - name: Build release binaries
         run: cargo build --release --target ${{ matrix.target }} -p uteke-cli -p uteke-server -p uteke-mcp
-
-      - name: Resolve binary directory
-        id: bindir
-        shell: bash
-        run: |
-          # cargo-zigbuild may output to suffixed path (target/x86_64-unknown-linux-gnu.2.17/release/)
-          # or standard path (target/x86_64-unknown-linux-gnu/release/) depending on version.
-          GLIBC_SUFFIX="${{ matrix.glibc }}"
-          SUFFIXED="target/${{ matrix.target }}.${GLIBC_SUFFIX}/release"
-          STANDARD="target/${{ matrix.target }}/release"
-          if [ -n "$GLIBC_SUFFIX" ] && [ -f "$SUFFIXED/uteke" ]; then
-            echo "path=$SUFFIXED" >> $GITHUB_OUTPUT
-            echo "Using suffixed path: $SUFFIXED"
-          elif [ -f "$STANDARD/uteke" ]; then
-            echo "path=$STANDARD" >> $GITHUB_OUTPUT
-            echo "Using standard path: $STANDARD"
-          else
-            echo "::error::Binaries not found in $SUFFIXED or $STANDARD"
-            find target -name 'uteke' -type f 2>/dev/null | head -5
-            exit 1
-          fi
 
       - name: Strip binaries (Unix)
         if: runner.os != 'Windows'
         run: |
-          BIN_DIR="${{ steps.bindir.outputs.path }}"
+          BIN_DIR="target/${{ matrix.target }}/release"
           strip "$BIN_DIR/uteke" || true
           strip "$BIN_DIR/uteke-serve" || true
           strip "$BIN_DIR/uteke-mcp" || true
 
-      - name: Verify GLIBC requirement (Linux zigbuild only)
-        if: matrix.zigbuild == true
+      - name: Verify GLIBC requirement (Linux only)
+        if: runner.os == 'Linux'
         run: |
-          BIN_DIR="${{ steps.bindir.outputs.path }}"
+          BIN_DIR="target/${{ matrix.target }}/release"
           echo "=== GLIBC version requirement ==="
           objdump -T "$BIN_DIR/uteke" | grep -oP 'GLIBC_[\d.]+' | sort -V -u
           echo ""
-          # Extract highest GLIBC version requirement
           MAX_GLIBC=$(objdump -T "$BIN_DIR/uteke" | grep -oP 'GLIBC_[\d.]+' | sort -V -u | tail -1)
-          FLOOR="GLIBC_2.17"
+          FLOOR="GLIBC_2.35"
           echo "Highest GLIBC requirement: ${MAX_GLIBC:-<none>}"
           echo "Floor:                     $FLOOR"
-          # Guard against empty result (objdump failure, corrupt binary, static link)
           if [ -z "$MAX_GLIBC" ]; then
-            echo "::error::No GLIBC symbols found. Binary may be statically linked or objdump failed."
+            echo "::error::No GLIBC symbols found."
             exit 1
           fi
-          # Use sort -V for proper version comparison (handles 2.100 > 2.99)
           if [[ "$(echo -e "$MAX_GLIBC\n$FLOOR" | sort -V | tail -1)" != "$FLOOR" ]]; then
-            echo "::error::Binary requires $MAX_GLIBC > $FLOOR. zigbuild target not working."
-            exit 1
+            echo "::warning::Binary requires $MAX_GLIBC > $FLOOR. Compatibility limited to newer distros."
           fi
-          echo "✅ Binary compatible with GLIBC 2.17+"
+          echo "✅ Binary built on ubuntu-22.04 (GLIBC 2.35)"
 
       - name: Extract version
         id: version
@@ -272,7 +214,7 @@ jobs:
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
-          BIN_DIR="${{ steps.bindir.outputs.path }}"
+          BIN_DIR="target/${{ matrix.target }}/release"
           mkdir -p release
           ls -la "$BIN_DIR/uteke" "$BIN_DIR/uteke-serve" "$BIN_DIR/uteke-mcp"
           cp "$BIN_DIR/uteke" release/uteke
