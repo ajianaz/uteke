@@ -147,9 +147,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install gcc-13 on ubuntu-22.04 (numkong SIMD probes need newer GCC)
+      - name: Install gcc-13 from PPA on ubuntu-22.04 (numkong SIMD probes need newer GCC)
         if: matrix.os == 'ubuntu-22.04' || matrix.os == 'ubuntu-22.04-arm'
         run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
           sudo apt-get update -qq
           sudo apt-get install -y -qq gcc-13 g++-13
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 130
