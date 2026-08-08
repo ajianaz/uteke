@@ -1,3 +1,23 @@
+## [0.13.0] — 2026-08-08
+
+### Added
+- **Safe memory lifecycle (#928–#937)** — Memories now transition through a reviewable soft-delete state before any hard deletion. The flow: `ACTIVE → DEPRECATED (hidden, restorable, 30-day TTL) → PRUNED`. Hard delete is confined to exactly two controlled paths — `prune()` (expired TTL) and `forget()` (only when `soft_delete_only = false`). Everything else redirects to soft-delete by default.
+- **`LifecycleConfig` (#928)** — 11 configurable fields governing deprecation age thresholds, per-cycle percentage cap (default 1%), TTL, and auto-cycle scheduling. Conservative defaults out of the box.
+- **CLI lifecycle commands (#935)** — `uteke lifecycle status`, `uteke lifecycle cycle`, `uteke lifecycle promote <id>`, `uteke lifecycle restore <id>`.
+- **HTTP API lifecycle endpoints (#936)** — `GET /lifecycle/status`, `POST /lifecycle/cycle`, `POST /lifecycle/promote`.
+- **Memory Lifecycle docs page** — New `/memory-lifecycle` page with best practices, migration notes, and configuration reference.
+
+### Changed
+- **All delete paths now respect `soft_delete_only` (#930–#932)** — `aging_cleanup()`, `consolidate()`, `delete()`, `bulk_delete()`, `forget()`, and `bulk_forget_*()` all redirect to `deprecate()` when `soft_delete_only = true` (the default). This means no automated process — not aging, not dream dedup, not bulk operations — can hard-delete a memory.
+- **Server auto-aging thread → auto-lifecycle thread (#934)** — The background maintenance thread now runs the full 2-phase lifecycle cycle (deprecate + prune) instead of just aging cleanup.
+- **Dynamic per-cycle cap (#933)** — Each cycle deprecates at most `max_deprecate_percent` (default 1%) of active memories, clamped to `[1, 50]`. Prevents sudden data loss on large stores.
+
+### Fixed
+- **Migration: `deprecate_reason` column** — Added via `column_exists()` pattern. No schema version bump, no manual migration steps. Existing databases upgrade transparently.
+
+### Contributors
+- [@ajianaz](https://github.com/ajianaz) — full lifecycle system design and implementation
+
 ## [0.12.0] — 2026-08-05
 
 ### Fixed
