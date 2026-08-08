@@ -151,8 +151,10 @@ jobs:
           # Pin both packages for reproducible builds.
           # ziglang provides the Zig compiler binary used by cargo-zigbuild.
           pip install cargo-zigbuild==0.23.0 ziglang==0.14.1
-          # ziglang installs to ~/.local/bin which may not be in PATH
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          # Add user site-packages bin to PATH for THIS step and subsequent steps
+          SITE_BIN="$(python3 -m site --user-base)/bin"
+          echo "$SITE_BIN" >> $GITHUB_PATH
+          export PATH="$SITE_BIN:$PATH"
           zig version
 
       - name: Download prebuilt ORT shared library
