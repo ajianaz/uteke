@@ -7,6 +7,21 @@
 //! Also provides markdown/prose chunking (#405) — splits by headings
 //! while respecting a token window.
 
+/// Floor-clamp an index to the nearest valid UTF-8 char boundary at or before `idx`.
+///
+/// Polyfill for `str::floor_char_boundary` (stabilized in Rust 1.91.0).
+/// We support MSRV 1.85.0, so we can't use the std method yet.
+fn floor_char_boundary(s: &str, mut idx: usize) -> usize {
+    if idx >= s.len() {
+        return s.len();
+    }
+    // Walk backward until we land on a char boundary.
+    while !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
 /// A code chunk representing a semantic unit (function, class, etc).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CodeChunk {
@@ -242,6 +257,8 @@ fn split_by_paragraphs(text: &str, max_chars: usize) -> Vec<String> {
 
 /// Hard-split very long text by character boundary.
 /// Tries to break at sentence boundaries (.), then words (space).
+///
+/// Uses `floor_char_boundary` to avoid splitting multi-byte UTF-8 sequences.
 fn split_long_text(text: &str, max_chars: usize) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut start = 0;
@@ -253,6 +270,10 @@ fn split_long_text(text: &str, max_chars: usize) -> Vec<String> {
             break;
         }
 
+        // Clamp end to a valid UTF-8 char boundary to avoid panic on
+        // multi-byte characters (CJK, emoji, etc.).
+        let end = floor_char_boundary(text, end);
+
         // Try to find a sentence boundary (.) or word boundary (space).
         let slice = &text[start..end];
         let break_at = slice
@@ -262,6 +283,7 @@ fn split_long_text(text: &str, max_chars: usize) -> Vec<String> {
             .map(|pos| start + pos + 1);
 
         let chunk_end = break_at.unwrap_or(end);
+        let chunk_end = floor_char_boundary(text, chunk_end);
         chunks.push(text[start..chunk_end].to_string());
         start = chunk_end;
     }
@@ -818,5 +840,35 @@ class MyApp extends StatelessWidget {
             "expected multiple chunks for 2000 chars with 1024 limit"
         );
         assert!(chunks[0].content.len() <= 1024);
+    }
+
+    #[test]
+    fn test_split_long_text_multibyte_utf8() {
+        // Text with multi-byte UTF-8 characters (emoji, CJK).
+        // Each emoji is 4 bytes; CJK chars are 3 bytes.
+        let text = "🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉中文测试中文字符";
+        let chunks = split_long_text(text, 10);
+        // Should not panic and should produce valid UTF-8 strings.
+        for chunk in &chunks {
+            assert!(
+                std::str::from_utf8(chunk.as_bytes()).is_ok(),
+                "chunk is not valid UTF-8"
+            );
+        }
+        // Reconstructed text should cover the full input (possibly with minor whitespace).
+        let combined: String = chunks.concat();
+        assert!(combined.contains("🎉"));
+        assert!(combined.contains("中文"));
+    }
+
+    #[test]
+    fn test_floor_char_boundary() {
+        // "héllo" — 'é' is 2 bytes (0xC3 0xA9).
+        let s = "héllo";
+        assert_eq!(floor_char_boundary(s, 0), 0);
+        assert_eq!(floor_char_boundary(s, 1), 1); // 'h' boundary
+        assert_eq!(floor_char_boundary(s, 2), 1); // middle of 'é' → floor to 1
+        assert_eq!(floor_char_boundary(s, 3), 3); // 'l' boundary
+        assert_eq!(floor_char_boundary(s, usize::MAX), s.len());
     }
 }
