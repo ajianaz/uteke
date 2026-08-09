@@ -45,35 +45,15 @@ jobs:
         env:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
 
-      - name: Comment on PR
+      - name: Comment on PR (unsigned only)
+        if: steps.check.outputs.signed != 'true'
         uses: actions/github-script@v7
         with:
           script: |
-            const signed = '${{ steps.check.outputs.signed }}' === 'true';
             const author = '${{ github.event.pull_request.user.login }}';
             const prNumber = ${{ github.event.pull_request.number }};
 
-            // Find existing CLA bot comment
-            const comments = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber,
-            });
-
-            const botComment = comments.data.find(c =>
-              c.user.login === 'github-actions[bot]' &&
-              c.body.includes('CodeCoraDev CLA Bot')
-            );
-
-            const body = signed
-              ? [
-                  '## ✅ CodeCoraDev CLA Bot',
-                  '',
-                  `Thank you @${author}! Your CLA is on file. 🎉`,
-                  '',
-                  'Your contribution can now be reviewed.',
-                ].join('\n')
-              : [
+            const body = [
                   '## ⚠️ CodeCoraDev CLA Bot',
                   '',
                   `Hi @${author}! Thanks for your contribution.`,
@@ -86,6 +66,18 @@ jobs:
                   '---',
                   '<sub>By signing, you agree to the terms in [CLA_INDIVIDUAL.md](https://github.com/codecoradev/.github/blob/main/CLA_INDIVIDUAL.md) or [CLA_CORPORATE.md](https://github.com/codecoradev/.github/blob/main/CLA_CORPORATE.md).</sub>',
                 ].join('\n');
+
+            // Find existing CLA bot comment
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const botComment = comments.data.find(c =>
+              c.user.login === 'github-actions[bot]' &&
+              c.body.includes('CodeCoraDev CLA Bot')
+            );
 
             if (botComment) {
               await github.rest.issues.updateComment({
