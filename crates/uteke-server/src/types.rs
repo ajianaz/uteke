@@ -370,10 +370,12 @@ pub fn url_decode(s: &str) -> String {
             b'+' => {
                 decoded.push(b' ');
             }
-            b'%' if i + 2 < bytes.len() => {
-                let hex = &s[i + 1..i + 3];
-                if let Ok(byte) = u8::from_str_radix(hex, 16) {
-                    decoded.push(byte);
+            b'%' if i + 3 <= bytes.len() => {
+                // Parse hex pair directly from raw bytes to avoid UTF-8 issues.
+                let h1 = (bytes[i + 1] as char).to_digit(16);
+                let h2 = (bytes[i + 2] as char).to_digit(16);
+                if let (Some(h1), Some(h2)) = (h1, h2) {
+                    decoded.push((h1 * 16 + h2) as u8);
                     i += 2;
                 } else {
                     decoded.push(b'%');
@@ -701,4 +703,32 @@ pub struct RebuildBacklinksRequest {
     #[serde(default)]
     #[allow(dead_code)] // reserved for future verbose mode
     pub quiet: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_url_decode_basic() {
+        assert_eq!(url_decode("hello"), "hello");
+        assert_eq!(url_decode("hello%20world"), "hello world");
+        assert_eq!(url_decode("hello+world"), "hello world");
+        assert_eq!(url_decode("%41%42%43"), "ABC");
+    }
+
+    #[test]
+    fn test_url_decode_trailing_percent() {
+        // Truncated percent-encoding at end of string — should not panic.
+        assert_eq!(url_decode("hello%4"), "hello%4");
+        assert_eq!(url_decode("hello%"), "hello%");
+        // Valid %XX at exact end of string.
+        assert_eq!(url_decode("hello%21"), "hello!");
+    }
+
+    #[test]
+    fn test_url_decode_utf8() {
+        // %C3%A9 = é (2-byte UTF-8).
+        assert_eq!(url_decode("caf%C3%A9"), "café");
+    }
 }
