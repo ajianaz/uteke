@@ -118,10 +118,6 @@ Setiap AI tool lupa. Context window penuh, sesi berakhir, dan AI kamu start over
 
 > **Uteke vs AgentMemory/Mem0/Letta/Zep:** Mereka powerful — tapi semua butuh cloud LLM API key + Docker infra. Data kamu dikirim ke OpenAI/Anthropic. Uteke jalan fully offline dengan embedding ONNX lokal. Tanpa Docker, tanpa Python, tanpa API key.
 
-<p align="center">
-  <img src="docs/assets/uteke-comparison.png" alt="Uteke vs alternatif cloud" width="640" />
-</p>
-
 ---
 
 ## 💡 Buat Apa Uteke?
@@ -253,10 +249,6 @@ graph LR
 3. **RRF** (k=60) — gabungkan dua ranked lists → terbaik dari keduanya
 
 Semua jalan in-process. Tanpa network. Tanpa cloud. Tanpa server (kecuali mau pakai mode server).
-
-<p align="center">
-  <img src="docs/assets/uteke-architecture.png" alt="Diagram arsitektur Uteke" width="640" />
-</p>
 
 ---
 
