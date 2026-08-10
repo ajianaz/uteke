@@ -116,7 +116,7 @@ impl super::Store {
                 let rows = stmt
                     .query_map(params![fts_query, ns, limit as i64], |row| {
                         let memory = row_to_memory(row)?;
-                        let rank: f64 = row.get(14)?;
+                        let rank: f64 = row.get(19)?;
                         Ok((memory, rank))
                     })
                     .map_err(|e| Error::db("execute FTS5 search", e))?;
@@ -133,7 +133,7 @@ impl super::Store {
                 let rows = stmt
                     .query_map(params![fts_query, limit as i64], |row| {
                         let memory = row_to_memory(row)?;
-                        let rank: f64 = row.get(14)?;
+                        let rank: f64 = row.get(19)?;
                         Ok((memory, rank))
                     })
                     .map_err(|e| Error::db("execute FTS5 search", e))?;
@@ -199,7 +199,7 @@ impl super::Store {
                 let rows = stmt
                     .query_map(params![fts_query, ns, limit as i64], |row| {
                         let memory = row_to_memory(row)?;
-                        let rank: f64 = row.get(14)?;
+                        let rank: f64 = row.get(19)?;
                         Ok((memory, rank))
                     })
                     .map_err(|e| Error::db("execute FTS5 token search", e))?;
@@ -216,7 +216,7 @@ impl super::Store {
                 let rows = stmt
                     .query_map(params![fts_query, limit as i64], |row| {
                         let memory = row_to_memory(row)?;
-                        let rank: f64 = row.get(14)?;
+                        let rank: f64 = row.get(19)?;
                         Ok((memory, rank))
                     })
                     .map_err(|e| Error::db("execute FTS5 token search", e))?;
