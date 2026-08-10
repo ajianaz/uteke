@@ -124,6 +124,11 @@ impl crate::Uteke {
                     fetched_targets.iter().map(|m| (m.id.as_str(), m)).collect();
 
                 for (source_id, target_id) in &rel_chains {
+                    // Skip if already visited — multiple source nodes in the same
+                    // frontier level can reference the same target (dedup).
+                    if visited.contains(target_id.as_str()) {
+                        continue;
+                    }
                     if let Some(target_memory) = target_map.get(target_id.as_str()) {
                         visited.insert(target_id.clone());
                         let decayed_score = (results[source_id].1 * 0.8).max(0.1);
