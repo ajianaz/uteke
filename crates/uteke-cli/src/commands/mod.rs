@@ -319,7 +319,13 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
             };
             if cli.json {
                 println!(
-                    r#"{{"id": "{id}", "feedback": "{label}", "delta": "{delta_str}", "importance": {new_importance:.4}}}"#
+                    "{}",
+                    serde_json::json!({
+                        "id": id,
+                        "feedback": label,
+                        "delta": delta_str,
+                        "importance": format!("{:.4}", new_importance),
+                    })
                 );
             } else {
                 println!(

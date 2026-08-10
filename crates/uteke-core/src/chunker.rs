@@ -284,7 +284,18 @@ fn split_long_text(text: &str, max_chars: usize) -> Vec<String> {
 
         let chunk_end = break_at.unwrap_or(end);
         let chunk_end = floor_char_boundary(text, chunk_end);
-        chunks.push(text[start..chunk_end].to_string());
+        // Guard against zero-length chunks that would cause an infinite loop.
+        // If chunk_end didn't advance past start, force at least 1 char forward.
+        let chunk_end = if chunk_end <= start {
+            let next = (start + 1).min(text.len());
+            floor_char_boundary(text, next)
+        } else {
+            chunk_end
+        };
+        let chunk_text = text[start..chunk_end].trim();
+        if !chunk_text.is_empty() {
+            chunks.push(chunk_text.to_string());
+        }
         start = chunk_end;
     }
 
