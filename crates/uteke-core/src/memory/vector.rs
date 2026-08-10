@@ -299,9 +299,12 @@ impl VectorIndex {
         self.key_to_id.insert(key, id.to_string());
         self.id_to_key.insert(id.to_string(), key);
 
-        // Auto-reserve if at capacity
+        // Auto-reserve if at capacity using geometric growth to amortize reallocation cost.
+        // Growth strategy: max(current * 2, current + 4096, 1024).
+        // Doubling amortizes to O(1) per insertion; +4096 floor avoids tiny allocs at small scale.
         if self.index.size() >= self.index.capacity() {
-            let new_cap = (self.index.capacity() + 1024).max(1024);
+            let current = self.index.capacity();
+            let new_cap = (current * 2).max(current + 4096).max(1024);
             self.index.reserve(new_cap).map_err(|e| {
                 Error::embed_msg(format!("Failed to reserve usearch capacity: {e}"))
             })?;
