@@ -30,6 +30,7 @@ mod rooms;
 pub mod salience_recency;
 mod timeline;
 mod types;
+pub mod update_check;
 
 pub use chunker::{
     CodeChunk, TextChunk, chunk_code, chunk_markdown, chunk_markdown_embed_aware, detect_language,
