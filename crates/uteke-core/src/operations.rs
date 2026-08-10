@@ -76,6 +76,8 @@ impl crate::Uteke {
     ///
     /// This is a convenience wrapper that validates JSON before storing.
     /// The `remember()` method also auto-detects JSON content.
+    #[deprecated(note = "unused — candidate for removal in future version")]
+    #[allow(dead_code)]
     pub fn remember_json(
         &self,
         json_content: &str,
@@ -627,6 +629,8 @@ impl crate::Uteke {
     /// 2. [0.85] Increase login timeout to 5s [fix]
     /// 3. [0.70] Users report timeout on slow connections [feedback]
     /// ```
+    #[deprecated(note = "unused — candidate for removal in future version")]
+    #[allow(dead_code)]
     pub fn recall_context(
         &self,
         query: &str,
