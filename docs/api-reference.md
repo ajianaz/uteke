@@ -509,6 +509,8 @@ Detailed field definitions for each request type.
 | `memories` | `integer` | Yes |  |
 | `namespaces` | `integer` | Yes |  |
 | `status` | `string` | Yes |  |
+| `update_available` | any | No | Latest version available on GitHub, if newer than current.
+Populated from cache (24h TTL) — may be `None` if cache is stale. |
 | `version` | `string` | Yes | Server version (uteke-server crate version), so HTTP clients can gate
 features on the actual server capability rather than a local CLI probe. |
 
