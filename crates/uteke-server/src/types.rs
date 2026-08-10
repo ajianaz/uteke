@@ -297,6 +297,10 @@ pub struct HealthResponse {
     /// Latest API version (#737).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_latest: Option<&'static str>,
+    /// Latest version available on GitHub, if newer than current.
+    /// Populated from cache (24h TTL) — may be `None` if cache is stale.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update_available: Option<String>,
 }
 
 #[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]

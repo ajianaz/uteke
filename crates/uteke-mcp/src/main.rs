@@ -44,6 +44,20 @@ fn main() {
         }
     };
 
+    // Background update check — writes to stderr so it doesn't corrupt the
+    // JSON-RPC stdout channel. MCP clients capture stderr for logging.
+    // Cache is 24h so most runs skip network entirely.
+    // Detached thread — main loop blocks on stdin for hours, so join is impractical.
+    std::thread::spawn(|| {
+        let _ = std::panic::catch_unwind(|| {
+            if let Some(info) = uteke_core::update_check::check()
+                .filter(uteke_core::update_check::UpdateInfo::is_update_available)
+            {
+                eprintln!("\n{}\n", info.banner());
+            }
+        });
+    });
+
     // JSON-RPC over stdin/stdout (MCP stdio transport)
     for line in stdin.lock().lines() {
         let line = match line {

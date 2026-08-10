@@ -453,6 +453,31 @@ fn main() {
         info!("Auto-dream: disabled");
     }
 
+    // Update check — startup notification + periodic 24h re-check.
+    // Long-running server process won't see CLI's startup check, so we
+    // run our own. Logs via `warn!` so it's visible in structured logs.
+    std::thread::spawn(move || {
+        loop {
+            // Cache first — avoids hitting GitHub on every server restart
+            // within the 24h cache window.
+            let info = uteke_core::update_check::check_cached()
+                .or_else(|| uteke_core::update_check::check_network().ok());
+            if let Some(info) = info.filter(|i| i.is_update_available()) {
+                warn!(
+                    "Uteke {} is available (currently v{}). Run `uteke upgrade` to update.",
+                    info.latest, info.current
+                );
+            }
+            // Sleep 24h, checking shutdown flag hourly.
+            for _ in 0..24 {
+                std::thread::sleep(std::time::Duration::from_secs(3600));
+                if SHUTDOWN.load(Ordering::SeqCst) {
+                    return;
+                }
+            }
+        }
+    });
+
     // SIGINT handler
     ctrlc::set_handler(|| {
         if SHUTDOWN.load(Ordering::SeqCst) {
