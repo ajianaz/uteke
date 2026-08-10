@@ -248,6 +248,15 @@ impl crate::Uteke {
         let mut removed_ids = Vec::new();
         let mut kept_ids = Vec::new();
         let mut already_removed = std::collections::HashSet::new();
+        let mut index_dirty = false;
+
+        // Acquire the write lock ONCE before the loop to avoid repeated
+        // lock contention. Save once after all removals.
+        let mut index = self
+            .index
+            .write()
+            .map_err(|_| Error::lock("index write lock during consolidate"))?;
+
         for pair in &pairs {
             if already_removed.contains(&pair.id_a) || already_removed.contains(&pair.id_b) {
                 continue;
@@ -286,25 +295,25 @@ impl crate::Uteke {
                     .map_err(|e| Error::db("consolidate delete", e))?;
             }
             // SQLite first (source of truth), then vector index.
-            let mut index = self
-                .index
-                .write()
-                .map_err(|_| Error::lock("index write lock during consolidate"))?;
             if !index.remove(to_remove) {
                 tracing::warn!(
                     "Vector index entry not found during consolidate for id={}",
                     to_remove
                 );
             }
+            index_dirty = true;
+            removed_ids.push(to_remove.clone());
+            kept_ids.push(to_keep.clone());
+            already_removed.insert(to_remove.clone());
+        }
+        // Persist vector index once after all removals.
+        if index_dirty {
             if let Err(e) = index.save() {
                 tracing::warn!(
                     "Failed to persist vector index after consolidate: {e}. \
                      Orphan entries will be cleaned up by verify/repair."
                 );
             }
-            removed_ids.push(to_remove.clone());
-            kept_ids.push(to_keep.clone());
-            already_removed.insert(to_remove.clone());
         }
         // Invalidate recall cache — deleted memories affect search results.
         if !removed_ids.is_empty() {

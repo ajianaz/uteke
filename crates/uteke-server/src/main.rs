@@ -466,12 +466,14 @@ fn main() {
 
     // Request loop — spawn each request in a thread for concurrent handling.
     // Arc<Mutex<Uteke>> allows safe shared access across threads.
-    // Cap concurrent threads to prevent thread explosion under load:
-    // an atomic counter plus spin-yield provides simple backpressure.
+    // Cap concurrent threads via Condvar-based semaphore: park instead of spin.
     let max_threads = std::thread::available_parallelism()
         .map(|n| n.get() * 2)
         .unwrap_or(8);
-    let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let pair = Arc::new((
+        std::sync::Mutex::new(0usize), // active count
+        std::sync::Condvar::new(),
+    ));
 
     for mut req in server.incoming_requests() {
         if SHUTDOWN.load(Ordering::SeqCst) {
@@ -479,12 +481,13 @@ fn main() {
             break;
         }
 
-        // Backpressure: wait until a thread slot is available.
-        while active.load(Ordering::Acquire) >= max_threads {
-            if SHUTDOWN.load(Ordering::SeqCst) {
-                break;
+        // Backpressure: wait until a thread slot is available (parked, not spinning).
+        {
+            let (lock, cvar) = &*pair;
+            let mut active = lock.lock().unwrap();
+            while *active >= max_threads && !SHUTDOWN.load(Ordering::SeqCst) {
+                active = cvar.wait(active).unwrap();
             }
-            std::thread::yield_now();
         }
         if SHUTDOWN.load(Ordering::SeqCst) {
             break;
@@ -496,21 +499,32 @@ fn main() {
 
         let uteke = Arc::clone(&uteke);
         let ctx = ctx.clone();
-        let active = Arc::clone(&active);
-        active.fetch_add(1, Ordering::AcqRel);
+        let pair = Arc::clone(&pair);
+        let pair_err = Arc::clone(&pair);
 
-        let active_clone = Arc::clone(&active);
+        {
+            let (lock, _) = &*pair;
+            *lock.lock().unwrap() += 1;
+        }
+
         let result = std::thread::Builder::new().spawn(move || {
             let response = handlers::route(&uteke, &ctx, &mut req);
             if let Err(e) = req.respond(response) {
                 warn!("Response error: {e}");
             }
-            active.fetch_sub(1, Ordering::AcqRel);
+            // Release slot and notify the waiting accept loop.
+            let (lock, cvar) = &*pair;
+            let mut active = lock.lock().unwrap();
+            *active -= 1;
+            cvar.notify_one();
         });
 
         if let Err(e) = result {
             // Spawn failed — release the slot we reserved.
-            active_clone.fetch_sub(1, Ordering::AcqRel);
+            let (lock, cvar) = &*pair_err;
+            let mut active = lock.lock().unwrap();
+            *active -= 1;
+            cvar.notify_one();
             warn!("Failed to spawn request thread: {e}");
         }
     }

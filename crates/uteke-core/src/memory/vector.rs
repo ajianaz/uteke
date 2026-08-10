@@ -80,12 +80,12 @@ impl VectorIndex {
     /// identical — `save_to_buffer` and `restore_from_buffer` produce/consume
     /// the same byte stream as the native file-based methods.
     pub fn load_or_create(path: &Path, dims: usize) -> Result<Self, Error> {
-        // Ensure the file exists so we can open + lock it.
-        if !path.exists() {
-            // Create a zero-byte placeholder; usearch will overwrite on save.
-            std::fs::write(path, []).map_err(|e| Error::embed("create usearch file", e))?;
-        }
-
+        // Atomically create the file if it doesn't exist (avoids TOCTOU race
+        // where another process creates the file between our exists() and write()).
+        // O_CREAT | O_EXCL ensures only one writer wins; failure is harmless.
+        use std::fs::OpenOptions;
+        let _ = OpenOptions::new().create_new(true).write(true).open(path);
+        // Regardless of who created it, the file now exists — open + lock it.
         let mut lock_file = acquire_file_lock(path)?;
 
         let mut idx = if lock_file
@@ -129,22 +129,26 @@ impl VectorIndex {
         let mut next_key = 0u64;
 
         let mapping_path = path.with_extension("keys");
-        if mapping_path.exists() {
-            let data = std::fs::read_to_string(&mapping_path)
-                .map_err(|e| Error::embed("read key mapping", e))?;
-            for line in data.lines() {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-                if let Some((key_str, id)) = line.split_once('\t') {
-                    if let Ok(key) = key_str.parse::<u64>() {
-                        key_to_id.insert(key, id.to_string());
-                        id_to_key.insert(id.to_string(), key);
-                        next_key = next_key.max(key + 1);
+        match std::fs::read_to_string(&mapping_path) {
+            Ok(data) => {
+                for line in data.lines() {
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    if let Some((key_str, id)) = line.split_once('\t') {
+                        if let Ok(key) = key_str.parse::<u64>() {
+                            key_to_id.insert(key, id.to_string());
+                            id_to_key.insert(id.to_string(), key);
+                            next_key = next_key.max(key.saturating_add(1));
+                        }
                     }
                 }
             }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // No key mapping sidecar — fresh index, start from key 0.
+            }
+            Err(e) => return Err(Error::embed("read key mapping", e)),
         }
 
         Ok(Self {
@@ -323,7 +327,7 @@ impl VectorIndex {
         }
 
         let key = self.next_key;
-        self.next_key += 1;
+        self.next_key = self.next_key.saturating_add(1);
 
         self.key_to_id.insert(key, id.to_string());
         self.id_to_key.insert(id.to_string(), key);
