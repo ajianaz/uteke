@@ -188,7 +188,8 @@ pub(crate) fn get_latest_version() -> Result<String, String> {
 
     if let Some(location) = resp.headers().get("location") {
         let loc = location.to_str().unwrap_or_default();
-        if let Some(tag) = loc.strip_prefix("/codecoradev/uteke/releases/tag/") {
+        let prefix = format!("/{REPO}/releases/tag/");
+        if let Some(tag) = loc.strip_prefix(&prefix) {
             return Ok(tag.trim_end_matches('?').to_string());
         }
         if let Some(tag) = loc.rsplit('/').next() {
