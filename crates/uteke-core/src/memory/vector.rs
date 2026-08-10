@@ -80,12 +80,12 @@ impl VectorIndex {
     /// identical — `save_to_buffer` and `restore_from_buffer` produce/consume
     /// the same byte stream as the native file-based methods.
     pub fn load_or_create(path: &Path, dims: usize) -> Result<Self, Error> {
-        // Ensure the file exists so we can open + lock it.
-        if !path.exists() {
-            // Create a zero-byte placeholder; usearch will overwrite on save.
-            std::fs::write(path, []).map_err(|e| Error::embed("create usearch file", e))?;
-        }
-
+        // Atomically create the file if it doesn't exist (avoids TOCTOU race
+        // where another process creates the file between our exists() and write()).
+        // O_CREAT | O_EXCL ensures only one writer wins; failure is harmless.
+        use std::fs::OpenOptions;
+        let _ = OpenOptions::new().create_new(true).write(true).open(path);
+        // Regardless of who created it, the file now exists — open + lock it.
         let mut lock_file = acquire_file_lock(path)?;
 
         let mut idx = if lock_file
@@ -129,22 +129,26 @@ impl VectorIndex {
         let mut next_key = 0u64;
 
         let mapping_path = path.with_extension("keys");
-        if mapping_path.exists() {
-            let data = std::fs::read_to_string(&mapping_path)
-                .map_err(|e| Error::embed("read key mapping", e))?;
-            for line in data.lines() {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-                if let Some((key_str, id)) = line.split_once('\t') {
-                    if let Ok(key) = key_str.parse::<u64>() {
-                        key_to_id.insert(key, id.to_string());
-                        id_to_key.insert(id.to_string(), key);
-                        next_key = next_key.max(key + 1);
+        match std::fs::read_to_string(&mapping_path) {
+            Ok(data) => {
+                for line in data.lines() {
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    if let Some((key_str, id)) = line.split_once('\t') {
+                        if let Ok(key) = key_str.parse::<u64>() {
+                            key_to_id.insert(key, id.to_string());
+                            id_to_key.insert(id.to_string(), key);
+                            next_key = next_key.max(key.saturating_add(1));
+                        }
                     }
                 }
             }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // No key mapping sidecar — fresh index, start from key 0.
+            }
+            Err(e) => return Err(Error::embed("read key mapping", e)),
         }
 
         Ok(Self {
@@ -201,23 +205,43 @@ impl VectorIndex {
 
             // On Windows, `std::fs::rename` fails with `ERROR_ACCESS_DENIED` if
             // the destination file is locked by `LockFileEx` via fs2 (#926).
-            // Temporarily release the lock, perform the rename, then re-acquire.
+            // Instead of releasing the lock (which creates a race window #982),
+            // retry the rename with exponential backoff — Windows often releases
+            // the lock momentarily between operations.
             #[cfg(windows)]
             {
-                if let Some(ref lock_file) = self._lock_file {
-                    // Best-effort unlock — ignore errors, worst case rename fails below
-                    let _ = fs2::FileExt::unlock(lock_file);
+                let mut delay = std::time::Duration::from_millis(10);
+                let max_delay = std::time::Duration::from_millis(640);
+                loop {
+                    match std::fs::rename(&tmp_path, path) {
+                        Ok(()) => break,
+                        Err(e) if e.raw_os_error() == Some(5) => {
+                            // ERROR_ACCESS_DENIED — retry after backoff
+                            if delay > max_delay {
+                                return Err(Error::embed_msg(format!(
+                                    "rename timeout (ACCESS_DENIED) after retries: {e}"
+                                )));
+                            }
+                            std::thread::sleep(delay);
+                            delay *= 2;
+                        }
+                        Err(e) => {
+                            return Err(Error::embed("rename temp to final usearch index", e));
+                        }
+                    }
                 }
             }
+            #[cfg(not(windows))]
+            {
+                std::fs::rename(&tmp_path, path)
+                    .map_err(|e| Error::embed("rename temp to final usearch index", e))?;
+            }
 
-            std::fs::rename(&tmp_path, path)
-                .map_err(|e| Error::embed("rename temp to final usearch index", e))?;
-
+            // On Windows, reopen the file after rename to refresh the lock
+            // handle — it now points to the new file written via rename.
             #[cfg(windows)]
             {
                 if let Some(ref mut lock_file) = self._lock_file {
-                    // Re-open the file handle (path was just replaced by rename)
-                    // and re-acquire the lock.
                     let new_file = std::fs::OpenOptions::new()
                         .read(true)
                         .write(true)
@@ -267,6 +291,15 @@ impl VectorIndex {
 
         // Pre-reserve capacity for bulk insert
         if !items.is_empty() {
+            // Validate all items have consistent dimensions
+            for (id, emb) in items {
+                if emb.len() != dims {
+                    return Err(Error::validation(format!(
+                        "embedding dimension mismatch in build(): item '{id}' has {} dims, expected {dims}",
+                        emb.len()
+                    )));
+                }
+            }
             if let Err(e) = self.index.reserve(items.len()) {
                 tracing::error!("Failed to reserve usearch capacity: {e}");
             }
@@ -294,14 +327,17 @@ impl VectorIndex {
         }
 
         let key = self.next_key;
-        self.next_key += 1;
+        self.next_key = self.next_key.saturating_add(1);
 
         self.key_to_id.insert(key, id.to_string());
         self.id_to_key.insert(id.to_string(), key);
 
-        // Auto-reserve if at capacity
+        // Auto-reserve if at capacity using geometric growth to amortize reallocation cost.
+        // Growth strategy: max(current * 2, current + 4096, 1024).
+        // Doubling amortizes to O(1) per insertion; +4096 floor avoids tiny allocs at small scale.
         if self.index.size() >= self.index.capacity() {
-            let new_cap = (self.index.capacity() + 1024).max(1024);
+            let current = self.index.capacity();
+            let new_cap = (current * 2).max(current + 4096).max(1024);
             self.index.reserve(new_cap).map_err(|e| {
                 Error::embed_msg(format!("Failed to reserve usearch capacity: {e}"))
             })?;

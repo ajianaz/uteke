@@ -19,6 +19,35 @@ impl super::Store {
         Ok(())
     }
 
+    /// Batch-increment access counters for multiple memories in one transaction.
+    ///
+    /// Eliminates N+1 UPDATEs in recall(), recall_hybrid(), recall_rrf(), and search()
+    /// where each result triggered a separate touch_access() call.
+    pub fn touch_access_batch(&self, ids: &[&str]) -> Result<(), Error> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| Error::db("begin touch_access_batch transaction", e))?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "UPDATE memories SET access_count = access_count + 1, last_accessed = ?1 WHERE id = ?2",
+                )
+                .map_err(|e| Error::db("prepare touch_access_batch", e))?;
+            for id in ids {
+                stmt.execute(params![now, id])
+                    .map_err(|e| Error::db("touch_access_batch execute", e))?;
+            }
+        }
+        tx.commit()
+            .map_err(|e| Error::db("commit touch_access_batch", e))?;
+        Ok(())
+    }
+
     /// Count active (non-deprecated) memories in a namespace.
     pub fn count_active(&self, namespace: Option<&str>) -> Result<usize, Error> {
         let count: i64 = match namespace {
@@ -117,6 +146,7 @@ impl super::Store {
             DELETE FROM memories
             WHERE namespace = ?1
               AND deprecated = 0
+              AND pinned = 0
               AND created_at < ?2
               AND access_count <= ?3
               AND (last_accessed IS NULL OR last_accessed < ?4)

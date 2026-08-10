@@ -56,11 +56,13 @@ pub(crate) fn run(
                 .map_err(|e| format!("Failed to create document: {e}"))?;
 
             if cli.json {
-                let parent_json = parent
-                    .as_ref()
-                    .map(|p| format!(r#", "parent": "{p}""#))
-                    .unwrap_or_default();
-                println!(r#"{{"id": "{id}", "slug": "{slug}"{parent_json}, "status": "created"}}"#);
+                let json = serde_json::json!({
+                    "id": id,
+                    "slug": slug,
+                    "parent": parent,
+                    "status": "created",
+                });
+                println!("{json}");
             } else {
                 println!("✓ Document '{slug}' created (id: {id})");
                 println!("  Title: {doc_title}");
@@ -407,7 +409,11 @@ pub(crate) fn run(
                 .map_err(|e| format!("Failed to delete document: {e}"))?;
             if deleted {
                 if cli.json {
-                    println!(r#"{{"deleted": "{id}", "subtree_size": {subtree_size}}}"#);
+                    let json = serde_json::json!({
+                        "deleted": id,
+                        "subtree_size": subtree_size,
+                    });
+                    println!("{json}");
                 } else {
                     println!("✓ Document deleted: {id}");
                     if subtree_size > 1 {

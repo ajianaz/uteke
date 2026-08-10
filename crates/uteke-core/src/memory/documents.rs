@@ -732,9 +732,12 @@ impl super::Store {
         .map_err(|e| Error::db("update moved document", e))?;
 
         // Update all descendants: replace old prefix with new prefix, adjust depth.
+        // Use substr() to replace ONLY the prefix portion (not all occurrences),
+        // avoiding corruption when old_path appears multiple times in a descendant path.
+        // length(old_path) is the offset where the suffix begins.
         let n = tx
             .execute(
-                "UPDATE documents SET path = REPLACE(path, ?1, ?2), depth = depth + ?3 \
+                "UPDATE documents SET path = ?2 || substr(path, length(?1) + 1), depth = depth + ?3 \
                  WHERE path LIKE ?4 AND id != ?5",
                 params![old_path_exact, new_path, depth_diff, old_prefix, doc_id,],
             )
@@ -817,6 +820,8 @@ impl super::Store {
     }
 
     /// Count all documents (global).
+    #[deprecated(note = "unused — candidate for removal in future version")]
+    #[allow(dead_code)]
     pub fn count_documents(&self) -> Result<usize, Error> {
         let count: i64 = self
             .conn

@@ -91,21 +91,61 @@ impl crate::Uteke {
                 break;
             }
             let mut next_frontier: Vec<String> = Vec::new();
+
+            // Batch-fetch all frontier memories at this level (eliminates N+1 #1).
+            let frontier_ids: Vec<&str> = frontier.iter().map(|s| s.as_str()).collect();
+            let frontier_mems = self.get_by_ids(&frontier_ids)?;
+            let frontier_map: std::collections::HashMap<&str, &Memory> =
+                frontier_mems.iter().map(|m| (m.id.as_str(), m)).collect();
+
+            // Collect all relationship targets across the frontier for batch fetch.
+            let mut targets_to_fetch: Vec<String> = Vec::new();
+            let mut rel_chains: Vec<(String, String)> = Vec::new(); // (source_id, target_id)
             for memory_id in &frontier {
-                let memory = match self.get_by_id(memory_id)? {
-                    Some(m) => m,
+                let memory = match frontier_map.get(memory_id.as_str()) {
+                    Some(m) => *m,
                     None => continue,
                 };
-                let rels = parse_relationships(&memory);
+                let rels = parse_relationships(memory);
                 for rel in rels {
                     if visited.contains(&rel.target) {
                         continue;
                     }
-                    if let Some(target_memory) = self.get_by_id(&rel.target)? {
-                        visited.insert(rel.target.clone());
-                        let decayed_score = (results[memory_id].1 * 0.8).max(0.1);
-                        results.insert(rel.target.clone(), (target_memory.clone(), decayed_score));
-                        next_frontier.push(rel.target.clone());
+                    targets_to_fetch.push(rel.target.clone());
+                    rel_chains.push((memory_id.clone(), rel.target.clone()));
+                }
+            }
+
+            // Batch-fetch all relationship targets (eliminates N+1 #2).
+            if !targets_to_fetch.is_empty() {
+                let target_refs: Vec<&str> = targets_to_fetch.iter().map(|s| s.as_str()).collect();
+                let fetched_targets = self.get_by_ids(&target_refs)?;
+                let target_map: std::collections::HashMap<&str, &Memory> =
+                    fetched_targets.iter().map(|m| (m.id.as_str(), m)).collect();
+
+                for (source_id, target_id) in &rel_chains {
+                    // Skip if already visited in a previous BFS level.
+                    if visited.contains(target_id.as_str()) {
+                        continue;
+                    }
+                    if let Some(target_memory) = target_map.get(target_id.as_str()) {
+                        // Compute the best decayed score across all source nodes
+                        // in this frontier level that reference the same target.
+                        let decayed_score = (results[source_id].1 * 0.8).max(0.1);
+                        let is_new = !results.contains_key(target_id.as_str());
+                        let is_better = results
+                            .get(target_id.as_str())
+                            .is_some_and(|(_, existing)| decayed_score > *existing);
+                        if is_new || is_better {
+                            results.insert(
+                                target_id.clone(),
+                                ((*target_memory).clone(), decayed_score),
+                            );
+                        }
+                        if is_new {
+                            visited.insert(target_id.clone());
+                            next_frontier.push(target_id.clone());
+                        }
                     }
                 }
             }

@@ -580,7 +580,30 @@ impl super::Store {
     }
 
     /// Check if a column exists in a specific table.
+    ///
+    /// `table` must be a known internal table name (never user input).
+    /// We validate against an allowlist to prevent SQL injection even
+    /// though all current callers use hardcoded literals.
     pub(super) fn column_exists_in(&self, table: &str, column: &str) -> bool {
+        const ALLOWED_TABLES: &[&str] = &[
+            "memories",
+            "memory_tags",
+            "memory_metadata",
+            "memory_embeddings",
+            "memory_importance",
+            "documents",
+            "rooms",
+            "room_members",
+            "room_documents",
+            "graph_nodes",
+            "graph_edges",
+            "memory_feedback",
+            "memory_doc_refs",
+            "doc_mem_refs",
+        ];
+        if !ALLOWED_TABLES.contains(&table) {
+            return false;
+        }
         self.conn
             .prepare(&format!("SELECT * FROM {table} LIMIT 0"))
             .map(|stmt| stmt.column_names().iter().any(|n| n == &column))

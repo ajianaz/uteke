@@ -77,6 +77,19 @@ pub const MAX_TAG_LENGTH: usize = 50;
 /// Maximum payload size for server API (bytes).
 pub const MAX_PAYLOAD_SIZE: usize = 10_485_760; // 10MB
 
+/// Truncate a string to `max_bytes` without splitting a multi-byte UTF-8 character.
+/// Returns a slice ending at a char boundary ≤ `max_bytes`.
+pub fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Validate input parameters before processing.
 /// Uses default limits. For configurable limits, use `validate_input_with_limits`.
 pub fn validate_input(content: &str, tags: &[impl AsRef<str>]) -> Result<(), Error> {
@@ -322,6 +335,8 @@ impl LifecycleConfig {
     ///
     /// Returns a value in `[min_deprecate_per_cycle, max_deprecate_per_cycle]`,
     /// clamped after percentage calculation.
+    #[deprecated(note = "unused — candidate for removal in future version")]
+    #[allow(dead_code)]
     pub fn cycle_deprecate_cap(&self, total_memories: usize) -> usize {
         let pct_based = (total_memories as f64 * self.max_deprecate_percent / 100.0) as usize;
         pct_based
@@ -1143,18 +1158,44 @@ impl Uteke {
         let stats = gs.stats()?;
 
         // Filter by namespace if specified.
+        // Memory-linked nodes are filtered by their parent memory's namespace.
+        // Entity nodes (no memory_id) are always included (shared across namespaces).
         let (nodes, edges) = if let Some(ns) = namespace {
-            let ns_string = ns.to_string();
+            // Build a set of memory IDs that belong to this namespace.
+            let ns_memory_ids: std::collections::HashSet<String> = self
+                .store
+                .conn
+                .prepare("SELECT id FROM memories WHERE namespace = ?1 AND deprecated = 0")
+                .map_err(|e| Error::db("Failed to prepare namespace query", e))?
+                .query_map(rusqlite::params![ns], |row| row.get::<_, String>(0))
+                .map_err(|e| Error::db("Failed to query namespace memories", e))?
+                .filter_map(|r| r.ok())
+                .collect();
+
             let filtered_nodes: Vec<GraphNode> = nodes
                 .into_iter()
                 .filter(|n| {
-                    // Memory-linked nodes: check memory namespace.
-                    // Entity nodes: always include (shared across namespaces).
-                    n.memory_id.as_deref().is_none_or(|_| true)
+                    // Entity nodes: always include.
+                    // Memory-linked nodes: include only if memory is in this namespace.
+                    match &n.memory_id {
+                        None => true,
+                        Some(mid) => ns_memory_ids.contains(mid),
+                    }
                 })
                 .collect();
-            let _ = ns_string; // namespace filter applied at memory level
-            (filtered_nodes, edges)
+
+            // Filter edges to only those connecting nodes that remain.
+            let node_ids: std::collections::HashSet<&str> =
+                filtered_nodes.iter().map(|n| n.id.as_str()).collect();
+            let filtered_edges: Vec<GraphEdge> = edges
+                .into_iter()
+                .filter(|e| {
+                    node_ids.contains(e.source_id.as_str())
+                        && node_ids.contains(e.target_id.as_str())
+                })
+                .collect();
+
+            (filtered_nodes, filtered_edges)
         } else {
             (nodes, edges)
         };
@@ -1204,7 +1245,7 @@ impl Uteke {
             lines.push("Recent memories:".to_string());
             for m in &recent {
                 let preview = if m.content.len() > 80 {
-                    format!("{}...", &m.content[..77])
+                    format!("{}...", crate::safe_truncate(&m.content, 77))
                 } else {
                     m.content.clone()
                 };
@@ -1716,9 +1757,9 @@ impl Uteke {
                     document,
                     chunk_heading,
                     chunk_snippet: if chunk_snippet.len() > 200 {
-                        format!("{}...", &chunk_snippet[..200])
+                        format!("{}...", crate::safe_truncate(chunk_snippet.as_str(), 200))
                     } else {
-                        chunk_snippet
+                        chunk_snippet.clone()
                     },
                     score,
                     mode: "semantic".to_string(),

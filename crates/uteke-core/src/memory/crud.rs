@@ -68,6 +68,38 @@ impl super::Store {
         let metadata_json = serde_json::to_string(&memory.metadata)
             .map_err(|e| Error::db("database operation", e))?;
 
+        // Wrap INSERT + tag inserts in a transaction for atomicity.
+        // If any tag insert fails, the entire operation rolls back.
+        // Using unchecked_transaction (same pattern as tags.rs/documents.rs) for
+        // consistency — safe because Store access is serialized via Mutex<Uteke>.
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| Error::db("Failed to begin transaction", e))?;
+
+        let result = self.try_insert_memory(memory, &embedding_blob, &tags_json, &metadata_json);
+        match result {
+            Ok(()) => {
+                tx.commit()
+                    .map_err(|e| Error::db("Failed to commit transaction", e))?;
+                Ok(())
+            }
+            Err(e) => {
+                // Drop tx triggers automatic rollback.
+                Err(e)
+            }
+        }
+    }
+
+    /// Internal helper: performs the actual INSERT + tag inserts.
+    /// Called within a transaction by `insert()`.
+    fn try_insert_memory(
+        &self,
+        memory: &Memory,
+        embedding_blob: &[u8],
+        tags_json: &str,
+        metadata_json: &str,
+    ) -> Result<(), Error> {
         self.conn
             .execute(
                 "INSERT INTO memories (id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type)
@@ -136,6 +168,40 @@ impl super::Store {
             .map_err(|e| Error::db("Failed to get memory by ID", e))?;
 
         Ok(result)
+    }
+
+    /// Batch-fetch multiple memories by ID in a single query.
+    ///
+    /// Eliminates N+1 queries in recall(), room_recall(), and graph BFS
+    /// where many IDs are looked up one-by-one.
+    /// Returns memories in arbitrary order; callers should build a HashMap.
+    pub fn get_by_ids(&self, ids: &[&str]) -> Result<Vec<Memory>, Error> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut memories = Vec::new();
+        // SQLite has a default limit of 999 host parameters (SQLITE_MAX_VARIABLE_NUMBER).
+        // Chunk to stay safely under the limit.
+        const CHUNK_SIZE: usize = 900;
+        for chunk in ids.chunks(CHUNK_SIZE) {
+            let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug FROM memories WHERE id IN ({placeholders})"
+            );
+            let mut stmt = self
+                .conn
+                .prepare(&sql)
+                .map_err(|e| Error::db("Failed to prepare statement for get_by_ids", e))?;
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+                    row_to_memory(row)
+                })
+                .map_err(|e| Error::db("Failed to query memories by IDs", e))?;
+            for row in rows {
+                memories.push(row.map_err(|e| Error::db("Failed to deserialize memory row", e))?);
+            }
+        }
+        Ok(memories)
     }
 
     /// Resolve a short ID (prefix) to a full memory ID.
@@ -215,38 +281,42 @@ impl super::Store {
         let metadata_json = serde_json::to_string(&memory.metadata)
             .map_err(|e| Error::db("database operation", e))?;
 
-        self.conn
-            .execute(
-                "UPDATE memories SET content = ?2, embedding = ?3, tags = ?4, metadata = ?5, updated_at = ?6, namespace = ?7
-                 WHERE id = ?1",
-                params![
-                    memory.id,
-                    memory.content,
-                    embedding_blob,
-                    tags_json,
-                    metadata_json,
-                    memory.updated_at.to_rfc3339(),
-                    memory.namespace,
-                ],
-            )
-            .map_err(|e| Error::db("database operation", e))?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| Error::db("begin transaction", e))?;
+
+        tx.execute(
+            "UPDATE memories SET content = ?2, embedding = ?3, tags = ?4, metadata = ?5, updated_at = ?6, namespace = ?7
+             WHERE id = ?1",
+            params![
+                memory.id,
+                memory.content,
+                embedding_blob,
+                tags_json,
+                metadata_json,
+                memory.updated_at.to_rfc3339(),
+                memory.namespace,
+            ],
+        )
+        .map_err(|e| Error::db("database operation", e))?;
 
         // Dual-write: sync junction table tags
-        self.conn
-            .execute(
-                "DELETE FROM memory_tags WHERE memory_id = ?1",
-                params![memory.id],
-            )
-            .map_err(|e| Error::db("delete old tags", e))?;
+        tx.execute(
+            "DELETE FROM memory_tags WHERE memory_id = ?1",
+            params![memory.id],
+        )
+        .map_err(|e| Error::db("delete old tags", e))?;
         for tag in &memory.tags {
-            self.conn
-                .execute(
-                    "INSERT OR IGNORE INTO memory_tags (memory_id, tag) VALUES (?1, ?2)",
-                    params![memory.id, tag],
-                )
-                .map_err(|e| Error::db("insert tag", e))?;
+            tx.execute(
+                "INSERT OR IGNORE INTO memory_tags (memory_id, tag) VALUES (?1, ?2)",
+                params![memory.id, tag],
+            )
+            .map_err(|e| Error::db("insert tag", e))?;
         }
 
+        tx.commit()
+            .map_err(|e| Error::db("commit transaction", e))?;
         Ok(())
     }
 
@@ -330,30 +400,34 @@ impl super::Store {
         );
         params_vec.push(Box::new(id.to_string()));
 
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| Error::db("begin transaction", e))?;
+
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params_vec.iter().map(|b| b.as_ref()).collect();
-        let rows = self
-            .conn
+        let rows = tx
             .execute(&sql, param_refs.as_slice())
             .map_err(|e| Error::db("update memory fields", e))?;
 
         // Dual-write: sync junction table tags if tags were provided
         if tags.is_some() {
-            self.conn
-                .execute("DELETE FROM memory_tags WHERE memory_id = ?1", params![id])
+            tx.execute("DELETE FROM memory_tags WHERE memory_id = ?1", params![id])
                 .map_err(|e| Error::db("delete old tags", e))?;
             if let Some(t) = tags {
                 for tag in t {
-                    self.conn
-                        .execute(
-                            "INSERT OR IGNORE INTO memory_tags (memory_id, tag) VALUES (?1, ?2)",
-                            params![id, tag],
-                        )
-                        .map_err(|e| Error::db("insert tag", e))?;
+                    tx.execute(
+                        "INSERT OR IGNORE INTO memory_tags (memory_id, tag) VALUES (?1, ?2)",
+                        params![id, tag],
+                    )
+                    .map_err(|e| Error::db("insert tag", e))?;
                 }
             }
         }
 
+        tx.commit()
+            .map_err(|e| Error::db("commit transaction", e))?;
         Ok(rows > 0)
     }
 

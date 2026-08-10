@@ -275,7 +275,7 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
             let pinned = uteke.pin(id).map_err(|e| format!("Failed to pin: {e}"))?;
             if pinned {
                 if cli.json {
-                    println!("{{\"pinned\": \"{id}\"}}");
+                    println!("{}", serde_json::json!({"pinned": id}));
                 } else {
                     println!("Pinned memory {}.", &id[..8.min(id.len())]);
                 }
@@ -291,7 +291,7 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
                 .map_err(|e| format!("Failed to unpin: {e}"))?;
             if unpinned {
                 if cli.json {
-                    println!("{{\"unpinned\": \"{id}\"}}");
+                    println!("{}", serde_json::json!({"unpinned": id}));
                 } else {
                     println!("Unpinned memory {}.", &id[..8.min(id.len())]);
                 }
@@ -319,7 +319,13 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
             };
             if cli.json {
                 println!(
-                    r#"{{"id": "{id}", "feedback": "{label}", "delta": "{delta_str}", "importance": {new_importance:.4}}}"#
+                    "{}",
+                    serde_json::json!({
+                        "id": id,
+                        "feedback": label,
+                        "delta": delta_str,
+                        "importance": format!("{:.4}", new_importance),
+                    })
                 );
             } else {
                 println!(
@@ -338,7 +344,7 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
                 .recompute_importance()
                 .map_err(|e| format!("Failed to recompute: {e}"))?;
             if cli.json {
-                println!("{{\"updated\": {updated}}}");
+                println!("{}", serde_json::json!({"updated": updated}));
             } else {
                 println!("Recalculated importance for {updated} memories.");
             }

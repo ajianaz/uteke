@@ -76,6 +76,8 @@ impl crate::Uteke {
     ///
     /// This is a convenience wrapper that validates JSON before storing.
     /// The `remember()` method also auto-detects JSON content.
+    #[deprecated(note = "unused — candidate for removal in future version")]
+    #[allow(dead_code)]
     pub fn remember_json(
         &self,
         json_content: &str,
@@ -414,12 +416,19 @@ impl crate::Uteke {
             let candidates = index.search(&query_embedding, k, ef);
 
             results.clear();
+
+            // Batch-fetch all candidate memories in one query (eliminates N+1).
+            let candidate_ids: Vec<&str> = candidates.iter().map(|(id, _)| id.as_str()).collect();
+            let fetched = self.store.get_by_ids(&candidate_ids)?;
+            let mem_map: std::collections::HashMap<&str, &crate::memory::types::Memory> =
+                fetched.iter().map(|m| (m.id.as_str(), m)).collect();
+
             for (memory_id, distance) in &candidates {
                 if results.len() >= limit {
                     break;
                 }
 
-                let memory = match self.store.get_by_id(memory_id)? {
+                let memory = match mem_map.get(memory_id.as_str()) {
                     Some(m) => m,
                     None => continue,
                 };
@@ -484,7 +493,7 @@ impl crate::Uteke {
                 };
 
                 results.push(SearchResult {
-                    memory,
+                    memory: (*memory).clone(),
                     score: boosted_score,
                 });
             }
@@ -512,9 +521,8 @@ impl crate::Uteke {
         }
 
         // Touch access for returned results
-        for r in &results {
-            self.store.touch_access(&r.memory.id).ok();
-        }
+        let touch_ids: Vec<&str> = results.iter().map(|r| r.memory.id.as_str()).collect();
+        self.store.touch_access_batch(&touch_ids).ok();
 
         Ok(results)
     }
@@ -627,6 +635,8 @@ impl crate::Uteke {
     /// 2. [0.85] Increase login timeout to 5s [fix]
     /// 3. [0.70] Users report timeout on slow connections [feedback]
     /// ```
+    #[deprecated(note = "unused — candidate for removal in future version")]
+    #[allow(dead_code)]
     pub fn recall_context(
         &self,
         query: &str,
@@ -752,9 +762,8 @@ impl crate::Uteke {
         }
 
         // Touch access for returned results
-        for r in &results {
-            self.store.touch_access(&r.memory.id).ok();
-        }
+        let touch_ids: Vec<&str> = results.iter().map(|r| r.memory.id.as_str()).collect();
+        self.store.touch_access_batch(&touch_ids).ok();
 
         Ok(results)
     }
@@ -884,9 +893,8 @@ impl crate::Uteke {
         }
 
         // Touch access for returned results
-        for r in &results {
-            self.store.touch_access(&r.memory.id).ok();
-        }
+        let touch_ids: Vec<&str> = results.iter().map(|r| r.memory.id.as_str()).collect();
+        self.store.touch_access_batch(&touch_ids).ok();
 
         Ok(results)
     }
@@ -919,9 +927,8 @@ impl crate::Uteke {
             .collect();
 
         // Touch access for returned results
-        for r in &results {
-            self.store.touch_access(&r.memory.id).ok();
-        }
+        let touch_ids: Vec<&str> = results.iter().map(|r| r.memory.id.as_str()).collect();
+        self.store.touch_access_batch(&touch_ids).ok();
 
         Ok(results)
     }
@@ -1014,6 +1021,10 @@ impl crate::Uteke {
             tracing::debug!(
                 "Vector index entry not found during soft_forget for id={id} (ok if never embedded)"
             );
+        }
+        // Persist vector index to disk so the removal survives restart.
+        if let Err(e) = index.save() {
+            tracing::warn!("Failed to persist vector index after soft_forget: {e}");
         }
         // Invalidate recall cache for this memory's namespace.
         if let Some(memory) = self.store.get_by_id(id).ok().flatten() {
@@ -1279,6 +1290,11 @@ impl crate::Uteke {
     /// Get a memory by ID (without touching access count — used for internal lookups).
     pub fn get_by_id(&self, id: &str) -> Result<Option<Memory>, Error> {
         self.store.get_by_id(id)
+    }
+
+    /// Batch-fetch multiple memories by ID (eliminates N+1 in graph traversal).
+    pub fn get_by_ids(&self, ids: &[&str]) -> Result<Vec<Memory>, Error> {
+        self.store.get_by_ids(ids)
     }
 
     /// Resolve a short ID prefix (first 8 chars) to a full memory ID (#794).

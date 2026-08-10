@@ -1,3 +1,48 @@
+## [0.13.1] — 2026-08-10
+
+Patch release focused on security hardening, data integrity, and query performance. No breaking changes. 13 commits across 32 files.
+
+### Fixed
+
+#### Security
+- **Command injection via execSync in Hermes plugin (#973, #969)** — URL parameter was passed unsanitized to a shell command. Now goes through proper argument escaping.
+- **install.ps1 checksum mismatch does not stop installation (#980)** — Corrupted or tampered binaries were installed silently. The installer now aborts on checksum failure.
+
+#### Data Integrity
+- **aging_cleanup missing pinned filter → data loss (#974)** — Pinned memories could be hard-deleted during aging. Added `WHERE pinned = 0` guard.
+- **FTS5 search reads rank from wrong column index (#975)** — `rank` was read from the column position of `importance`, producing wrong relevance ordering.
+- **Pinned memory importance always 0.0 in recompute formula (#976)** — The salience multiplier for pinned memories was zeroed out. Recompute now applies the correct weight.
+- **update() and update_fields() lack transaction for memory + tags dual-write (#977)** — A crash between the memory write and the tag write left inconsistent state. Both are now in a single transaction.
+
+#### Crash Prevention
+- **UTF-8 panic: string slicing at fixed byte offsets in 8+ locations (#978, #969)** — `&str[..N]` panicked on multi-byte characters. Replaced with `safe_truncate()` which checks `is_char_boundary()`. Zero unsafe blocks remain in the codebase.
+- **VectorIndex::build() infers dimensions from first item without validation (#979)** — A single malformed vector silently corrupted the index. Now validates dimension count against the configured value.
+- **Chunker infinite loop on truncated UTF-8 at boundary (#969)** — Chunk boundaries landing inside a multi-byte character caused the loop to never advance.
+- **CLI JSON construction via format! in 6 locations (#981, #984)** — Manual string concatenation risked injection and encoding errors. Replaced with `serde_json::to_string()`.
+- **Windows vector.rs cross-process race condition (#982, #984)** — `exists()` + `write()` had a TOCTOU window. Now uses `OpenOptions::new().create(true).write(true).truncate(false)`.
+- **Vector dimension growth overflow on large stores (#970)** — Dimension arithmetic could overflow `usize` on very large indices. Switched to `saturating_add`.
+
+#### Concurrency & Stability
+- **consolidate.rs holds write lock for entire loop (#986)** — `index.write()` was inside the loop body. Hoisted outside; `index.save()` runs once after.
+- **Server backpressure via busy-spin AtomicUsize (#986)** — Replaced spin-loop thread limiter with a Condvar-based semaphore for proper wakeup/sleep semantics.
+- **Vector persist path corruption on Windows (#985)** — Path join produced invalid separators on some Windows locales.
+
+### Changed
+- **Route matching now case-sensitive (#970)** — Previously `/Rooms/x` and `/rooms/x` were treated as the same route, leaking data across namespaces.
+- **Namespace filter bypass in recall (#970)** — Recall could return memories from other namespaces when the filter was set to `None`. Now defaults to the current namespace.
+- **Thread cap for batch operations (#985)** — Edge insertion and re-embed loops now cap concurrent operations to avoid exhausting the connection pool.
+
+### Performance
+- **N+1 query elimination across recall, graph BFS, rooms, and edge insertion (#987)** — Three new batch methods: `get_by_ids()` (chunked in batches of 900 to stay under SQLite's 999 host parameter limit), `touch_access_batch()`, and prepared-statement reuse in `add_memory_edges_batch()`. Recall now does 1 query instead of N, hybrid search does 1 query per pass instead of N, graph BFS batches per level, and edge insertion prepares once per transaction.
+- **Dead code cleanup (#971)** — Four unused `pub fn` marked `#[deprecated]`.
+
+### Infrastructure
+- **CLA check workflow (#966, #967)** — Automated CLA verification on PRs, with skip for already-signed contributors.
+- **README image cleanup (#965, #968)** — Removed dead PNG and HTML assets unreferenced after the docs restructure.
+
+### Contributors
+- [@ajianaz](https://github.com/ajianaz) — all fixes, performance work, and infrastructure
+
 ## [0.13.0] — 2026-08-08
 
 Major release: safe memory lifecycle, offline extraction, persistent embedding cache, repair tooling, and 20+ bug fixes across recall, import, and HTTP API.
