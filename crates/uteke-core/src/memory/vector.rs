@@ -267,6 +267,15 @@ impl VectorIndex {
 
         // Pre-reserve capacity for bulk insert
         if !items.is_empty() {
+            // Validate all items have consistent dimensions
+            for (id, emb) in items {
+                if emb.len() != dims {
+                    return Err(Error::validation(format!(
+                        "embedding dimension mismatch in build(): item '{id}' has {} dims, expected {dims}",
+                        emb.len()
+                    )));
+                }
+            }
             if let Err(e) = self.index.reserve(items.len()) {
                 tracing::error!("Failed to reserve usearch capacity: {e}");
             }

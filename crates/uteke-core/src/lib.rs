@@ -77,6 +77,19 @@ pub const MAX_TAG_LENGTH: usize = 50;
 /// Maximum payload size for server API (bytes).
 pub const MAX_PAYLOAD_SIZE: usize = 10_485_760; // 10MB
 
+/// Truncate a string to `max_bytes` without splitting a multi-byte UTF-8 character.
+/// Returns a slice ending at a char boundary ≤ `max_bytes`.
+pub fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Validate input parameters before processing.
 /// Uses default limits. For configurable limits, use `validate_input_with_limits`.
 pub fn validate_input(content: &str, tags: &[impl AsRef<str>]) -> Result<(), Error> {
@@ -1232,7 +1245,7 @@ impl Uteke {
             lines.push("Recent memories:".to_string());
             for m in &recent {
                 let preview = if m.content.len() > 80 {
-                    format!("{}...", &m.content[..77])
+                    format!("{}...", crate::safe_truncate(&m.content, 77))
                 } else {
                     m.content.clone()
                 };
@@ -1744,9 +1757,9 @@ impl Uteke {
                     document,
                     chunk_heading,
                     chunk_snippet: if chunk_snippet.len() > 200 {
-                        format!("{}...", &chunk_snippet[..200])
+                        format!("{}...", crate::safe_truncate(chunk_snippet.as_str(), 200))
                     } else {
-                        chunk_snippet
+                        chunk_snippet.clone()
                     },
                     score,
                     mode: "semantic".to_string(),

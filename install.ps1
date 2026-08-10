@@ -114,6 +114,7 @@ function Install-Uteke {
             $actualHash = (Get-FileHash -Algorithm SHA256 $archivePath).Hash.ToLower()
             if ($actualHash -ne $expectedHash.ToLower()) {
                 Write-ErrorMsg "Checksum mismatch! Expected: $expectedHash, Got: $actualHash"
+                exit 1
             }
             Write-Info "Checksum verified: $expectedHash"
         } else {
