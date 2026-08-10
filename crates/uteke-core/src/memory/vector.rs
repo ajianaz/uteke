@@ -201,23 +201,43 @@ impl VectorIndex {
 
             // On Windows, `std::fs::rename` fails with `ERROR_ACCESS_DENIED` if
             // the destination file is locked by `LockFileEx` via fs2 (#926).
-            // Temporarily release the lock, perform the rename, then re-acquire.
+            // Instead of releasing the lock (which creates a race window #982),
+            // retry the rename with exponential backoff — Windows often releases
+            // the lock momentarily between operations.
             #[cfg(windows)]
             {
-                if let Some(ref lock_file) = self._lock_file {
-                    // Best-effort unlock — ignore errors, worst case rename fails below
-                    let _ = fs2::FileExt::unlock(lock_file);
+                let mut delay = std::time::Duration::from_millis(10);
+                let max_delay = std::time::Duration::from_millis(640);
+                loop {
+                    match std::fs::rename(&tmp_path, path) {
+                        Ok(()) => break,
+                        Err(e) if e.raw_os_error() == Some(5) => {
+                            // ERROR_ACCESS_DENIED — retry after backoff
+                            if delay > max_delay {
+                                return Err(Error::embed_msg(format!(
+                                    "rename timeout (ACCESS_DENIED) after retries: {e}"
+                                )));
+                            }
+                            std::thread::sleep(delay);
+                            delay *= 2;
+                        }
+                        Err(e) => {
+                            return Err(Error::embed("rename temp to final usearch index", e));
+                        }
+                    }
                 }
             }
+            #[cfg(not(windows))]
+            {
+                std::fs::rename(&tmp_path, path)
+                    .map_err(|e| Error::embed("rename temp to final usearch index", e))?;
+            }
 
-            std::fs::rename(&tmp_path, path)
-                .map_err(|e| Error::embed("rename temp to final usearch index", e))?;
-
+            // On Windows, reopen the file after rename to refresh the lock
+            // handle — it now points to the new file written via rename.
             #[cfg(windows)]
             {
                 if let Some(ref mut lock_file) = self._lock_file {
-                    // Re-open the file handle (path was just replaced by rename)
-                    // and re-acquire the lock.
                     let new_file = std::fs::OpenOptions::new()
                         .read(true)
                         .write(true)
