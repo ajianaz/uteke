@@ -458,14 +458,15 @@ fn main() {
     // run our own. Logs via `warn!` so it's visible in structured logs.
     std::thread::spawn(move || {
         loop {
-            // Check on first iteration, then every 24h.
-            if let Ok(info) = uteke_core::update_check::check_network() {
-                if info.is_update_available() {
-                    warn!(
-                        "Uteke {} is available (currently v{}). Run `uteke upgrade` to update.",
-                        info.latest, info.current
-                    );
-                }
+            // Cache first — avoids hitting GitHub on every server restart
+            // within the 24h cache window.
+            let info = uteke_core::update_check::check_cached()
+                .or_else(|| uteke_core::update_check::check_network().ok());
+            if let Some(info) = info.filter(|i| i.is_update_available()) {
+                warn!(
+                    "Uteke {} is available (currently v{}). Run `uteke upgrade` to update.",
+                    info.latest, info.current
+                );
             }
             // Sleep 24h, checking shutdown flag hourly.
             for _ in 0..24 {
