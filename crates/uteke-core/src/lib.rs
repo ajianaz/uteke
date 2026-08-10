@@ -1143,18 +1143,44 @@ impl Uteke {
         let stats = gs.stats()?;
 
         // Filter by namespace if specified.
+        // Memory-linked nodes are filtered by their parent memory's namespace.
+        // Entity nodes (no memory_id) are always included (shared across namespaces).
         let (nodes, edges) = if let Some(ns) = namespace {
-            let ns_string = ns.to_string();
+            // Build a set of memory IDs that belong to this namespace.
+            let ns_memory_ids: std::collections::HashSet<String> = self
+                .store
+                .conn
+                .prepare("SELECT id FROM memories WHERE namespace = ?1 AND deprecated = 0")
+                .map_err(|e| Error::db("Failed to prepare namespace query", e))?
+                .query_map(rusqlite::params![ns], |row| row.get::<_, String>(0))
+                .map_err(|e| Error::db("Failed to query namespace memories", e))?
+                .filter_map(|r| r.ok())
+                .collect();
+
             let filtered_nodes: Vec<GraphNode> = nodes
                 .into_iter()
                 .filter(|n| {
-                    // Memory-linked nodes: check memory namespace.
-                    // Entity nodes: always include (shared across namespaces).
-                    n.memory_id.as_deref().is_none_or(|_| true)
+                    // Entity nodes: always include.
+                    // Memory-linked nodes: include only if memory is in this namespace.
+                    match &n.memory_id {
+                        None => true,
+                        Some(mid) => ns_memory_ids.contains(mid),
+                    }
                 })
                 .collect();
-            let _ = ns_string; // namespace filter applied at memory level
-            (filtered_nodes, edges)
+
+            // Filter edges to only those connecting nodes that remain.
+            let node_ids: std::collections::HashSet<&str> =
+                filtered_nodes.iter().map(|n| n.id.as_str()).collect();
+            let filtered_edges: Vec<GraphEdge> = edges
+                .into_iter()
+                .filter(|e| {
+                    node_ids.contains(e.source_id.as_str())
+                        && node_ids.contains(e.target_id.as_str())
+                })
+                .collect();
+
+            (filtered_nodes, filtered_edges)
         } else {
             (nodes, edges)
         };

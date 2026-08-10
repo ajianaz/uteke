@@ -30,6 +30,10 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         None => (None, raw_path.clone()),
     };
 
+    // Route matching uses path-only (without query string).
+    // Handler functions still receive the full `path` with query params intact.
+    let route_path = path.split('?').next().unwrap_or(&path);
+
     // CORS preflight — no auth required
     if method == Method::Options {
         return Response::new(
@@ -42,7 +46,7 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
     }
 
     // Health endpoint — no auth required (useful for load balancers)
-    let is_health = matches!((&method, path.as_str()), (Method::Get, "/health"));
+    let is_health = matches!((&method, route_path), (Method::Get, "/health"));
 
     // Authenticate all non-health requests
     let auth_role = if !is_health {
@@ -98,7 +102,7 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         }
     };
 
-    match (method, path.as_str()) {
+    match (method, route_path) {
         // ── Health ──────────────────────────────────────────────────────
         (Method::Get, "/health") => {
             let total = uteke.count(None).unwrap_or(0);
@@ -500,8 +504,8 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         },
 
         // ── Forget by ID or tag (DELETE /forget?id=xxx or ?tag=xxx) ────
-        (Method::Delete, p) if p == "/forget" || p.starts_with("/forget?") => {
-            let query = p.split('?').nth(1).unwrap_or("");
+        (Method::Delete, "/forget") => {
+            let query = path.split('?').nth(1).unwrap_or("");
             let params: std::collections::HashMap<String, String> = query
                 .split('&')
                 .filter_map(|pair| {
@@ -598,7 +602,7 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         }
 
         // ── Lifecycle (#936): status, cycle, promote ──────────────────
-        (Method::Get, p) if p == "/lifecycle/status" || p.starts_with("/lifecycle/status?") => {
+        (Method::Get, "/lifecycle/status") => {
             let query = req.url().split('?').nth(1).unwrap_or("");
             let params: std::collections::HashMap<String, String> = query
                 .split('&')
@@ -678,7 +682,7 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         }
 
         // ── Namespaces ──────────────────────────────────────────────────
-        (Method::Get, p) if p == "/namespaces" || p.starts_with("/namespaces?") => {
+        (Method::Get, "/namespaces") => {
             let with_counts = path.contains("with_counts=true");
             if with_counts {
                 match uteke.list_namespaces_with_counts() {
@@ -711,7 +715,7 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         }
 
         // ── Recent (#528) ──────────────────────────────────────────────
-        (Method::Get, p) if p == "/recent" || p.starts_with("/recent?") => {
+        (Method::Get, "/recent") => {
             let ns = parse_query_namespace(&path);
             let query = path.split('?').nth(1).unwrap_or("");
             let limit = parse_query_param(query, "limit")
@@ -730,7 +734,7 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         }
 
         // ── Graph Visualization (#408) ───────────────────────────────────
-        (Method::Get, p) if p == "/graph" || p.starts_with("/graph?") => {
+        (Method::Get, "/graph") => {
             let ns = parse_query_namespace(&path);
             match uteke.graph_data(ns.as_deref()) {
                 Ok(data) => ctx.ok_response_for(req, &data),
@@ -800,8 +804,8 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         },
 
         // ── Graph Mutation: Remove Edge (#542) ────────────────────────────
-        (Method::Delete, p) if p == "/graph/edge" || p.starts_with("/graph/edge?") => {
-            let query = p.split('?').nth(1).unwrap_or("");
+        (Method::Delete, "/graph/edge") => {
+            let query = path.split('?').nth(1).unwrap_or("");
             let source = parse_query_param(query, "source");
             let target = parse_query_param(query, "target");
 
@@ -903,13 +907,14 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         }
 
         // ── Get memory by ID ──────────────────────────────────────────
-        (Method::Get, p) if p.starts_with("/memory?id=") => {
-            let id = p.trim_start_matches("/memory?id=");
+        (Method::Get, "/memory") => {
+            let query = path.split('?').nth(1).unwrap_or("");
+            let id = parse_query_param(query, "id").unwrap_or_default();
             // Validate UUID format
-            if uuid::Uuid::parse_str(id).is_err() {
+            if uuid::Uuid::parse_str(&id).is_err() {
                 return ctx.error_response_for(req, 400, format!("Invalid UUID format: {id}"));
             }
-            match uteke.get_by_id(id) {
+            match uteke.get_by_id(&id) {
                 Ok(Some(memory)) => ctx.ok_response_for(req, &memory),
                 Ok(None) => ctx.error_response_for(req, 404, format!("Memory not found: {id}")),
                 Err(e) => {
@@ -1112,8 +1117,8 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         },
 
         // ── Room Memories (chronological listing — GET /room/memories) ────
-        (Method::Get, p) if p == "/room/memories" || p.starts_with("/room/memories?") => {
-            let query_str = p.strip_prefix("/room/memories?");
+        (Method::Get, "/room/memories") => {
+            let query_str = path.split('?').nth(1);
             let room_id = query_str.and_then(|q| parse_query_param(q, "room_id"));
             let room_id = match room_id {
                 Some(id) => id,
@@ -1375,8 +1380,8 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
             }
         }
 
-        (Method::Delete, p) if p == "/room/delete" || p.starts_with("/room/delete?") => {
-            let room_id = if let Some(q) = p.strip_prefix("/room/delete?") {
+        (Method::Delete, "/room/delete") => {
+            let room_id = if let Some(q) = path.split('?').nth(1) {
                 parse_query_param(q, "room_id")
             } else {
                 // Try reading from query params in headers or body
@@ -1646,7 +1651,7 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         },
 
         // ── Document: Delete ─────────────────────────────────────────────
-        (Method::Delete, p) if p == "/doc/delete" || p.starts_with("/doc/delete?") => {
+        (Method::Delete, "/doc/delete") => {
             // Extract query string only — req.url() returns full URL which
             // parse_query_param() cannot handle (#776).
             let query = req.url().split('?').nth(1).unwrap_or("");
@@ -1727,7 +1732,7 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         }
 
         // ── Tags: List with counts ───────────────────────────────────────
-        (Method::Get, p) if p == "/tags" || p.starts_with("/tags?") => {
+        (Method::Get, "/tags") => {
             let ns = parse_query_namespace(&path);
             match uteke.tags_with_counts(ns.as_deref()) {
                 Ok(tags) => ctx.ok_response_for(req, &tags),
@@ -1815,8 +1820,8 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         },
 
         // ── Timeline ─────────────────────────────────────────────────────
-        (Method::Get, p) if p.starts_with("/timeline?") || p.starts_with("/timeline?id=") => {
-            let query = p.split('?').nth(1).unwrap_or("");
+        (Method::Get, "/timeline") => {
+            let query = path.split('?').nth(1).unwrap_or("");
             let id = match parse_query_param(query, "id") {
                 Some(id) => id,
                 None => return ctx.error_response_for(req, 400, "Missing 'id' query parameter"),
@@ -1834,8 +1839,8 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         }
 
         // ── Edges ────────────────────────────────────────────────────────
-        (Method::Get, p) if p.starts_with("/edges?") || p.starts_with("/edges?id=") => {
-            let query = p.split('?').nth(1).unwrap_or("");
+        (Method::Get, "/edges") => {
+            let query = path.split('?').nth(1).unwrap_or("");
             let id = match parse_query_param(query, "id") {
                 Some(id) => id,
                 None => return ctx.error_response_for(req, 400, "Missing 'id' query parameter"),
@@ -1948,7 +1953,7 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         },
 
         // ── Export (JSONL) ──────────────────────────────────────────────
-        (Method::Get, p) if p == "/export" || p.starts_with("/export?") => {
+        (Method::Get, "/export") => {
             let export_ns = parse_query_namespace(&path);
             match uteke.export(export_ns.as_deref()) {
                 Ok(jsonl) => {
