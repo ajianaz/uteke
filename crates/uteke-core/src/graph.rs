@@ -124,17 +124,28 @@ impl crate::Uteke {
                     fetched_targets.iter().map(|m| (m.id.as_str(), m)).collect();
 
                 for (source_id, target_id) in &rel_chains {
-                    // Skip if already visited — multiple source nodes in the same
-                    // frontier level can reference the same target (dedup).
+                    // Skip if already visited in a previous BFS level.
                     if visited.contains(target_id.as_str()) {
                         continue;
                     }
                     if let Some(target_memory) = target_map.get(target_id.as_str()) {
-                        visited.insert(target_id.clone());
+                        // Compute the best decayed score across all source nodes
+                        // in this frontier level that reference the same target.
                         let decayed_score = (results[source_id].1 * 0.8).max(0.1);
-                        results
-                            .insert(target_id.clone(), ((*target_memory).clone(), decayed_score));
-                        next_frontier.push(target_id.clone());
+                        let is_new = !results.contains_key(target_id.as_str());
+                        let is_better = results
+                            .get(target_id.as_str())
+                            .is_some_and(|(_, existing)| decayed_score > *existing);
+                        if is_new || is_better {
+                            results.insert(
+                                target_id.clone(),
+                                ((*target_memory).clone(), decayed_score),
+                            );
+                        }
+                        if is_new {
+                            visited.insert(target_id.clone());
+                            next_frontier.push(target_id.clone());
+                        }
                     }
                 }
             }
