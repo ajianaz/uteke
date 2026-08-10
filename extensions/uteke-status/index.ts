@@ -12,7 +12,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -34,7 +34,7 @@ function getAllStats(): Stats | null {
 	].join(" ");
 
 	try {
-		const out = execSync(`sqlite3 '${dbPath}' "${sql}"`, {
+		const out = execFileSync("sqlite3", [dbPath, sql], {
 			timeout: 5000,
 			encoding: "utf-8",
 		}).trim();

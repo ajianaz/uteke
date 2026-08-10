@@ -16,7 +16,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { basename, resolve } from "node:path";
 import { existsSync } from "node:fs";
 
@@ -109,12 +109,12 @@ function runUteke(args: string[], timeout = RECALL_TIMEOUT_MS): string {
 		env.HOME = process.env.UTEKE_HOME;
 	}
 	try {
-		return execSync(`${bin} ${args.join(" ")}`, {
+		return execFileSync(bin, args, {
 			encoding: "utf-8",
 			timeout,
 			env,
 		});
-	} catch (err: any) {
+	} catch {
 		return "";
 	}
 }
@@ -125,7 +125,7 @@ function recallMemories(query: string, project: string): string[] {
 	const minScore = process.env.UTEKE_RECALL_MIN_SCORE || String(RECALL_MIN_SCORE);
 
 	const args: string[] = [
-		"recall", `"${query}"`,
+		"recall", query,
 		"--namespace", ns,
 		"--limit", limit,
 		"--min-score", minScore,
@@ -231,7 +231,7 @@ export default function (pi: ExtensionAPI) {
 			const ns = process.env.UTEKE_NAMESPACE || DEFAULT_NAMESPACE;
 			const project = detectProjectFromCwd();
 			const cmdArgs: string[] = [
-				"remember", `"${content}"`,
+				"remember", content,
 				"--namespace", ns,
 			];
 			if (project) {
