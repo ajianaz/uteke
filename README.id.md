@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="docs/assets/uteke-banner.png" alt="Uteke — Kasih AI kamu memori" width="640" />
+  <img src="docs/assets/uteke-banner.png" alt="Uteke — Satu memori. Semua agent. Tanpa cloud." width="640" />
 </p>
 
 <h1 align="center">Uteke</h1>
-<p align="center"><strong>Beri AI kamu memori yang nggak pernah keluar dari laptop kamu.</strong></p>
+<p align="center"><strong>Satu memori. Semua agent. Tanpa cloud.</strong></p>
 <p align="center">
-  AI kamu lupa semuanya antar sesi. Uteke fix ini — satu binary, fully offline, recall ~45ms.
+  Beri AI kamu memori yang nggak pernah keluar dari laptop kamu. Mendukung Claude, Cursor, Copilot, dan semua agent yang kompatibel MCP.
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
 
 ```bash
 # Install (macOS, Linux, Windows)
-curl -sSL codecora.dev/install | sh
+curl -sSL codecora.dev/uteke/install | sh
 
 # Simpan ingatan
 uteke remember "Deploy v2.1 ke staging jam 3 sore"
