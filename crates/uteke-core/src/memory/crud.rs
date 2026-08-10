@@ -68,6 +68,38 @@ impl super::Store {
         let metadata_json = serde_json::to_string(&memory.metadata)
             .map_err(|e| Error::db("database operation", e))?;
 
+        // Wrap INSERT + tag inserts in a transaction for atomicity.
+        // If any tag insert fails, the entire operation rolls back.
+        // Using unchecked_transaction (same pattern as tags.rs/documents.rs) for
+        // consistency — safe because Store access is serialized via Mutex<Uteke>.
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| Error::db("Failed to begin transaction", e))?;
+
+        let result = self.try_insert_memory(memory, &embedding_blob, &tags_json, &metadata_json);
+        match result {
+            Ok(()) => {
+                tx.commit()
+                    .map_err(|e| Error::db("Failed to commit transaction", e))?;
+                Ok(())
+            }
+            Err(e) => {
+                // Drop tx triggers automatic rollback.
+                Err(e)
+            }
+        }
+    }
+
+    /// Internal helper: performs the actual INSERT + tag inserts.
+    /// Called within a transaction by `insert()`.
+    fn try_insert_memory(
+        &self,
+        memory: &Memory,
+        embedding_blob: &[u8],
+        tags_json: &str,
+        metadata_json: &str,
+    ) -> Result<(), Error> {
         self.conn
             .execute(
                 "INSERT INTO memories (id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type)
