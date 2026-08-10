@@ -3,12 +3,12 @@ import { createConfig } from '@codecora/theme/vitepress/config'
 export default createConfig({
   product: 'uteke',
   title: 'Uteke',
-  description: 'Local-first semantic memory engine. Single binary, zero infrastructure, 30ms recall.',
+  description: 'Offline semantic memory for AI agents. One binary, every MCP client, zero cloud. ~45ms recall.',
   accent: 'green',
   repo: 'uteke',
   head: [
-    ['meta', { property: 'og:title', content: 'Uteke — Give Your AI a Memory' }],
-    ['meta', { property: 'og:description', content: 'Offline-first semantic memory. Single binary. Zero config. 30ms recall.' }],
+    ['meta', { property: 'og:title', content: 'Uteke — One Memory. Every Agent. Zero Cloud.' }],
+    ['meta', { property: 'og:description', content: 'Offline semantic memory for AI agents. One binary, every MCP client, zero cloud. ~45ms recall.' }],
     ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
   ],
   ignoreDeadLinks: true,
