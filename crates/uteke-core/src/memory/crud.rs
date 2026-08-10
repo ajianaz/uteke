@@ -569,12 +569,14 @@ impl super::Store {
 
     /// Load all memories for index rebuilding, optionally filtered by namespace.
     pub fn load_all(&self, namespace: Option<&str>) -> Result<Vec<Memory>, Error> {
+        // Filter out NULL embeddings — they cannot be inserted into the vector
+        // index and cause dimension-mismatch crashes during build() (#992).
         let sql = match namespace {
             Some(_) => {
-                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug FROM memories WHERE namespace = ?1 ORDER BY created_at"
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug FROM memories WHERE namespace = ?1 AND embedding IS NOT NULL ORDER BY created_at"
             }
             None => {
-                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug FROM memories ORDER BY created_at"
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug FROM memories WHERE embedding IS NOT NULL ORDER BY created_at"
             }
         };
 
@@ -935,5 +937,54 @@ mod content_type_tests {
         assert!(store.column_exists("content_type"));
         let version = store.schema_version().unwrap();
         assert_eq!(version, 15); // v15 = room_documents junction (#689); v14 = FTS5 memory_type column (#662); v13 = global docs no namespace (#614); v12 = hierarchical docs (#438); v11 = document engine (#406); v10 = source columns (#348); v9 = timeline (#347); v8 = edges + slug; v7 = graph
+    }
+
+    #[test]
+    fn test_load_all_excludes_null_embeddings() {
+        // Regression test for #992: load_all() must filter out NULL embeddings.
+        use crate::memory::types::Memory;
+        use chrono::Utc;
+
+        let store = super::super::store::Store::open(":memory:").unwrap();
+
+        // Insert a valid memory with embedding
+        let m1 = Memory {
+            id: "valid-1".to_string(),
+            content: "has embedding".to_string(),
+            embedding: vec![0.1; 4],
+            tags: vec![],
+            metadata: serde_json::Value::Null,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            namespace: "default".to_string(),
+            access_count: 0,
+            last_accessed: None,
+            deprecated: false,
+            valid_from: None,
+            valid_until: None,
+            memory_type: "fact".to_string(),
+            importance: 0.5,
+            pinned: false,
+            content_type: "text".to_string(),
+            slug: None,
+            source: None,
+            source_type: "user".to_string(),
+        };
+        store.insert(&m1).unwrap();
+
+        // Insert a memory with NULL embedding (direct SQL to simulate corrupted data)
+        store
+            .conn
+            .execute(
+                "INSERT INTO memories (id, content, embedding, tags, metadata, created_at, updated_at, namespace, memory_type)
+                 VALUES ('null-emb-1', 'no embedding', NULL, '[]', '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'default', 'fact')",
+                [],
+            )
+            .unwrap();
+
+        // load_all must exclude the NULL embedding row
+        let all = store.load_all(None).unwrap();
+        assert_eq!(all.len(), 1, "load_all should exclude NULL embeddings");
+        assert_eq!(all[0].id, "valid-1");
     }
 }
