@@ -130,7 +130,7 @@ pub(crate) fn run(
                     );
                     for (i, m) in memories.iter().enumerate() {
                         let preview = if m.content.len() > 80 {
-                            format!("{}...", &m.content[..77])
+                            format!("{}...", uteke_core::safe_truncate(&m.content, 77))
                         } else {
                             m.content.clone()
                         };

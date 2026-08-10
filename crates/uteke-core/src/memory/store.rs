@@ -311,8 +311,10 @@ impl Store {
                 .unwrap_or(0) as f64;
             let connectivity = (rel_count / 5.0).min(1.0);
 
-            let importance =
-                0.3 * access_score + 0.3 * recency_score + 0.2 * connectivity + 0.2 * 0.0;
+            let importance = 0.3 * access_score
+                + 0.3 * recency_score
+                + 0.2 * connectivity
+                + 0.2 * if m.pinned { 1.0 } else { 0.0 };
             let importance = importance.clamp(0.0_f64, 1.0_f64);
 
             if (m.importance - importance).abs() > f64::EPSILON {

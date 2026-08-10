@@ -247,38 +247,42 @@ impl super::Store {
         let metadata_json = serde_json::to_string(&memory.metadata)
             .map_err(|e| Error::db("database operation", e))?;
 
-        self.conn
-            .execute(
-                "UPDATE memories SET content = ?2, embedding = ?3, tags = ?4, metadata = ?5, updated_at = ?6, namespace = ?7
-                 WHERE id = ?1",
-                params![
-                    memory.id,
-                    memory.content,
-                    embedding_blob,
-                    tags_json,
-                    metadata_json,
-                    memory.updated_at.to_rfc3339(),
-                    memory.namespace,
-                ],
-            )
-            .map_err(|e| Error::db("database operation", e))?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| Error::db("begin transaction", e))?;
+
+        tx.execute(
+            "UPDATE memories SET content = ?2, embedding = ?3, tags = ?4, metadata = ?5, updated_at = ?6, namespace = ?7
+             WHERE id = ?1",
+            params![
+                memory.id,
+                memory.content,
+                embedding_blob,
+                tags_json,
+                metadata_json,
+                memory.updated_at.to_rfc3339(),
+                memory.namespace,
+            ],
+        )
+        .map_err(|e| Error::db("database operation", e))?;
 
         // Dual-write: sync junction table tags
-        self.conn
-            .execute(
-                "DELETE FROM memory_tags WHERE memory_id = ?1",
-                params![memory.id],
-            )
-            .map_err(|e| Error::db("delete old tags", e))?;
+        tx.execute(
+            "DELETE FROM memory_tags WHERE memory_id = ?1",
+            params![memory.id],
+        )
+        .map_err(|e| Error::db("delete old tags", e))?;
         for tag in &memory.tags {
-            self.conn
-                .execute(
-                    "INSERT OR IGNORE INTO memory_tags (memory_id, tag) VALUES (?1, ?2)",
-                    params![memory.id, tag],
-                )
-                .map_err(|e| Error::db("insert tag", e))?;
+            tx.execute(
+                "INSERT OR IGNORE INTO memory_tags (memory_id, tag) VALUES (?1, ?2)",
+                params![memory.id, tag],
+            )
+            .map_err(|e| Error::db("insert tag", e))?;
         }
 
+        tx.commit()
+            .map_err(|e| Error::db("commit transaction", e))?;
         Ok(())
     }
 
@@ -362,30 +366,34 @@ impl super::Store {
         );
         params_vec.push(Box::new(id.to_string()));
 
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| Error::db("begin transaction", e))?;
+
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params_vec.iter().map(|b| b.as_ref()).collect();
-        let rows = self
-            .conn
+        let rows = tx
             .execute(&sql, param_refs.as_slice())
             .map_err(|e| Error::db("update memory fields", e))?;
 
         // Dual-write: sync junction table tags if tags were provided
         if tags.is_some() {
-            self.conn
-                .execute("DELETE FROM memory_tags WHERE memory_id = ?1", params![id])
+            tx.execute("DELETE FROM memory_tags WHERE memory_id = ?1", params![id])
                 .map_err(|e| Error::db("delete old tags", e))?;
             if let Some(t) = tags {
                 for tag in t {
-                    self.conn
-                        .execute(
-                            "INSERT OR IGNORE INTO memory_tags (memory_id, tag) VALUES (?1, ?2)",
-                            params![id, tag],
-                        )
-                        .map_err(|e| Error::db("insert tag", e))?;
+                    tx.execute(
+                        "INSERT OR IGNORE INTO memory_tags (memory_id, tag) VALUES (?1, ?2)",
+                        params![id, tag],
+                    )
+                    .map_err(|e| Error::db("insert tag", e))?;
                 }
             }
         }
 
+        tx.commit()
+            .map_err(|e| Error::db("commit transaction", e))?;
         Ok(rows > 0)
     }
 
