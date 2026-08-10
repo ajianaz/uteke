@@ -179,22 +179,27 @@ impl super::Store {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!(
-            "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug FROM memories WHERE id IN ({placeholders})"
-        );
-        let mut stmt = self
-            .conn
-            .prepare(&sql)
-            .map_err(|e| Error::db("Failed to prepare statement for get_by_ids", e))?;
-        let rows = stmt
-            .query_map(rusqlite::params_from_iter(ids.iter()), |row| {
-                row_to_memory(row)
-            })
-            .map_err(|e| Error::db("Failed to query memories by IDs", e))?;
         let mut memories = Vec::new();
-        for row in rows {
-            memories.push(row.map_err(|e| Error::db("Failed to deserialize memory row", e))?);
+        // SQLite has a default limit of 999 host parameters (SQLITE_MAX_VARIABLE_NUMBER).
+        // Chunk to stay safely under the limit.
+        const CHUNK_SIZE: usize = 900;
+        for chunk in ids.chunks(CHUNK_SIZE) {
+            let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug FROM memories WHERE id IN ({placeholders})"
+            );
+            let mut stmt = self
+                .conn
+                .prepare(&sql)
+                .map_err(|e| Error::db("Failed to prepare statement for get_by_ids", e))?;
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+                    row_to_memory(row)
+                })
+                .map_err(|e| Error::db("Failed to query memories by IDs", e))?;
+            for row in rows {
+                memories.push(row.map_err(|e| Error::db("Failed to deserialize memory row", e))?);
+            }
         }
         Ok(memories)
     }
