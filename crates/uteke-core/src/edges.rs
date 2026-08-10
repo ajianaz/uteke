@@ -385,31 +385,41 @@ impl Store {
             .conn
             .unchecked_transaction()
             .map_err(|e| Error::db("begin batch edge tx", e))?;
+
+        // Prepare statements once, reuse across all iterations (eliminates re-prepare overhead).
+        let mut stmt_forward = tx
+            .prepare(
+                "INSERT OR IGNORE INTO memory_edges
+                    (source_id, target_id, edge_type, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+            )
+            .map_err(|e| Error::db("prepare forward edge stmt", e))?;
+        let mut stmt_backlink = tx
+            .prepare(
+                "INSERT OR IGNORE INTO memory_edges
+                    (source_id, target_id, edge_type, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+            )
+            .map_err(|e| Error::db("prepare backlink edge stmt", e))?;
+
         let mut inserted = 0usize;
         for (target_id, edge_type) in edges {
-            let changed = tx
-                .execute(
-                    "INSERT OR IGNORE INTO memory_edges
-                        (source_id, target_id, edge_type, created_at)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![source_id, target_id, edge_type, now],
-                )
+            let changed = stmt_forward
+                .execute(params![source_id, target_id, edge_type, now])
                 .map_err(|e| Error::db("batch insert memory edge", e))?;
             inserted += changed;
             // #350: ensure inverse backlink for every forward edge inside the
             // same transaction so the whole batch commits atomically.
             if let Some(backlink_type) = backlink_type_for(edge_type) {
                 if source_id != target_id {
-                    tx.execute(
-                        "INSERT OR IGNORE INTO memory_edges
-                            (source_id, target_id, edge_type, created_at)
-                         VALUES (?1, ?2, ?3, ?4)",
-                        params![target_id, source_id, backlink_type, now],
-                    )
-                    .map_err(|e| Error::db("batch ensure backlink", e))?;
+                    stmt_backlink
+                        .execute(params![target_id, source_id, backlink_type, now])
+                        .map_err(|e| Error::db("batch ensure backlink", e))?;
                 }
             }
         }
+        drop(stmt_forward);
+        drop(stmt_backlink);
         tx.commit()
             .map_err(|e| Error::db("commit batch edge tx", e))?;
         Ok(inserted)

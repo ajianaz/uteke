@@ -138,15 +138,13 @@ impl crate::Uteke {
             .collect();
 
         if !missing_ids.is_empty() {
-            // Load missing room memories (includes embeddings)
-            let mut missing_memories = Vec::new();
-            for id in &missing_ids {
-                if let Some(mem) = self.store.get_by_id(id)? {
-                    if !mem.deprecated {
-                        missing_memories.push(mem);
-                    }
-                }
-            }
+            // Batch-fetch all missing room memories in one query (eliminates N+1).
+            let missing_memories: Vec<_> = self
+                .store
+                .get_by_ids(&missing_ids)?
+                .into_iter()
+                .filter(|m| !m.deprecated)
+                .collect();
 
             if !missing_memories.is_empty() {
                 // Embed query and score each missing memory by cosine similarity.
