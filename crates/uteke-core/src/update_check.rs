@@ -188,12 +188,16 @@ pub(crate) fn get_latest_version() -> Result<String, String> {
 
     if let Some(location) = resp.headers().get("location") {
         let loc = location.to_str().unwrap_or_default();
-        let prefix = format!("/{REPO}/releases/tag/");
-        if let Some(tag) = loc.strip_prefix(&prefix) {
+        // GitHub returns absolute URLs (https://github.com/codecoradev/uteke/releases/tag/v0.13.1).
+        // Use contains() to handle both absolute and relative formats.
+        let tag_marker = format!("/{REPO}/releases/tag/");
+        if let Some(idx) = loc.find(&tag_marker) {
+            let tag = &loc[idx + tag_marker.len()..];
             return Ok(tag.trim_end_matches('?').to_string());
         }
+        // Fallback: last path segment (works for any URL format).
         if let Some(tag) = loc.rsplit('/').next() {
-            if tag.starts_with('v') {
+            if !tag.is_empty() {
                 return Ok(tag.trim_end_matches('?').to_string());
             }
         }
