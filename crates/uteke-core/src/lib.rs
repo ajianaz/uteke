@@ -322,6 +322,8 @@ impl LifecycleConfig {
     ///
     /// Returns a value in `[min_deprecate_per_cycle, max_deprecate_per_cycle]`,
     /// clamped after percentage calculation.
+    #[deprecated(note = "unused — candidate for removal in future version")]
+    #[allow(dead_code)]
     pub fn cycle_deprecate_cap(&self, total_memories: usize) -> usize {
         let pct_based = (total_memories as f64 * self.max_deprecate_percent / 100.0) as usize;
         pct_based
