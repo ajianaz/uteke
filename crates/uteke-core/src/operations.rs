@@ -1019,6 +1019,10 @@ impl crate::Uteke {
                 "Vector index entry not found during soft_forget for id={id} (ok if never embedded)"
             );
         }
+        // Persist vector index to disk so the removal survives restart.
+        if let Err(e) = index.save() {
+            tracing::warn!("Failed to persist vector index after soft_forget: {e}");
+        }
         // Invalidate recall cache for this memory's namespace.
         if let Some(memory) = self.store.get_by_id(id).ok().flatten() {
             self.recall_cache.invalidate_namespace(&memory.namespace);

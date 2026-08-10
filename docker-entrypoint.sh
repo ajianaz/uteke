@@ -12,13 +12,23 @@ TOKENIZER_SHA256="4dda02faaf32bc91031dc8c88457ac272b00c1016cc679757d1c441b248b9c
 verify_sha256() {
   file_path="$1"
   expected="$2"
+  if [ -z "$expected" ]; then
+    echo "ERROR: No expected checksum provided for $file_path" >&2
+    return 1
+  fi
   if command -v sha256sum >/dev/null 2>&1; then
-    echo "$expected  $file_path" | sha256sum -c -
+    echo "$expected  $file_path" | sha256sum -c - || {
+      echo "ERROR: Checksum verification failed for $file_path" >&2
+      return 1
+    }
   elif command -v shasum >/dev/null 2>&1; then
-    echo "$expected  $file_path" | shasum -a 256 -c -
+    echo "$expected  $file_path" | shasum -a 256 -c - || {
+      echo "ERROR: Checksum verification failed for $file_path" >&2
+      return 1
+    }
   else
-    echo "WARNING: sha256sum not available, skipping checksum verification"
-    return 0
+    echo "WARNING: sha256sum not available, skipping checksum verification" >&2
+    return 1
   fi
 }
 
