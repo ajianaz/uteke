@@ -134,6 +134,7 @@ def recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids,
             "recall", question,
             "--limit", "50",
             "--tags", "longmemeval",
+            "--min", "0.0",  # Disable threshold — evaluate raw retrieval ranking (#995)
         ])
     except RuntimeError as e:
         print(f"  Warning: recall failed: {e}", file=sys.stderr)

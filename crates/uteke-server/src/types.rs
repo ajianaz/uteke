@@ -224,7 +224,8 @@ pub struct RecallRequest {
     /// Filter by category metadata.
     #[serde(default)]
     pub category: Option<String>,
-    /// Minimum similarity score. Results below are filtered.
+    /// Minimum similarity score (0.0-1.0). Results below are filtered.
+    /// Default: 0.0 (no filtering). Use `strict=true` for 0.5 default (#995).
     #[serde(default)]
     pub min_score: Option<f32>,
     /// Use strict threshold (defaults to 0.5 if min_score not set).
