@@ -36,4 +36,4 @@ sha2 = { version = "0.11", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
-serial_test = "3"
+serial_test = "4"
