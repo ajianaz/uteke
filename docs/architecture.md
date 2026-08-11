@@ -237,7 +237,7 @@ Protocol version: `2025-06-18` (Streamable HTTP spec). 1 MiB body limit enforced
 
 | Mode | Recall | Setup |
 |------|--------|-------|
-| **Library (Rust)** | **~30ms** | In-process, no startup |
+| **Library (Rust)** | **~45ms** | In-process, no startup |
 | **Server (HTTP)** | **~42ms** | One-time ~2s init |
 | **CLI (binary)** | **~3s** | Per-invocation (model load) |
 
