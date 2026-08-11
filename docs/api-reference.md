@@ -621,7 +621,8 @@ When true, populates `linked_doc_slugs` on memory results and
 `linked_memory_ids` on document results. |
 | `entity` | any | No | Filter by entity metadata. |
 | `limit` | `integer` | No |  |
-| `min_score` | any | No | Minimum similarity score. Results below are filtered. |
+| `min_score` | any | No | Minimum similarity score (0.0-1.0). Results below are filtered.
+Default: 0.0 (no filtering). Use `strict=true` for 0.5 default (#995). |
 | `namespace` | any | No |  |
 | `query` | `string` | Yes |  |
 | `search_type` | any | No | Search type filter: "all" (default, unified), "memory", or "doc" (#531). |
