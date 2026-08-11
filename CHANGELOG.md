@@ -1,3 +1,29 @@
+## [0.13.2] — 2026-08-11
+
+Patch release with update notifications, a startup crash fix, and benchmark accuracy improvements. No breaking changes.
+
+### Added
+
+- **Update check across all surfaces (#990)** — Uteke now checks GitHub for newer releases on startup (CLI, MCP, HTTP). Uses a 302 redirect as primary source (no API rate limit), REST API as fallback, with a 24-hour cache (`~/.config/uteke/update-cache.json`). MCP server runs the check in a detached background thread to avoid blocking JSON-RPC.
+
+### Fixed
+
+- **NULL embedding rows crash vector index build on startup (#992, #993)** — `load_all()` returned rows with NULL embedding blobs, which `row_to_memory()` silently converted to `vec![]`. When these reached `index.build()`, the dimension validator rejected them (0 ≠ 768), crashing the server on startup and blocking `repair_index`. Fixed with a SQL filter (`WHERE embedding IS NOT NULL`) plus defense-in-depth guards at call sites.
+
+- **Update check redirect parser fails on absolute URLs (#994)** — GitHub 302 redirects return absolute URLs (`https://github.com/.../v0.13.1`), not relative paths. The previous `strip_prefix('/codecoradev/...')` always failed on absolute URLs, falling through to a fallback that required a `v` prefix. Fixed with `find()` to locate the tag marker anywhere in the URL. Also fixed a UTF-8 safety issue: byte-indexed slicing replaced with `split_once()`.
+
+- **LongMemEval benchmark false negatives from CLI score threshold (#995, #996)** — The benchmark harness called `uteke recall` without `--min`, inheriting the CLI default threshold of 0.3. Relevant evidence sessions scoring 0.30–0.40 were silently filtered, causing 8/500 false negatives in the Oracle subset. Fixed by passing `--min 0.0` to evaluate raw ranking quality. Also documented the threshold chain inconsistency: CLI defaults to 0.3 (UX), HTTP API and MCP default to 0.0.
+
+### Changed
+
+- **Branding refresh (#991)** — Tagline updated to "One memory. Every agent. Zero cloud." Install URL changed to `codecora.dev/uteke/install`. MCP compatibility (Claude, Cursor, Copilot) now mentioned in subtitle.
+
+### Contributors
+
+- [@ajianaz](https://github.com/ajianaz)
+
+---
+
 ## [0.13.1] — 2026-08-10
 
 Patch release focused on security hardening, data integrity, and query performance. No breaking changes. 13 commits across 32 files.
