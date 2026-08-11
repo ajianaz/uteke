@@ -121,10 +121,11 @@ impl crate::Uteke {
             index.len()
         };
 
-        // Load all from SQLite and rebuild index
+        // Load all from SQLite and rebuild index (NULL embeddings filtered in load_all)
         let all_memories = self.store.load_all(None)?;
         let items: Vec<(String, Vec<f32>)> = all_memories
             .iter()
+            .filter(|m| !m.embedding.is_empty())
             .map(|m| (m.id.clone(), m.embedding.clone()))
             .collect();
 

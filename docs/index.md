@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: uteke
-  text: Give Your AI a Memory
-  tagline: Local-first semantic memory engine. Single Rust binary, zero infrastructure, 30ms recall, fully offline.
+  text: One Memory. Every Agent. Zero Cloud.
+  tagline: Give your AI a memory that never leaves your machine. Works with Claude, Cursor, Copilot, and any MCP-compatible agent.
   actions:
     - theme: brand
       text: Get Started

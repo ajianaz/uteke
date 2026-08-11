@@ -213,12 +213,24 @@ graph_rerank_enabled = true   # master switch; false → graph acts like hybrid
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `min_score` | 0.3 | Minimum similarity score (0.0-1.0) |
-| `min_score_strict` | 0.5 | Strict-mode threshold (used with `--strict`) |
+| `min_score` | 0.3 | Minimum similarity score (0.0-1.0). **CLI only.** |
+| `min_score_strict` | 0.5 | Strict-mode threshold (used with `--strict`). **CLI only.** |
 | `default_strategy` | `vector` | Default recall strategy (`vector\|fts5\|hybrid\|graph`) |
 | `graph_density_weight` | 0.1 | Edge-density boost weight (graph strategy only) |
 | `graph_authority_weight` | 0.1 | Incoming-edge authority boost weight (graph strategy only) |
 | `graph_rerank_enabled` | true | Master switch for graph reranking |
+
+> **⚠️ Threshold defaults differ across interfaces (#995)**
+>
+> | Interface | Default `min_score` | Notes |
+> |-----------|---------------------|-------|
+> | **CLI** | `0.3` (from `[recall] min_score`) | Reads from `uteke.toml`. `--min 0.0` to disable. |
+> | **HTTP API / Server** | `0.0` (`DEFAULT_MIN_SCORE`) | Server has its own constant, ignores `[recall] min_score`. |
+> | **MCP** | `0.0` | MCP server hardcodes 0.0. |
+>
+> This means a score of 0.25 is returned by API/MCP but **filtered out** by CLI.
+> For benchmark/retrieval evaluation, always pass `--min 0.0` explicitly to
+> evaluate raw ranking quality without UX threshold filtering.
 
 ### Salience + Recency Boost (#352)
 

@@ -30,6 +30,7 @@ mod rooms;
 pub mod salience_recency;
 mod timeline;
 mod types;
+pub mod update_check;
 
 pub use chunker::{
     CodeChunk, TextChunk, chunk_code, chunk_markdown, chunk_markdown_embed_aware, detect_language,
@@ -729,12 +730,17 @@ impl Uteke {
         if index.is_empty() {
             let all_memories = store.load_all(None)?;
             if !all_memories.is_empty() {
+                // Defense-in-depth: skip any memories with empty embeddings
+                // (NULL rows already filtered in load_all SQL, but guard here too).
                 let items: Vec<(String, Vec<f32>)> = all_memories
                     .into_iter()
+                    .filter(|m| !m.embedding.is_empty())
                     .map(|m| (m.id, m.embedding))
                     .collect();
-                index.build(&items)?;
-                index.save().ok(); // Persist after migration build
+                if !items.is_empty() {
+                    index.build(&items)?;
+                    index.save().ok(); // Persist after migration build
+                }
             }
         }
 

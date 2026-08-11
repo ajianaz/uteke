@@ -107,6 +107,10 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         (Method::Get, "/health") => {
             let total = uteke.count(None).unwrap_or(0);
             let namespaces = uteke.list_namespaces().unwrap_or_default().len();
+            // Populate update_available from cache (non-blocking, no network).
+            let update_available = uteke_core::update_check::check_cached()
+                .filter(|i| i.is_update_available())
+                .map(|i| i.latest);
             ctx.ok_response_for(
                 req,
                 &HealthResponse {
@@ -116,6 +120,7 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                     namespaces,
                     api_versions: Some(API_VERSIONS.to_vec()),
                     api_latest: Some(API_LATEST),
+                    update_available,
                 },
             )
         }

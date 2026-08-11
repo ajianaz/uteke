@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="docs/assets/uteke-banner.png" alt="Uteke: Give your AI a memory" width="640" />
+  <img src="docs/assets/uteke-banner.png" alt="Uteke: One memory. Every agent. Zero cloud." width="640" />
 </p>
 
 <h1 align="center">Uteke</h1>
-<p align="center"><strong>Give your AI a memory that never leaves your machine.</strong></p>
+<p align="center"><strong>One memory. Every agent. Zero cloud.</strong></p>
 <p align="center">
-  Local-first by default. One binary, fully offline, ~45ms recall. Want cloud or team deployments? Docker ready.
+  Give your AI a memory that never leaves your machine. Works with Claude, Cursor, Copilot, and any MCP-compatible agent.
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
 
 ```bash
 # Install (macOS, Linux, Windows)
-curl -sSL codecora.dev/install | sh
+curl -sSL codecora.dev/uteke/install | sh
 
 # Store a memory
 uteke remember "Deploy v2.1 to staging at 3pm"
@@ -269,7 +269,7 @@ Uteke runs the same everywhere. Pick the mode that fits your setup.
 Single binary, zero infrastructure. Everything runs in-process on your machine:
 
 ```bash
-curl -sSL codecora.dev/install | sh
+curl -sSL codecora.dev/uteke/install | sh
 uteke remember "first memory"
 ```
 
