@@ -62,7 +62,7 @@ features:
 | Install | 1 binary | pip + Docker + Qdrant | pip + Docker + Postgres | pip + Docker + Neo4j |
 | API Keys | ✅ None | ❌ OpenAI/LLM key | ❌ LLM key | ❌ LLM + vector DB |
 | Offline | ✅ Fully | ❌ Cloud embedding | ❌ Needs server | ❌ Needs LLM + DB |
-| Recall Speed | ~30ms | Network RTT | Network RTT | Network RTT |
+| Recall Speed | ~45ms | Network RTT | Network RTT | Network RTT |
 | Privacy | ✅ Local | ⚠️ Sent to LLM | ⚠️ Sent to LLM | ⚠️ Sent to LLM |
 
 [See full comparison →](/comparison)
