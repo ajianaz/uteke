@@ -48,9 +48,10 @@ except ImportError:
 
 # ========= Embedding API Client =========
 
-def batch_embed_texts(texts, api_base, api_key, model, batch_size=50):
+def batch_embed_texts(texts, api_base, api_key, model, batch_size=50, parallel=3):
     """
     Call an OpenAI-compatible /v1/embeddings endpoint to embed texts in batches.
+    Sends up to `parallel` requests concurrently for throughput.
 
     Args:
         texts: List of strings to embed.
@@ -58,15 +59,23 @@ def batch_embed_texts(texts, api_base, api_key, model, batch_size=50):
         api_key: Bearer token for auth.
         model: Model name for the API.
         batch_size: Texts per HTTP request.
+        parallel: Max concurrent HTTP requests.
 
     Returns:
         List of embedding vectors (list[list[float]]), same order as input.
     """
-    all_vectors = []
+    import concurrent.futures
+    import urllib.request
+
     url = f"{api_base.rstrip('/')}/v1/embeddings"
 
+    # Build batch chunks
+    chunks = []
     for i in range(0, len(texts), batch_size):
-        chunk = texts[i : i + batch_size]
+        chunks.append((i, texts[i : i + batch_size]))
+
+    def send_batch(offset_chunk):
+        offset, chunk = offset_chunk
         body = json.dumps({"model": model, "input": chunk}).encode("utf-8")
         req = urllib.request.Request(
             url,
@@ -80,15 +89,26 @@ def batch_embed_texts(texts, api_base, api_key, model, batch_size=50):
             try:
                 with urllib.request.urlopen(req, timeout=300) as resp:
                     data = json.loads(resp.read())
-                    # Sort by index to guarantee order
                     items = sorted(data["data"], key=lambda d: d["index"])
-                    all_vectors.extend(d["embedding"] for d in items)
-                    break
+                    return offset, [d["embedding"] for d in items]
             except Exception as e:
                 if attempt == 2:
-                    print(f"  Embedding API error (batch {i}): {e}", file=sys.stderr)
+                    print(f"  Embedding API error (batch {offset}): {e}", file=sys.stderr)
                     raise
                 time.sleep(2 ** attempt)
+
+    # Send batches concurrently
+    results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=parallel) as pool:
+        futures = {pool.submit(send_batch, chunk): chunk[0] for chunk in chunks}
+        for future in concurrent.futures.as_completed(futures):
+            offset, vectors = future.result()
+            results[offset] = vectors
+
+    # Reassemble in order
+    all_vectors = []
+    for offset, _ in chunks:
+        all_vectors.extend(results[offset])
 
     return all_vectors
 
@@ -172,6 +192,7 @@ def insert_sessions(args, store_path, entry):
                     args.embed_api_key,
                     args.embed_model,
                     batch_size=args.embed_batch_size,
+                    parallel=args.embed_parallel,
                 )
                 embed_elapsed = time.time() - t0
                 print(f"  Embedded {len(vectors)} sessions in {embed_elapsed:.1f}s", file=sys.stderr)
@@ -343,8 +364,10 @@ def main():
                         help="Bearer token for the embedding API")
     parser.add_argument("--embed-model", default=os.environ.get("EMBED_MODEL", "gemma-768"),
                         help="Model name for the embedding API")
-    parser.add_argument("--embed-batch-size", type=int, default=50,
-                        help="Number of texts per embedding API request (default: 50)")
+    parser.add_argument("--embed-batch-size", type=int, default=18,
+                        help="Number of texts per embedding API request (default: 18)")
+    parser.add_argument("--embed-parallel", type=int, default=3,
+                        help="Max concurrent embedding API requests (default: 3)")
 
     # Validate pre-compute args
     args = parser.parse_args()
