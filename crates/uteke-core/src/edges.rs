@@ -865,28 +865,22 @@ impl crate::Uteke {
             return;
         }
 
-        // Filter by namespace if specified (#401 cora finding: cross-namespace links are wrong).
-        let ns_set: Option<std::collections::HashSet<String>> = if let Some(ns) = namespace {
-            match self.store.memories_in_namespace(ns) {
-                Ok(ids) => Some(ids.into_iter().collect()),
-                Err(e) => {
-                    tracing::warn!("auto_link_cosine: failed to get namespace ids: {e}");
-                    return;
-                }
-            }
-        } else {
-            None
-        };
-
-        // usearch returns distances (lower = more similar for cosine).
-        // Convert distance to similarity: sim = 1.0 - dist.
+        // Filter by namespace per-candidate — avoids fetching ALL IDs in the
+        // namespace via memories_in_namespace() which is O(N) per insert (#1003).
+        // We only have TOP_K candidates here.
         let edges: Vec<(String, String)> = results
             .iter()
             .filter(|(id, _)| id != source_id) // skip self
             .filter(|(id, _)| {
-                // Skip memories outside our namespace.
-                match &ns_set {
-                    Some(set) => set.contains(id),
+                // Skip memories outside our namespace — per-candidate check.
+                match namespace {
+                    Some(ns) => self
+                        .store
+                        .get_namespace_for(id)
+                        .ok()
+                        .flatten()
+                        .map(|candidate_ns| candidate_ns == ns)
+                        .unwrap_or(false),
                     None => true,
                 }
             })
@@ -966,13 +960,13 @@ impl crate::Uteke {
     /// Returns memories reachable within `depth` hops, excluding the start.
     pub fn related_via_edges(&self, memory_id: &str, depth: usize) -> Result<Vec<Memory>, Error> {
         let ids = self.store.edge_bfs(memory_id, depth)?;
-        let mut out = Vec::with_capacity(ids.len());
-        for id in ids {
-            if let Some(m) = self.store.get_by_id(&id)? {
-                out.push(m);
-            }
+        if ids.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(out)
+        // Batch fetch all memories in a single SQL query (#1004).
+        // Previously N+1: one query per ID in a loop.
+        let id_refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+        self.store.get_by_ids(&id_refs)
     }
 }
 

@@ -1,0 +1,1 @@
+{"question_id": "e47becba", "question_type": "single-session-user", "retrieval_results": {"metrics": {"session": {"recall_all@5": 0.0, "recall_all@10": 1.0, "recall_all@50": 1.0, "ndcg_any@5": 0.0, "ndcg_any@10": 0.3562071871080222, "ndcg_any@50": 0.3562071871080222}}}}

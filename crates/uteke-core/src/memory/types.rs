@@ -268,7 +268,12 @@ pub struct BulkDeleteResult {
     pub ids: Vec<String>,
 }
 
-/// Lightweight export format — no embedding vector (re-embedded on import).
+/// Lightweight export format.
+///
+/// By default embeddings are NOT exported — they are re-computed on import.
+/// However, if the `embedding` field is populated (e.g. by an external batch
+/// pipeline), import will use the pre-computed vector and skip the embedder
+/// entirely for that entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportEntry {
     /// The text content.
@@ -285,6 +290,13 @@ pub struct ExportEntry {
     /// Optional source provenance (#348).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// Pre-computed embedding vector (optional).
+    ///
+    /// When present, import skips calling the embedder for this entry,
+    /// enabling offline import with pre-computed vectors from an external
+    /// batch embedding pipeline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<Vec<f32>>,
 }
 
 fn default_metadata() -> serde_json::Value {

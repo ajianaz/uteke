@@ -1,0 +1,78 @@
+Total: 500 | Done: 0 | Remaining: 500
+Workers: 2
+
+  [1/500] single-session-user            118b2229  elapsed=465s  eta=3864min  rate=0.00q/s
+  [2/500] single-session-user            e47becba  elapsed=521s  eta=2162min  rate=0.00q/s
+  [3/500] single-session-user            51a45a95  elapsed=1019s  eta=2813min  rate=0.00q/s
+  [4/500] single-session-user            58bf7951  elapsed=1088s  eta=2248min  rate=0.00q/s
+  [W0] ERROR qid=1e043500: Command '['uteke', '--store', '/tmp/uteke-w0-_lj0r4_c', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-1e043500-zap20vbo.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [5/500] single-session-user            1e043500  elapsed=1619s  eta=2671min  rate=0.00q/s
+  [W1] ERROR qid=c5e8278d: Command '['uteke', '--store', '/tmp/uteke-w1-vwsp7q2n', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-c5e8278d-ulm_3c8o.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [6/500] single-session-user            c5e8278d  elapsed=1688s  eta=2316min  rate=0.00q/s
+  [W0] ERROR qid=6ade9755: Command '['uteke', '--store', '/tmp/uteke-w0-edz9v1e8', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-6ade9755-nqji7_jn.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [7/500] single-session-user            6ade9755  elapsed=2219s  eta=2605min  rate=0.00q/s
+  [W1] ERROR qid=6f9b354f: Command '['uteke', '--store', '/tmp/uteke-w1-nfmgm5bh', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-6f9b354f-j8bf6pa9.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [8/500] single-session-user            6f9b354f  elapsed=2288s  eta=2345min  rate=0.00q/s
+  [W0] ERROR qid=58ef2f1c: Command '['uteke', '--store', '/tmp/uteke-w0-qfi0xms3', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-58ef2f1c-0954294r.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [9/500] single-session-user            58ef2f1c  elapsed=2819s  eta=2564min  rate=0.00q/s
+  [W1] ERROR qid=f8c5f88b: Command '['uteke', '--store', '/tmp/uteke-w1-ms19gsy6', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-f8c5f88b-vp5t45cj.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [10/500] single-session-user            f8c5f88b  elapsed=2888s  eta=2359min  rate=0.00q/s
+  [W0] ERROR qid=5d3d2817: Command '['uteke', '--store', '/tmp/uteke-w0-3e6jv49o', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-5d3d2817-z2_l4een.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [11/500] single-session-user            5d3d2817  elapsed=3420s  eta=2534min  rate=0.00q/s
+  [W1] ERROR qid=7527f7e2: Command '['uteke', '--store', '/tmp/uteke-w1-ub3haszt', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-7527f7e2-k6ikz70j.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [12/500] single-session-user            7527f7e2  elapsed=3490s  eta=2365min  rate=0.00q/s
+  [W0] ERROR qid=c960da58: Command '['uteke', '--store', '/tmp/uteke-w0-j1imq5p7', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-c960da58-sqcaet9x.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [13/500] single-session-user            c960da58  elapsed=4020s  eta=2510min  rate=0.00q/s
+  [W1] ERROR qid=3b6f954b: Command '['uteke', '--store', '/tmp/uteke-w1-gfm0gib0', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-3b6f954b-lgyr6vwj.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [14/500] single-session-user            3b6f954b  elapsed=4090s  eta=2366min  rate=0.00q/s
+  [W0] ERROR qid=726462e0: Command '['uteke', '--store', '/tmp/uteke-w0-fsuoq0h6', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-726462e0-oawtpikw.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [15/500] single-session-user            726462e0  elapsed=4620s  eta=2490min  rate=0.00q/s
+  [W1] ERROR qid=94f70d80: Command '['uteke', '--store', '/tmp/uteke-w1-09oxstp7', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-94f70d80-zdfwsmwf.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [16/500] single-session-user            94f70d80  elapsed=4690s  eta=2365min  rate=0.00q/s
+  [W0] ERROR qid=66f24dbb: Command '['uteke', '--store', '/tmp/uteke-w0-lvz4up3o', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-66f24dbb-_k7lufai.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [17/500] single-session-user            66f24dbb  elapsed=5221s  eta=2472min  rate=0.00q/s
+  [W1] ERROR qid=ad7109d1: Command '['uteke', '--store', '/tmp/uteke-w1-4gs7g21j', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-ad7109d1-hw3qnvm9.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [18/500] single-session-user            ad7109d1  elapsed=5291s  eta=2361min  rate=0.00q/s
+  [W0] ERROR qid=af8d2e46: Command '['uteke', '--store', '/tmp/uteke-w0-05obvb5y', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-af8d2e46-lud6896r.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [19/500] single-session-user            af8d2e46  elapsed=5821s  eta=2456min  rate=0.00q/s
+  [W1] ERROR qid=dccbc061: Command '['uteke', '--store', '/tmp/uteke-w1-34n0lytc', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-dccbc061-yhcacte1.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [20/500] single-session-user            dccbc061  elapsed=5891s  eta=2356min  rate=0.00q/s
+  [W0] ERROR qid=c8c3f81d: Command '['uteke', '--store', '/tmp/uteke-w0-rp9u6hea', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-c8c3f81d-gwjbd2kj.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [21/500] single-session-user            c8c3f81d  elapsed=6421s  eta=2441min  rate=0.00q/s
+  [W1] ERROR qid=8ebdbe50: Command '['uteke', '--store', '/tmp/uteke-w1-7t_0uc38', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-8ebdbe50-v22r27p3.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [22/500] single-session-user            8ebdbe50  elapsed=6491s  eta=2351min  rate=0.00q/s
+  [W0] ERROR qid=6b168ec8: Command '['uteke', '--store', '/tmp/uteke-w0-xyz52s0r', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-6b168ec8-_oczlw2d.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [23/500] single-session-user            6b168ec8  elapsed=7021s  eta=2427min  rate=0.00q/s
+  [W1] ERROR qid=75499fd8: Command '['uteke', '--store', '/tmp/uteke-w1-jcp4675t', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-75499fd8-ggmbvj_b.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [24/500] single-session-user            75499fd8  elapsed=7091s  eta=2344min  rate=0.00q/s
+  [W0] ERROR qid=21436231: Command '['uteke', '--store', '/tmp/uteke-w0-uyahas26', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-21436231-38tl8pri.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [25/500] single-session-user            21436231  elapsed=7622s  eta=2414min  rate=0.00q/s
+  [W1] ERROR qid=95bcc1c8: Command '['uteke', '--store', '/tmp/uteke-w1-awkraj8m', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-imp-95bcc1c8-9yz3ikfg.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+  [26/500] single-session-user            95bcc1c8  elapsed=7692s  eta=2337min  rate=0.00q/s
+  Warning: batch import failed/timed out: Command '['uteke', '--store', '/tmp/uteke-lmeval-fhtcjpgk', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-import-k4429o8u.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+Evaluating:   3%|▎         | 14/500 [2:00:45<80:35:29, 596.97s/it]LongMemEval retrieval evaluation
+  Questions: 500
+  Namespace: lmeval
+
+Store: /tmp/uteke-lmeval-y5aohsnd
+Resume: 14 questions already evaluated, skipping...
+Evaluating:   0%|          | 0/500 [00:00<?, ?it/s]Evaluating:   3%|▎         | 15/500 [07:35<4:05:30, 30.37s/it]Evaluating:   3%|▎         | 16/500 [14:23<8:29:41, 63.19s/it]Evaluating:   3%|▎         | 17/500 [22:06<14:24:18, 107.37s/it]Evaluating:   4%|▎         | 18/500 [31:52<23:06:44, 172.62s/it]  Warning: batch import failed/timed out: Command '['uteke', '--store', '/tmp/uteke-lmeval-y5aohsnd', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-import-q_msh57t.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+Evaluating:   4%|▍         | 19/500 [41:58<32:30:37, 243.32s/it]  Warning: batch import failed/timed out: Command '['uteke', '--store', '/tmp/uteke-lmeval-y5aohsnd', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-import-1xx85tph.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+Evaluating:   4%|▍         | 20/500 [52:03<41:32:45, 311.60s/it]  Warning: batch import failed/timed out: Command '['uteke', '--store', '/tmp/uteke-lmeval-y5aohsnd', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-import-5o53madv.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+Evaluating:   4%|▍         | 21/500 [1:02:08<49:44:53, 373.89s/it]  Warning: batch import failed/timed out: Command '['uteke', '--store', '/tmp/uteke-lmeval-y5aohsnd', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-import-01m2v9i4.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+Evaluating:   4%|▍         | 22/500 [1:12:14<56:50:19, 428.07s/it]  Warning: batch import failed/timed out: Command '['uteke', '--store', '/tmp/uteke-lmeval-y5aohsnd', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-import-2d_meu1t.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+Evaluating:   5%|▍         | 23/500 [1:22:20<62:36:28, 472.51s/it]  Warning: batch import failed/timed out: Command '['uteke', '--store', '/tmp/uteke-lmeval-y5aohsnd', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-import-vl928tor.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+Evaluating:   5%|▍         | 24/500 [1:32:23<66:59:24, 506.65s/it]  Warning: batch import failed/timed out: Command '['uteke', '--store', '/tmp/uteke-lmeval-y5aohsnd', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-import-24qn7rcy.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+Evaluating:   5%|▌         | 25/500 [1:42:26<70:19:46, 533.02s/it]Evaluating:   5%|▌         | 26/500 [1:50:27<68:15:37, 518.43s/it]Evaluating:   5%|▌         | 27/500 [1:57:39<64:51:38, 493.65s/it]Evaluating:   6%|▌         | 28/500 [2:05:34<64:01:55, 488.38s/it]  Warning: batch import failed/timed out: Command '['uteke', '--store', '/tmp/uteke-lmeval-y5aohsnd', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-import-cj917g08.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+Evaluating:   6%|▌         | 29/500 [2:15:37<68:16:03, 521.79s/it]Evaluating:   6%|▌         | 30/500 [2:23:00<65:06:58, 498.76s/it]  Warning: batch import failed/timed out: uteke failed: uteke --store /tmp/uteke-lmeval-y5aohsnd --namespace lmeval --json import /tmp/uteke-import-6sk959vc.jsonl --format jsonl
+stderr: 
+Evaluating:   6%|▌         | 31/500 [2:29:28<60:40:52, 465.78s/it]  Warning: batch import failed/timed out: Command '['uteke', '--store', '/tmp/uteke-lmeval-y5aohsnd', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-import-3dtbptxf.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+Evaluating:   6%|▋         | 32/500 [2:39:32<65:54:39, 507.01s/it]  Warning: batch import failed/timed out: Command '['uteke', '--store', '/tmp/uteke-lmeval-y5aohsnd', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-import-pvs85lvm.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+Evaluating:   7%|▋         | 33/500 [2:49:36<69:30:22, 535.81s/it]  Warning: batch import failed/timed out: Command '['uteke', '--store', '/tmp/uteke-lmeval-y5aohsnd', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-import-htjom1vb.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+Evaluating:   7%|▋         | 34/500 [2:59:40<71:59:43, 556.19s/it]  Warning: batch import failed/timed out: Command '['uteke', '--store', '/tmp/uteke-lmeval-y5aohsnd', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-import-4pxegahi.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+Evaluating:   7%|▋         | 35/500 [3:09:44<73:40:36, 570.40s/it]  Warning: batch import failed/timed out: Command '['uteke', '--store', '/tmp/uteke-lmeval-y5aohsnd', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-import-2vuamdz4.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+Evaluating:   7%|▋         | 36/500 [3:19:48<74:48:42, 580.44s/it]  Warning: batch import failed/timed out: Command '['uteke', '--store', '/tmp/uteke-lmeval-y5aohsnd', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-import-sdbudasi.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+Evaluating:   7%|▋         | 37/500 [3:29:51<75:32:31, 587.37s/it]  Warning: batch import failed/timed out: Command '['uteke', '--store', '/tmp/uteke-lmeval-y5aohsnd', '--namespace', 'lmeval', '--json', 'import', '/tmp/uteke-import-j6zc_m51.jsonl', '--format', 'jsonl']' timed out after 600 seconds
+Evaluating:   8%|▊         | 38/500 [3:39:55<76:00:07, 592.22s/it]  Warning: batch import failed/timed out: uteke failed: uteke --store /tmp/uteke-lmeval-y5aohsnd --namespace lmeval --json import /tmp/uteke-import-fzs_dhcz.jsonl --format jsonl
+stderr: 
+Evaluating:   8%|▊         | 39/500 [3:42:20<58:41:43, 458.36s/it]Evaluating:   8%|▊         | 40/500 [3:50:11<59:01:15, 461.90s/it]Evaluating:   8%|▊         | 41/500 [3:56:56<56:44:28, 445.03s/it]Evaluating:   8%|▊         | 42/500 [4:03:49<55:23:48, 435.43s/it]Evaluating:   9%|▊         | 43/500 [4:10:58<55:00:35, 433.34s/it]Evaluating:   9%|▉         | 44/500 [4:17:31<53:22:25, 421.37s/it]Evaluating:   9%|▉         | 45/500 [4:24:27<53:02:48, 419.71s/it]Evaluating:   9%|▉         | 46/500 [4:31:13<52:25:41, 415.73s/it]Evaluating:   9%|▉         | 47/500 [4:38:07<52:14:41, 415.19s/it]

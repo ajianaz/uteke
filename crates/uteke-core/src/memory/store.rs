@@ -2,7 +2,7 @@
 
 use crate::Error;
 use crate::memory::types::Memory;
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 
 /// Schema SQL for initial table creation.
 /// Base schema — CREATE TABLE statements only.
@@ -273,60 +273,92 @@ impl Store {
     /// Recalculate importance for all memories.
     /// importance = 0.3*access_score + 0.3*recency_score + 0.2*connectivity + 0.2*is_pinned
     pub fn recompute_importance(&self) -> Result<usize, Error> {
-        let memories = self.load_all(None)?;
+        // Load only the columns needed for importance calculation (#1004).
+        // Previously loaded full Memory structs (including embeddings) just to
+        // read numeric fields — wasteful for large stores.
+        let sql = "SELECT id, access_count, last_accessed, metadata, importance, pinned FROM memories";
+        let mut stmt = self
+            .conn
+            .prepare(sql)
+            .map_err(|e| Error::db("prepare recompute_importance", e))?;
+
+        let rows: Vec<(String, i64, Option<String>, String, f64, bool)> = stmt
+            .query_map([], |row| {
+                let last_accessed: Option<String> = row.get(2)?;
+                let metadata_json: String = row.get(3)?;
+                Ok((
+                    row.get(0)?,         // id
+                    row.get(1)?,         // access_count
+                    last_accessed,       // last_accessed (ISO string)
+                    metadata_json,       // metadata (JSON string)
+                    row.get(4)?,         // importance
+                    row.get(5)?,         // pinned
+                ))
+            })
+            .map_err(|e| Error::db("query recompute_importance", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+
+        // Single transaction for all updates (#1004).
+        // Previously issued individual UPDATE per memory — N round-trips to disk.
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| Error::db("begin recompute_importance transaction", e))?;
+
         let mut updated = 0;
         let now = chrono::Utc::now();
 
-        for m in &memories {
+        for (id, access_count, last_accessed_str, metadata_json, old_importance, pinned) in &rows {
             // Skip pinned — they stay at 1.0
-            if m.pinned {
-                if (m.importance - 1.0).abs() > f64::EPSILON {
-                    self.conn
-                        .execute(
-                            "UPDATE memories SET importance = 1.0 WHERE id = ?1",
-                            rusqlite::params![m.id],
-                        )
-                        .map_err(|e| Error::db("update importance", e))?;
+            if *pinned {
+                if (old_importance - 1.0).abs() > f64::EPSILON {
+                    let _ = self.conn.execute(
+                        "UPDATE memories SET importance = 1.0 WHERE id = ?1",
+                        params![id],
+                    );
                     updated += 1;
                 }
                 continue;
             }
 
             // access_score: normalized by count (cap at 10 accesses = 1.0)
-            let access_score = (m.access_count as f64 / 10.0).min(1.0);
+            let access_score = (*access_count as f64 / 10.0).min(1.0);
 
             // recency_score: exponential decay (half-life 30 days)
-            let days_since = m
-                .last_accessed
-                .map(|la| (now - la).num_days().max(0) as f64)
-                .unwrap_or(365.0); // Never accessed = very old
-            let recency_score = (-0.693_f64 * days_since / 30.0_f64).exp(); // e^(-ln2 * days/30)
+            let days_since = last_accessed_str
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| (now - dt.with_timezone(&chrono::Utc)).num_days().max(0) as f64)
+                .unwrap_or(365.0);
+            let recency_score = (-0.693_f64 * days_since / 30.0_f64).exp();
 
             // connectivity: count relationships in metadata
-            let rel_count = m
-                .metadata
-                .get("relationships")
-                .and_then(|v| v.as_array())
-                .map(|a| a.len())
+            let rel_count = serde_json::from_str::<serde_json::Value>(&metadata_json)
+                .ok()
+                .and_then(|v| v.get("relationships")?.as_array().map(|a| a.len()))
                 .unwrap_or(0) as f64;
             let connectivity = (rel_count / 5.0).min(1.0);
 
-            let importance = 0.3 * access_score
+            let importance = (0.3 * access_score
                 + 0.3 * recency_score
                 + 0.2 * connectivity
-                + 0.2 * if m.pinned { 1.0 } else { 0.0 };
-            let importance = importance.clamp(0.0_f64, 1.0_f64);
+                + 0.2 * if *pinned { 1.0 } else { 0.0 })
+                .clamp(0.0_f64, 1.0_f64);
 
-            if (m.importance - importance).abs() > f64::EPSILON {
-                self.conn
-                    .execute(
-                        "UPDATE memories SET importance = ?1 WHERE id = ?2",
-                        rusqlite::params![importance, m.id],
-                    )
-                    .map_err(|e| Error::db("update importance", e))?;
+            if (old_importance - importance).abs() > f64::EPSILON {
+                let _ = self.conn.execute(
+                    "UPDATE memories SET importance = ?1 WHERE id = ?2",
+                    params![importance, id],
+                );
                 updated += 1;
             }
         }
+
+        self.conn
+            .execute_batch("COMMIT")
+            .map_err(|e| Error::db("commit recompute_importance transaction", e))?;
+
         Ok(updated)
     }
 }

@@ -35,7 +35,7 @@ fn main() {
             | Commands::Bench { .. }
             | Commands::Upgrade { .. }
     );
-    let update_handle = if !early_exit {
+    let _update_handle = if !early_exit {
         commands::update_check::spawn()
     } else {
         None
@@ -99,9 +99,7 @@ fn main() {
         tracing::info!("Server detected at {server_url}, routing via HTTP");
         match commands::run_via_server(&cli, &server_url) {
             Ok(()) => {
-                if let Some(handle) = update_handle {
-                    let _ = handle.join();
-                }
+                // Update check thread is detached (#1006) — no join needed.
                 return;
             }
             Err(e) if e == "unsupported" => {
@@ -196,10 +194,11 @@ fn main() {
 
     let result = commands::run_command(&cli, &mut uteke, &config);
 
-    // Wait for update check thread to finish before shutdown.
-    if let Some(handle) = update_handle {
-        let _ = handle.join();
-    }
+    // Update check thread is detached (#1006).
+    // Previously handle.join() blocked process exit waiting for an HTTP
+    // roundtrip to the update server — adding 200-2000ms latency to every
+    // CLI invocation. The thread is already background-only and its output
+    // is a non-critical banner. Let it die with the process.
 
     if let Err(e) = uteke.shutdown() {
         tracing::warn!("Shutdown flush failed: {e}");

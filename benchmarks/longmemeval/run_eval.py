@@ -52,7 +52,7 @@ def run_uteke(args, store_path, subcommand, extra_args=None):
     ] + subcommand
     if extra_args:
         cmd += extra_args
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     if result.returncode != 0:
         raise RuntimeError(f"uteke failed: {' '.join(cmd)}\nstderr: {result.stderr}")
     return result.stdout.strip()
@@ -60,7 +60,8 @@ def run_uteke(args, store_path, subcommand, extra_args=None):
 
 def insert_sessions(args, store_path, entry):
     """
-    Insert all haystack sessions for one question into uteke.
+    Insert all haystack sessions for one question into uteke via batch JSONL import.
+    This spawns ONE uteke process (one model load) instead of N individual `remember` calls.
     Returns: (set of successfully inserted session_ids,
               dict session_id -> set of turn indices that has answers,
               dict memory_id -> session_id).
@@ -73,40 +74,57 @@ def insert_sessions(args, store_path, entry):
     inserted_sids = set()  # track which sessions actually inserted
     mid_to_sid = {}  # memory_id -> session_id mapping
 
-    for i, (sid, session) in enumerate(zip(session_ids, sessions)):
-        text = session_to_text(session)
+    # Build JSONL file for batch import
+    import tempfile
+    jsonl_fd, jsonl_path = tempfile.mkstemp(suffix=".jsonl", prefix="uteke-import-")
+    try:
+        import os as _os
+        with _os.fdopen(jsonl_fd, 'w') as f:
+            for i, (sid, session) in enumerate(zip(session_ids, sessions)):
+                text = session_to_text(session)
+                date = dates[i] if i < len(dates) else None
 
-        # Build metadata
-        tag = "longmemeval"
-        date = dates[i] if i < len(dates) else None
+                meta = {"session_id": sid}
+                if date:
+                    meta["date"] = date
 
-        # Use --meta for session_id and date
-        meta_parts = [f"session_id:{sid}"]
-        if date:
-            meta_parts.append(f"date:{date}")
-        meta_str = ",".join(meta_parts)
+                record = {
+                    "content": text,
+                    "tags": ["longmemeval"],  # MUST be array, not string
+                    "type": "context",
+                    "metadata": meta,
+                }
+                f.write(json.dumps(record) + "\n")
 
-        # Insert
+        # Single batch import — one model load for ALL sessions
         try:
             stdout = run_uteke(args, store_path, [
-                "remember", text,
-                "--tags", tag,
-                "--meta", meta_str,
-                "--type", "context",
+                "import", jsonl_path,
+                "--format", "jsonl",
             ])
-            inserted_sids.add(sid)
 
-            # Parse memory_id from insert response
+            # Import returns {"imported": N, "skipped": M}
+            # We don't get individual IDs, so we accept all session_ids as inserted
+            # Session_id mapping is done via metadata in recall results
             try:
-                insert_data = json.loads(stdout)
-                if isinstance(insert_data, dict) and "id" in insert_data:
-                    mid_to_sid[insert_data["id"]] = sid
+                import_data = json.loads(stdout)
+                imported_count = import_data.get("imported", 0) if isinstance(import_data, dict) else 0
             except (json.JSONDecodeError, KeyError):
-                pass
-        except RuntimeError as e:
-            print(f"  Warning: insert failed for session {sid}: {e}", file=sys.stderr)
+                imported_count = 0
 
-        # Track answer turns
+            # Only mark as inserted if import succeeded
+            if imported_count > 0:
+                for sid in session_ids:
+                    inserted_sids.add(sid)
+
+        except (RuntimeError, subprocess.TimeoutExpired) as e:
+            print(f"  Warning: batch import failed/timed out: {e}", file=sys.stderr)
+    finally:
+        import os as _os
+        _os.unlink(jsonl_path)
+
+    # Track answer turns
+    for sid, session in zip(session_ids, sessions):
         answer_indices = set()
         for j, turn in enumerate(session):
             if turn_has_answer(turn):
@@ -136,8 +154,8 @@ def recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids,
             "--tags", "longmemeval",
             "--min", "0.0",  # Disable threshold — evaluate raw retrieval ranking (#995)
         ])
-    except RuntimeError as e:
-        print(f"  Warning: recall failed: {e}", file=sys.stderr)
+    except (RuntimeError, subprocess.TimeoutExpired) as e:
+        print(f"  Warning: recall failed/timed out: {e}", file=sys.stderr)
         return None
 
     # Parse results
@@ -150,20 +168,21 @@ def recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids,
     if not isinstance(results, list):
         results = [results]
 
-    # Extract session_ids via memory_id -> session_id mapping.
-    # Recall JSON in uteke 0.7+ returns memory_id, not metadata fields.
-    # We built mid_to_sid during insert to bridge this.
+    # Extract session_ids from recall metadata.
+    # Uteke recall returns memory_id + metadata.session_id for each result.
+    # We also fall back to mid_to_sid for older versions.
     retrieved_session_ids = []
     for r in results:
+        # Primary: read session_id directly from metadata
+        meta = r.get("metadata", {})
+        sid = meta.get("session_id")
+        if sid:
+            retrieved_session_ids.append(sid)
+            continue
+        # Fallback: memory_id -> session_id mapping from insert
         mid = r.get("memory_id") or r.get("id")
         if mid and mid in mid_to_sid:
             retrieved_session_ids.append(mid_to_sid[mid])
-        else:
-            # Fallback: try metadata (older uteke versions)
-            meta = r.get("metadata", {})
-            sid = meta.get("session_id")
-            if sid:
-                retrieved_session_ids.append(sid)
 
     # --- Session-level metrics ---
     # Recall@k: fraction of evidence sessions in top-k
@@ -293,7 +312,7 @@ def main():
             # If forget fails, wipe the entire store to guarantee a clean slate.
             try:
                 run_uteke(args, store_path, ["forget", "--all", "--confirm"])
-            except RuntimeError:
+            except (RuntimeError, subprocess.TimeoutExpired):
                 print(f"  Warning: forget --all failed; removing store to reset", file=sys.stderr)
                 shutil.rmtree(store_path, ignore_errors=True)
                 store_path.mkdir(parents=True, exist_ok=True)

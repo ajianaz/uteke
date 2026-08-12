@@ -18,6 +18,7 @@ impl crate::Uteke {
                 metadata: m.metadata,
                 created_at: m.created_at,
                 source: m.source,
+                embedding: None,
             })
             .collect();
 
@@ -39,7 +40,10 @@ impl crate::Uteke {
     /// - Single JSON object: `{"content":"..."}`
     ///
     /// Required field: `content`. Optional fields default automatically.
-    /// Embeddings are re-computed during import.
+    ///
+    /// If an entry includes a pre-computed `embedding` field, the embedder
+    /// is NOT called for that entry — the provided vector is used directly.
+    /// This enables offline import with vectors from an external batch pipeline.
     pub fn import(&self, input: &str, namespace: Option<&str>) -> Result<ImportResult, Error> {
         let trimmed = input.trim();
 
@@ -71,21 +75,69 @@ impl crate::Uteke {
 
         let mut imported = 0;
 
+        // Only initialize the embedder if at least one entry needs embedding.
+        // Entries with pre-computed `embedding` field skip the embedder entirely.
+        let needs_embedder = entries.iter().any(|e| e.embedding.is_none());
+        if needs_embedder {
+            self.ensure_embedder()?;
+        }
+
         for entry in entries {
             if entry.content.is_empty() {
                 skipped += 1;
                 continue;
             }
 
-            // Re-embed the content
-            self.ensure_embedder()?;
-            let embedding = self
-                .embedder
-                .lock()
-                .map_err(|_| Error::lock("embedder lock during import"))?
-                .as_ref()
-                .expect("embedder ensured above")
-                .embed(&entry.content)?;
+            // Use pre-computed embedding if provided, otherwise re-embed with retry.
+            let embedding = match entry.embedding {
+                Some(emb) => emb,
+                None => {
+                    // Retry embedding generation up to 3 times with exponential backoff (#621).
+                    const MAX_RETRIES: usize = 3;
+                    let mut delay = std::time::Duration::from_millis(200);
+                    let mut last_err: Option<Error> = None;
+                    let mut ok: Option<Vec<f32>> = None;
+                    for _attempt in 0..MAX_RETRIES {
+                        let lock = self
+                            .embedder
+                            .lock()
+                            .map_err(|_| Error::lock("embedder lock during import"))?;
+                        match lock.as_ref().expect("embedder ensured above").embed(&entry.content) {
+                            Ok(emb) => {
+                                ok = Some(emb);
+                                break;
+                            }
+                            Err(e) => {
+                                last_err = Some(e);
+                                drop(lock);
+                                std::thread::sleep(delay);
+                                delay *= 2;
+                            }
+                        }
+                    }
+                    match ok {
+                        Some(emb) => emb,
+                        None => {
+                            tracing::warn!(
+                                "Import entry failed after {MAX_RETRIES} retries: {:?}",
+                                last_err
+                            );
+                            skipped += 1;
+                            continue;
+                        }
+                    }
+                }
+            };
+
+            // Dedup check — parity with remember path (#1005).
+            // Skip if an existing memory has cosine >= 0.95.
+            if let Some(_existing_id) = self.check_duplicate(&embedding, namespace)? {
+                tracing::debug!(
+                    "Import dedup: skipping near-duplicate of {_existing_id}"
+                );
+                skipped += 1;
+                continue;
+            }
 
             let id = uuid::Uuid::new_v4().to_string();
             let now = chrono::Utc::now();
@@ -136,6 +188,11 @@ impl crate::Uteke {
                 skipped += 1;
                 continue;
             }
+
+            // Auto-link to similar memories — parity with remember path (#1005).
+            // This ensures imported memories get the same edge relationships
+            // as memories added via remember().
+            self.auto_link_cosine(&id, &embedding, namespace);
 
             imported += 1;
         }
@@ -192,6 +249,7 @@ mod tests {
             metadata: serde_json::json!({}),
             created_at: chrono::Utc::now(),
             source: None,
+            embedding: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         let restored: ExportEntry = serde_json::from_str(&json).unwrap();
