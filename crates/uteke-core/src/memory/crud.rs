@@ -648,6 +648,20 @@ impl super::Store {
         Ok(ids)
     }
 
+    /// Get the namespace of a single memory by ID (#1003).
+    /// O(1) query — used for per-candidate namespace filtering instead of
+    /// fetching the entire namespace ID set.
+    pub fn get_namespace_for(&self, id: &str) -> Result<Option<String>, Error> {
+        self.conn
+            .query_row(
+                "SELECT namespace FROM memories WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| Error::db("get_namespace_for", e))
+    }
+
     /// Count memories grouped by memory_type in a namespace.
     pub fn memory_type_counts(&self, namespace: &str) -> Result<Vec<(String, usize)>, Error> {
         let mut stmt = self

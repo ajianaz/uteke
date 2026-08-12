@@ -192,10 +192,19 @@ impl OnnxEmbedder {
             verify_checksum(&tokenizer_path, "tokenizer.json")?;
         }
 
-        // Load ONNX session — use all cores for intra-op parallelism
-        let num_threads = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4);
+        // Load ONNX session — respect UT_ORT_THREADS env override, default to all cores.
+        // Reducing threads helps under parallel workloads where multiple processes
+        // compete for CPU (#1002). e.g. UT_ORT_THREADS=2 allows 2 safe parallel workers
+        // on a 4-core machine without thread contention.
+        let num_threads = std::env::var("UT_ORT_THREADS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4)
+            });
         let session = ort::session::Session::builder()
             .map_err(|e| Error::embed("ONNX session builder", e))?
             .with_intra_threads(num_threads)
@@ -229,8 +238,25 @@ impl OnnxEmbedder {
                 .as_ref()
                 .ok_or_else(|| Error::embed_msg("tokenizer not loaded after lazy_load"))?;
 
+            // Pre-truncate: estimate MAX_SEQ_LEN tokens ≈ 4× tokens per char heuristic.
+            // The HuggingFace tokenizer encodes the ENTIRE text even when we only
+            // use the first MAX_SEQ_LEN tokens below. For long inputs (e.g. 79K words)
+            // this wastes ~10s tokenizing text that gets discarded (#1002).
+            // We pre-truncate to ~8K chars (≈2K tokens) before encoding to avoid this.
+            // 8K chars is generous — ensures we don't cut mid-multibyte or mid-word.
+            let pre_truncated: &str = if text.len() > 8000 {
+                // Find a safe boundary (char boundary) near 8K chars
+                let mut end = 8000;
+                while end > 0 && !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                &text[..end]
+            } else {
+                text
+            };
+
             let encoding = tokenizer
-                .encode(text, true)
+                .encode(pre_truncated, true)
                 .map_err(|e| Error::embed("tokenize text", e))?;
 
             let input_ids = encoding.get_ids();

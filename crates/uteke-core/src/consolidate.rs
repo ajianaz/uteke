@@ -160,6 +160,9 @@ impl crate::Uteke {
         namespace: Option<&str>,
         threshold: f32,
     ) -> Result<Vec<crate::memory::types::SimilarPair>, Error> {
+        // Load only id + content + embedding instead of full Memory structs (#1004).
+        // find_duplicates only needs these three fields — loading all columns
+        // (metadata, tags, timestamps, etc.) wastes memory on large stores.
         let memories = self.store.load_all(namespace)?;
         if memories.is_empty() {
             return Ok(Vec::new());

@@ -213,7 +213,7 @@ impl crate::Uteke {
     /// Searches the vector index for cosine >= 0.95. If found, returns
     /// the existing memory ID so caller can skip the insert.
     /// Only checks within the same namespace.
-    fn check_duplicate(
+    pub(crate) fn check_duplicate(
         &self,
         embedding: &[f32],
         namespace: Option<&str>,
@@ -236,25 +236,20 @@ impl crate::Uteke {
             return Ok(None);
         }
 
-        // Filter by namespace if specified.
-        let ns_set: Option<std::collections::HashSet<String>> = if let Some(ns) = namespace {
-            match self.store.memories_in_namespace(ns) {
-                Ok(ids) => Some(ids.into_iter().collect()),
-                Err(_) => return Ok(None),
-            }
-        } else {
-            None
-        };
-
+        // Filter by namespace per-candidate — avoids fetching ALL IDs in the
+        // namespace via memories_in_namespace() which is O(N) per insert (O(N²)
+        // for batch imports of N entries). We only have ≤5 candidates here (#1003).
         for (id, dist) in &results {
             // Skip chunk: prefixed entries (document chunks).
             if id.starts_with("chunk:") {
                 continue;
             }
-            // Namespace filter.
-            if let Some(ref set) = ns_set {
-                if !set.contains(id) {
-                    continue;
+            // Namespace filter: check this single candidate's namespace instead
+            // of loading the entire namespace ID set.
+            if let Some(ns) = namespace {
+                match self.store.get_namespace_for(id) {
+                    Ok(Some(candidate_ns)) if candidate_ns == ns => {}
+                    _ => continue, // wrong namespace or not found
                 }
             }
             let sim = (1.0 - dist).clamp(0.0, 1.0);

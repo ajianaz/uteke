@@ -12,6 +12,7 @@
 
 use std::path::Path;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
@@ -25,6 +26,7 @@ use crate::embed::Embedder;
 /// Thread-safe via internal `Mutex` on the `Connection`.
 pub struct EmbeddingCache {
     conn: Mutex<Connection>,
+    insert_counter: AtomicU64,
 }
 
 impl EmbeddingCache {
@@ -51,6 +53,7 @@ impl EmbeddingCache {
 
         Ok(Self {
             conn: Mutex::new(conn),
+            insert_counter: AtomicU64::new(0),
         })
     }
 
@@ -94,6 +97,44 @@ impl EmbeddingCache {
                  VALUES (?1, ?2, ?3)",
                 rusqlite::params![&key, model_name, &blob],
             );
+
+            // Eviction: probabilistic cleanup every ~128 inserts (#1003).
+            // Delete entries older than 30 days, and cap at MAX_CACHE_ENTRIES.
+            // Using counter % 128 == 0 keeps amortized cost at ~1 DELETE per insert
+            // without running cleanup on every single store() call.
+            const MAX_CACHE_ENTRIES: i64 = 100_000;
+            const CLEANUP_INTERVAL: u64 = 128;
+
+            let count = self.insert_counter.fetch_add(1, Ordering::Relaxed) + 1;
+            if count % CLEANUP_INTERVAL == 0 {
+                // Age-based eviction: delete entries older than 30 days
+                let _ = conn.execute(
+                    "DELETE FROM embedding_cache
+                     WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')",
+                    [],
+                );
+
+                // Size-based eviction: if over limit, delete oldest entries
+                let count: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM embedding_cache",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+                if count > MAX_CACHE_ENTRIES {
+                    let excess = count - MAX_CACHE_ENTRIES;
+                    let _ = conn.execute(
+                        "DELETE FROM embedding_cache
+                         WHERE text_hash IN (
+                             SELECT text_hash FROM embedding_cache
+                             ORDER BY created_at ASC
+                             LIMIT ?1
+                         )",
+                        rusqlite::params![excess],
+                    );
+                }
+            }
         }
     }
 
