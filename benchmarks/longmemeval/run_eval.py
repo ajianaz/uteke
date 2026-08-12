@@ -4,10 +4,23 @@ LongMemEval retrieval evaluation harness for uteke.
 
 Measures how well uteke recalls evidence sessions/turns for each question.
 
+Supports two modes:
+  --precompute-embeddings: Pre-compute embeddings via an OpenAI-compatible
+                           API before import. Uteke imports the pre-computed
+                           vectors and skips local embedding entirely.
+                           This is dramatically faster for large datasets.
+
 Usage:
+    # Standard mode (local embedding)
     python run_eval.py --data data/longmemeval_oracle.json --output results/
-    python run_eval.py --data data/longmemeval_oracle.json --limit 50  # quick test
-    python run_eval.py --data data/longmemeval_oracle.json --namespace lmeval
+
+    # Pre-computed mode (remote embedding API)
+    python run_eval.py --data data/longmemeval_s_cleaned.json \
+        --output results/ \
+        --precompute-embeddings \
+        --embed-api-base https://your-embed-endpoint.example.com \
+        --embed-api-key YOUR_KEY \
+        --embed-model gemma-768
 """
 
 import argparse
@@ -21,10 +34,63 @@ import time
 from pathlib import Path
 
 try:
+    import urllib.request
+    import urllib.error
+except ImportError:
+    pass
+
+try:
     from tqdm import tqdm
 except ImportError:
     def tqdm(x, **kwargs):
         return x
+
+
+# ========= Embedding API Client =========
+
+def batch_embed_texts(texts, api_base, api_key, model, batch_size=50):
+    """
+    Call an OpenAI-compatible /v1/embeddings endpoint to embed texts in batches.
+
+    Args:
+        texts: List of strings to embed.
+        api_base: Base URL (e.g. https://host.example.com — no trailing slash).
+        api_key: Bearer token for auth.
+        model: Model name for the API.
+        batch_size: Texts per HTTP request.
+
+    Returns:
+        List of embedding vectors (list[list[float]]), same order as input.
+    """
+    all_vectors = []
+    url = f"{api_base.rstrip('/')}/v1/embeddings"
+
+    for i in range(0, len(texts), batch_size):
+        chunk = texts[i : i + batch_size]
+        body = json.dumps({"model": model, "input": chunk}).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=300) as resp:
+                    data = json.loads(resp.read())
+                    # Sort by index to guarantee order
+                    items = sorted(data["data"], key=lambda d: d["index"])
+                    all_vectors.extend(d["embedding"] for d in items)
+                    break
+            except Exception as e:
+                if attempt == 2:
+                    print(f"  Embedding API error (batch {i}): {e}", file=sys.stderr)
+                    raise
+                time.sleep(2 ** attempt)
+
+    return all_vectors
 
 
 def session_to_text(session):
@@ -62,6 +128,11 @@ def insert_sessions(args, store_path, entry):
     """
     Insert all haystack sessions for one question into uteke via batch JSONL import.
     This spawns ONE uteke process (one model load) instead of N individual `remember` calls.
+
+    When --precompute-embeddings is enabled, session texts are embedded via the
+    configured embedding API before import, and the JSONL includes pre-computed
+    vectors. Uteke then imports without calling its local embedder.
+
     Returns: (set of successfully inserted session_ids,
               dict session_id -> set of turn indices that has answers,
               dict memory_id -> session_id).
@@ -80,20 +151,43 @@ def insert_sessions(args, store_path, entry):
     try:
         import os as _os
         with _os.fdopen(jsonl_fd, 'w') as f:
+            # Convert sessions to text first
+            texts = []
+            metas = []
             for i, (sid, session) in enumerate(zip(session_ids, sessions)):
                 text = session_to_text(session)
                 date = dates[i] if i < len(dates) else None
-
                 meta = {"session_id": sid}
                 if date:
                     meta["date"] = date
+                texts.append(text)
+                metas.append(meta)
 
+            # Pre-compute embeddings via API if enabled
+            if args.precompute_embeddings:
+                t0 = time.time()
+                vectors = batch_embed_texts(
+                    texts,
+                    args.embed_api_base,
+                    args.embed_api_key,
+                    args.embed_model,
+                    batch_size=args.embed_batch_size,
+                )
+                embed_elapsed = time.time() - t0
+                print(f"  Embedded {len(vectors)} sessions in {embed_elapsed:.1f}s", file=sys.stderr)
+            else:
+                vectors = [None] * len(texts)
+
+            # Write JSONL
+            for text, meta, vector in zip(texts, metas, vectors):
                 record = {
                     "content": text,
-                    "tags": ["longmemeval"],  # MUST be array, not string
+                    "tags": ["longmemeval"],
                     "type": "context",
                     "metadata": meta,
                 }
+                if vector is not None:
+                    record["embedding"] = vector
                 f.write(json.dumps(record) + "\n")
 
         # Single batch import — one model load for ALL sessions
@@ -239,7 +333,26 @@ def main():
                         help="Resume from existing results file (skip already-evaluated questions)")
     parser.add_argument("--reset-every", type=int, default=20,
                         help="Wipe and recreate the store every N questions to prevent memory buildup (default: 20)")
+
+    # Pre-computed embeddings via external API
+    parser.add_argument("--precompute-embeddings", action="store_true",
+                        help="Pre-compute embeddings via an OpenAI-compatible API before import")
+    parser.add_argument("--embed-api-base", default=os.environ.get("EMBED_API_BASE", ""),
+                        help="Embedding API base URL (e.g. https://host.example.com)")
+    parser.add_argument("--embed-api-key", default=os.environ.get("EMBED_API_KEY", ""),
+                        help="Bearer token for the embedding API")
+    parser.add_argument("--embed-model", default=os.environ.get("EMBED_MODEL", "gemma-768"),
+                        help="Model name for the embedding API")
+    parser.add_argument("--embed-batch-size", type=int, default=50,
+                        help="Number of texts per embedding API request (default: 50)")
+
+    # Validate pre-compute args
     args = parser.parse_args()
+    if args.precompute_embeddings:
+        if not args.embed_api_base:
+            parser.error("--embed-api-base is required when --precompute-embeddings is set")
+        if not args.embed_api_key:
+            parser.error("--embed-api-key is required when --precompute-embeddings is set")
 
     # Load data
     with open(args.data) as f:
@@ -251,6 +364,11 @@ def main():
     print(f"LongMemEval retrieval evaluation")
     print(f"  Questions: {len(data)}")
     print(f"  Namespace: {args.namespace}")
+    if args.precompute_embeddings:
+        print(f"  Mode: pre-computed embeddings via {args.embed_api_base}")
+        print(f"  Embed model: {args.embed_model}, batch size: {args.embed_batch_size}")
+    else:
+        print(f"  Mode: local embedding (ONNX)")
     print()
 
     # Create temp store
