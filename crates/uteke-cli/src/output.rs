@@ -83,7 +83,8 @@ pub(crate) fn print_unified_human(results: &[uteke_core::UnifiedSearchResult]) {
                     println!("     Type: {}", mt);
                 }
                 if let Some(src) = &r.source {
-                    println!("     Source: {}", src);
+                    let st = r.source_type.as_deref().unwrap_or("user");
+                    println!("     Source: {src} ({st})");
                 }
                 if let Some(imp) = r.importance {
                     println!("     Importance: {:.2}", imp);
