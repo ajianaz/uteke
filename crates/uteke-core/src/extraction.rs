@@ -27,14 +27,27 @@ pub const DEFAULT_MAX_FACTS: usize = 20;
 const REQUEST_TIMEOUT_SECS: u64 = 120;
 
 /// The instruction that turns raw text into atomic facts.
+///
+/// Two output formats are supported (#1009):
+/// - **Scene-segmented** (preferred): array of `{scene, memories: [{content, type, priority}]}`
+/// - **Flat array of strings** (legacy): `["fact one", "fact two"]` — graceful fallback.
 const SYSTEM_PROMPT: &str = "You extract durable, atomic facts from the user's text for a long-term memory store. \
 Rules:\n\
-- Output ONLY a JSON array of strings. No prose, no markdown, no code fences.\n\
-- Each string is ONE self-contained fact, decision, preference, or piece of context worth remembering later.\n\
-- Drop greetings, filler, tool output, navigation, and anything ephemeral.\n\
-- Resolve pronouns and make each fact understandable on its own.\n\
+- Output ONLY valid JSON. No prose, no markdown, no code fences.\n\
+- Prefer scene-segmented output: a JSON array where each element has \
+\"scene\" (short topic label) and \"memories\" (array of objects).\n\
+- Each memory object has: \"content\" (self-contained fact), \"type\" \
+(one of: fact, decision, preference, procedure, context), and \"priority\" \
+(0.0-1.0, where 1.0 = critical/long-lived, 0.3 = minor/trivial).\n\
+- If the text is single-topic, use a single scene.\n\
+- Backward compatible: a flat JSON array of strings is also accepted.\n\
+- Each fact must be self-contained — resolve pronouns.\n\
 - Prefer specific facts (names, dates, numbers, decisions) over vague summaries.\n\
-- If the text contains nothing worth remembering, output an empty array: []";
+- Drop greetings, filler, tool output, navigation, and anything ephemeral.\n\
+- If the text contains nothing worth remembering, output an empty array: []\n\
+\n\
+Example scene-segmented output:\n\
+[{\"scene\":\"auth refactor\",\"memories\":[{\"content\":\"Decided to use OAuth 2.1 with PKCE\",\"type\":\"decision\",\"priority\":0.9},{\"content\":\"Auth middleware runs before route handler\",\"type\":\"fact\",\"priority\":0.6}]}]";
 
 /// Configuration for the extraction pipeline.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -55,6 +68,39 @@ pub struct ExtractionConfig {
     pub endpoint_path: String,
     /// Maximum facts to keep per document. 0 = default.
     pub max_facts: usize,
+}
+
+/// A single extracted fact with scene segmentation and priority metadata (#1009).
+///
+/// When the LLM returns scene-segmented output, each fact carries:
+/// - `scene`: topic label (also injected as a `scene:xxx` tag)
+/// - `fact_type`: the memory type (fact, decision, preference, procedure, context)
+/// - `priority`: importance score 0.0–1.0 (mapped to uteke's `importance` field)
+///
+/// When the LLM returns a flat array of strings, `scene` is `None`,
+/// `fact_type` is `None`, and `priority` is `None` (caller uses defaults).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtractedFact {
+    /// The fact content — self-contained, no pronouns.
+    pub content: String,
+    /// Scene/topic label if the LLM segmented the output.
+    pub scene: Option<String>,
+    /// Memory type if the LLM provided one.
+    pub fact_type: Option<String>,
+    /// Priority/importance score 0.0–1.0 if the LLM provided one.
+    pub priority: Option<f64>,
+}
+
+impl ExtractedFact {
+    /// Create a flat fact with no metadata (legacy backward compat).
+    pub fn flat(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            scene: None,
+            fact_type: None,
+            priority: None,
+        }
+    }
 }
 
 /// An OpenAI-compatible chat-completions client used for fact extraction.
@@ -123,8 +169,9 @@ impl Extractor {
     /// Extract atomic facts from a single document.
     ///
     /// Returns the parsed list of facts (truncated to `max_facts`).
+    /// Each fact may carry scene, type, and priority metadata (#1009).
     /// An empty vec means the model found nothing worth keeping.
-    pub fn extract(&self, text: &str) -> Result<Vec<String>, Error> {
+    pub fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, Error> {
         if text.trim().is_empty() {
             return Ok(Vec::new());
         }
@@ -206,42 +253,120 @@ fn validate_base_url(base_url: &str) -> Result<(), Error> {
     Ok(())
 }
 
-/// Parse the model's reply into a clean list of facts.
-fn parse_facts(content: &str) -> Vec<String> {
+/// Parse the model's reply into a clean list of extracted facts.
+///
+/// Three formats are handled (#1009):
+/// 1. **Scene-segmented**: `[{scene, memories: [{content, type, priority}]}]`
+/// 2. **Flat object array**: `[{content, type, priority}]` or `[{fact: "..."}]`
+/// 3. **Flat string array**: `["fact one", "fact two"]` (legacy)
+/// 4. **Line-by-line fallback** when JSON parsing fails entirely.
+fn parse_facts(content: &str) -> Vec<ExtractedFact> {
     let cleaned = strip_code_fences(content.trim());
 
-    // Preferred path: a JSON array of strings somewhere in the reply.
     if let Some(arr) = extract_json_array(cleaned) {
         if let Ok(values) = serde_json::from_str::<Vec<serde_json::Value>>(arr) {
-            let facts: Vec<String> = values
+            // Try scene-segmented format first: [{scene, memories: [...]}]
+            if let Some(facts) = try_parse_scene_segmented(&values) {
+                return dedup_facts(facts);
+            }
+
+            // Fall back to flat array parsing (strings or objects)
+            let facts: Vec<ExtractedFact> = values
                 .into_iter()
                 .filter_map(|v| match v {
-                    serde_json::Value::String(s) => Some(s),
-                    // Tolerate models that return objects like {\"fact\": \"...\"}.
-                    serde_json::Value::Object(map) => map
-                        .get("fact")
-                        .or_else(|| map.get("text"))
-                        .or_else(|| map.get("content"))
-                        .and_then(|x| x.as_str())
-                        .map(|s| s.to_string()),
+                    serde_json::Value::String(s) => Some(ExtractedFact::flat(s)),
+                    serde_json::Value::Object(map) => parse_fact_object(&map),
                     _ => None,
                 })
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
+                .map(|f| ExtractedFact {
+                    content: f.content.trim().to_string(),
+                    ..f
+                })
+                .filter(|f| !f.content.is_empty())
                 .collect();
-            return dedup(facts);
+            return dedup_facts(facts);
         }
     }
 
     // Fallback: treat each non-empty line as a fact, stripping list markers.
-    let facts: Vec<String> = cleaned
+    let facts: Vec<ExtractedFact> = cleaned
         .lines()
         .map(|l| l.trim().trim_start_matches(['-', '*', '•']).trim())
         .map(strip_leading_number)
         .filter(|l| l.len() > 2)
-        .map(|l| l.to_string())
+        .map(ExtractedFact::flat)
         .collect();
-    dedup(facts)
+    dedup_facts(facts)
+}
+
+/// Try to parse scene-segmented output: `[{scene, memories: [{content, type, priority}]}]`.
+///
+/// Returns `Some(vec)` only if at least one element matches the scene structure.
+/// If no element has a `memories` array, returns `None` (caller tries flat parsing).
+fn try_parse_scene_segmented(values: &[serde_json::Value]) -> Option<Vec<ExtractedFact>> {
+    let mut all_facts = Vec::new();
+    let mut found_scene = false;
+
+    for val in values {
+        let obj = val.as_object()?;
+        // A scene element must have a "memories" array.
+        let memories = obj.get("memories")?.as_array()?;
+        found_scene = true;
+
+        let scene = obj
+            .get("scene")
+            .and_then(|s| s.as_str())
+            .map(|s| s.trim().to_string());
+
+        for mem in memories {
+            if let Some(mem_obj) = mem.as_object() {
+                if let Some(fact) = parse_fact_object(mem_obj) {
+                    all_facts.push(ExtractedFact {
+                        scene: scene.clone(),
+                        ..fact
+                    });
+                }
+            }
+        }
+    }
+
+    if found_scene { Some(all_facts) } else { None }
+}
+
+/// Parse a single fact object: `{content, type, priority}` or `{fact: "..."}`.
+fn parse_fact_object(map: &serde_json::Map<String, serde_json::Value>) -> Option<ExtractedFact> {
+    let content = map
+        .get("content")
+        .or_else(|| map.get("fact"))
+        .or_else(|| map.get("text"))
+        .and_then(|v| v.as_str())?
+        .trim()
+        .to_string();
+    if content.is_empty() {
+        return None;
+    }
+
+    let fact_type = map
+        .get("type")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_lowercase());
+
+    let priority = map
+        .get("priority")
+        .and_then(|v| v.as_f64())
+        .filter(|&p| (0.0..=1.0).contains(&p));
+
+    let scene = map
+        .get("scene")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string());
+
+    Some(ExtractedFact {
+        content,
+        scene,
+        fact_type,
+        priority,
+    })
 }
 
 /// Remove a leading backtick-fence wrapper (```` ``` ```` or ```` ```lang ````) if present.
@@ -285,15 +410,17 @@ fn strip_leading_number(s: &str) -> &str {
 }
 
 /// Drop duplicate and empty facts while preserving order.
-fn dedup(facts: Vec<String>) -> Vec<String> {
+fn dedup_facts(facts: Vec<ExtractedFact>) -> Vec<ExtractedFact> {
     let mut seen: Vec<String> = Vec::with_capacity(facts.len());
+    let mut result = Vec::with_capacity(facts.len());
     for f in facts {
-        let f = f.trim().to_string();
-        if !f.is_empty() && !seen.iter().any(|x| x == &f) {
-            seen.push(f);
+        let key = f.content.trim().to_lowercase();
+        if !key.is_empty() && !seen.iter().any(|x| x == &key) {
+            seen.push(key);
+            result.push(f);
         }
     }
-    seen
+    result
 }
 
 #[derive(serde::Deserialize)]
@@ -363,40 +490,47 @@ mod tests {
     #[test]
     fn parses_clean_json_array() {
         let facts = parse_facts(r#"["User prefers Indonesian", "Bootcamp has 8 sessions"]"#);
-        assert_eq!(
-            facts,
-            vec!["User prefers Indonesian", "Bootcamp has 8 sessions"]
-        );
+        assert_eq!(facts.len(), 2);
+        assert_eq!(facts[0].content, "User prefers Indonesian");
+        assert_eq!(facts[1].content, "Bootcamp has 8 sessions");
+        assert!(facts[0].scene.is_none());
+        assert!(facts[0].fact_type.is_none());
+        assert!(facts[0].priority.is_none());
     }
 
     #[test]
     fn parses_json_array_inside_code_fence() {
         let raw = "```json\n[\"Fact A\", \"Fact B\"]\n```";
-        assert_eq!(parse_facts(raw), vec!["Fact A", "Fact B"]);
+        let facts = parse_facts(raw);
+        assert_eq!(facts.len(), 2);
+        assert_eq!(facts[0].content, "Fact A");
+        assert_eq!(facts[1].content, "Fact B");
     }
 
     #[test]
     fn parses_array_with_preamble() {
         let raw = "Here are the facts:\n[\"Only this matters\"]";
-        assert_eq!(parse_facts(raw), vec!["Only this matters"]);
+        let facts = parse_facts(raw);
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].content, "Only this matters");
     }
 
     #[test]
     fn parses_object_array_with_fact_key() {
         let raw = r#"[{"fact": "Deadline is July 31"}, {"fact": "Promo is 65 percent"}]"#;
-        assert_eq!(
-            parse_facts(raw),
-            vec!["Deadline is July 31", "Promo is 65 percent"]
-        );
+        let facts = parse_facts(raw);
+        assert_eq!(facts.len(), 2);
+        assert_eq!(facts[0].content, "Deadline is July 31");
+        assert_eq!(facts[1].content, "Promo is 65 percent");
     }
 
     #[test]
     fn falls_back_to_line_parsing() {
         let raw = "- First fact\n- Second fact\n1. Third fact";
-        assert_eq!(
-            parse_facts(raw),
-            vec!["First fact", "Second fact", "Third fact"]
-        );
+        let facts = parse_facts(raw);
+        assert_eq!(facts.len(), 3);
+        assert_eq!(facts[0].content, "First fact");
+        assert_eq!(facts[2].content, "Third fact");
     }
 
     #[test]
@@ -407,6 +541,71 @@ mod tests {
     #[test]
     fn dedups_repeated_facts() {
         let raw = r#"["Same", "Same", "Different"]"#;
-        assert_eq!(parse_facts(raw), vec!["Same", "Different"]);
+        let facts = parse_facts(raw);
+        assert_eq!(facts.len(), 2);
+        assert_eq!(facts[0].content, "Same");
+        assert_eq!(facts[1].content, "Different");
+    }
+
+    // --- Scene-segmented parsing tests (#1009) ---
+
+    #[test]
+    fn parses_scene_segmented_output() {
+        let raw = r#"[
+          {"scene": "auth", "memories": [
+            {"content": "Decided to use OAuth 2.1", "type": "decision", "priority": 0.9},
+            {"content": "Auth middleware runs first", "type": "fact", "priority": 0.6}
+          ]},
+          {"scene": "database", "memories": [
+            {"content": "Migration adds indexes", "type": "fact", "priority": 0.7}
+          ]}
+        ]"#;
+        let facts = parse_facts(raw);
+        assert_eq!(facts.len(), 3);
+        assert_eq!(facts[0].content, "Decided to use OAuth 2.1");
+        assert_eq!(facts[0].scene.as_deref(), Some("auth"));
+        assert_eq!(facts[0].fact_type.as_deref(), Some("decision"));
+        assert_eq!(facts[0].priority, Some(0.9));
+        assert_eq!(facts[1].scene.as_deref(), Some("auth"));
+        assert_eq!(facts[2].scene.as_deref(), Some("database"));
+        assert_eq!(facts[2].content, "Migration adds indexes");
+    }
+
+    #[test]
+    fn parses_flat_object_array_with_type_priority() {
+        let raw = r#"[{"content": "Important decision", "type": "decision", "priority": 0.85}]"#;
+        let facts = parse_facts(raw);
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].content, "Important decision");
+        assert_eq!(facts[0].fact_type.as_deref(), Some("decision"));
+        assert_eq!(facts[0].priority, Some(0.85));
+        assert!(facts[0].scene.is_none());
+    }
+
+    #[test]
+    fn scene_segmented_with_string_memories_falls_back() {
+        // If "memories" contains strings not objects, they should be skipped gracefully.
+        let raw = r#"[{"scene": "test", "memories": ["plain string fact"]}]"#;
+        let facts = parse_facts(raw);
+        // String elements inside memories are not objects → no facts extracted
+        // But the array was detected as scene-segmented, so flat parsing is NOT attempted.
+        assert!(facts.is_empty());
+    }
+
+    #[test]
+    fn dedup_is_case_insensitive() {
+        let raw = r#"["Same Fact", "same fact", "Different"]"#;
+        let facts = parse_facts(raw);
+        assert_eq!(facts.len(), 2);
+        assert_eq!(facts[0].content, "Same Fact");
+        assert_eq!(facts[1].content, "Different");
+    }
+
+    #[test]
+    fn priority_out_of_range_ignored() {
+        let raw = r#"[{"content": "Test", "priority": 1.5}]"#;
+        let facts = parse_facts(raw);
+        assert_eq!(facts.len(), 1);
+        assert!(facts[0].priority.is_none()); // 1.5 is out of 0.0-1.0 range
     }
 }
