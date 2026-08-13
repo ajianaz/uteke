@@ -176,6 +176,9 @@ pub(super) const SCHEMA_INDEXES: &[&str] = &[
 /// Current schema version. Increment when adding migrations.
 pub(super) const CURRENT_SCHEMA_VERSION: i32 = 15;
 
+/// Row type for `recompute_importance` batch updates.
+type RecomputeRow = (String, i64, Option<String>, String, f64, bool);
+
 /// Persistent SQLite store for memories.
 pub struct Store {
     pub conn: Connection,
@@ -307,10 +310,34 @@ impl Store {
             .execute_batch("BEGIN IMMEDIATE")
             .map_err(|e| Error::db("begin recompute_importance transaction", e))?;
 
+        let result = self.recompute_importance_inner(&rows);
+
+        match result {
+            Ok(updated) => {
+                self.conn
+                    .execute_batch("COMMIT")
+                    .map_err(|e| Error::db("commit recompute_importance transaction", e))?;
+                Ok(updated)
+            }
+            Err(e) => {
+                // Rollback on any error to avoid leaving the DB locked.
+                // Best-effort: if ROLLBACK itself fails the DB is already in a
+                // degraded state and the original error is more useful to surface.
+                if let Err(rb_err) = self.conn.execute_batch("ROLLBACK") {
+                    eprintln!(
+                        "warning: ROLLBACK failed after recompute_importance error: {rb_err}"
+                    );
+                }
+                Err(e)
+            }
+        }
+    }
+
+    fn recompute_importance_inner(&self, rows: &[RecomputeRow]) -> Result<usize, Error> {
         let mut updated = 0;
         let now = chrono::Utc::now();
 
-        for (id, access_count, last_accessed_str, metadata_json, old_importance, pinned) in &rows {
+        for (id, access_count, last_accessed_str, metadata_json, old_importance, pinned) in rows {
             // Skip pinned — they stay at 1.0
             if *pinned {
                 if (old_importance - 1.0).abs() > f64::EPSILON {
@@ -359,10 +386,6 @@ impl Store {
                 updated += 1;
             }
         }
-
-        self.conn
-            .execute_batch("COMMIT")
-            .map_err(|e| Error::db("commit recompute_importance transaction", e))?;
 
         Ok(updated)
     }
