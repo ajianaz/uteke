@@ -12,23 +12,18 @@ Run `uteke bench` to reproduce. Results below are indicative — actual numbers 
 
 Benchmarked on Oracle Cloud ARM (Ampere Altra), CPU-only.
 
-## LongMemEval Retrieval Accuracy
+## LongMemEval-S Retrieval Accuracy
 
-Run `cd benchmarks/longmemeval && ./download_data.sh && python run_eval.py --data data/longmemeval_oracle.json` to reproduce.
+Dataset: LongMemEval-S (500 questions, multi-session chatbot memory).
+Run `cd benchmarks/longmemeval && ./download_data.sh && python run_eval.py` to reproduce.
 
-### Uteke v0.1.0 (EmbeddingGemma Q4, 768d)
+### Strategy Comparison
 
-| Question Type | Count | Recall@5 | Recall@10 | NDCG@5 | NDCG@10 |
-|---------------|-------|----------|-----------|--------|---------|
-| *Pending run* | —     | —        | —         | —      | —       |
+| Strategy | Questions | R@5 | R@10 | NDCG@5 | Embedding | Date |
+|----------|-----------|-----|------|--------|-----------|------|
+| **Vector** | 500 | 85.4% | 88.5% | 0.810 | EmbeddingGemma Q4 (ONNX local) | 2026-08-13 |
+| **Hybrid (RRF)** | 50 | 98.0% | 100.0% | 0.960 | EmbeddingGemma 768d (API) | 2026-08-13 |
 
-### Comparison with Other Memory Systems
-
-| System | LongMemEval Score | Embedding Model | Notes |
-|--------|-------------------|-----------------|-------|
-| Hindsight | 94.6% | Proprietary | Commercial |
-| Mem0 v3 (Pro) | 91.6% | Proprietary | Commercial |
-| Mem0 (Free) | 49.0% | Proprietary | Open source |
-| **Uteke v0.1.0** | *TBD* | EmbeddingGemma 300M Q4 | Open source, zero-dep |
-
-> **Note**: LongMemEval scores above are answer-correctness scores (using GPT-4o as judge), while uteke's harness measures retrieval accuracy. The two are correlated but not directly comparable. We report retrieval metrics (Recall@k, NDCG@k) for transparency.
+- **Vector**: Semantic similarity search using embeddings only.
+- **Hybrid (RRF)**: Reciprocal Rank Fusion of vector search + FTS5 keyword search. Default strategy.
+- RRF k=60, consistent across all code paths.

@@ -80,7 +80,7 @@ pub(crate) fn run_recall(
     };
 
     // Resolve strategy: --strategy flag > config [recall].default_strategy
-    // > built-in default ("vector"). Unknown values fall back to vector with
+    // > built-in default ("hybrid"). Unknown values fall back to vector with
     // a warning so a typo never silently changes recall semantics.
     let strategy_name = strategy.unwrap_or(&config.recall.default_strategy);
     let resolved_strategy = match RecallStrategy::from_str_opt(strategy_name) {
