@@ -251,8 +251,9 @@ impl Default for RecallConfig {
         Self {
             min_score: 0.3,
             min_score_strict: 0.5,
-            // Preserve original CLI behavior (vector-only) by default.
-            default_strategy: "vector".to_string(),
+            // Hybrid (RRF: vector + FTS5) is the default strategy.
+            // Benchmark: R@5 98.0% vs vector-only 85.4% on LongMemEval-S.
+            default_strategy: "hybrid".to_string(),
             graph_density_weight: 0.1,
             graph_authority_weight: 0.1,
             graph_rerank_enabled: true,
@@ -1011,7 +1012,7 @@ impl Config {
 [recall]
 # min_score = 0.3
 # min_score_strict = 0.5
-# default_strategy = "vector"  # vector | fts5 | hybrid | graph
+# default_strategy = "hybrid"  # vector | fts5 | hybrid | graph
 # graph_density_weight = 0.1
 # graph_authority_weight = 0.1
 # graph_rerank_enabled = true
@@ -1474,6 +1475,8 @@ namespace = "agent1"
         let cfg = RecallConfig::default();
         assert!((cfg.min_score - 0.3).abs() < f64::EPSILON);
         assert!((cfg.min_score_strict - 0.5).abs() < f64::EPSILON);
+        // Hybrid (RRF: vector + FTS5) is the default strategy.
+        assert_eq!(cfg.default_strategy, "hybrid");
     }
 
     #[test]

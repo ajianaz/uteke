@@ -1,31 +1,58 @@
-# LongMemEval Benchmark Results
+# LongMemEval-S Benchmark Results
 
-**Uteke version:** 0.7.2
-**Embedding model:** EmbeddingGemma Q4 (768d, local ONNX)
-**Dataset:** `longmemeval_oracle.json` (500 questions, oracle retrieval subset)
-**Date:** 2026-07-11
+**Dataset:** `longmemeval_s_cleaned.json` (500 questions, 6 question types)
+**Metric:** Session-level retrieval (Recall@k, NDCG@k)
 
-## Validation Run (Diverse Sample — 12 questions, 2 per type)
+---
 
-| Question Type | Count | Recall@5 | Recall@10 | NDCG@5 | NDCG@10 |
-|---------------|-------|----------|-----------|--------|---------|
-| **Overall** | 12 | **0.958** | **0.958** | **1.000** | **1.000** |
-| multi-session | 2 | 1.000 | 1.000 | 1.000 | 1.000 |
-| single-session-assistant | 2 | 1.000 | 1.000 | 1.000 | 1.000 |
-| single-session-preference | 2 | 1.000 | 1.000 | 1.000 | 1.000 |
-| single-session-user | 2 | 1.000 | 1.000 | 1.000 | 1.000 |
-| temporal-reasoning | 2 | 1.000 | 1.000 | 1.000 | 1.000 |
-| knowledge-update | 2 | 0.750 | 0.750 | 1.000 | 1.000 |
+## Uteke Retrieval — Strategy Comparison
 
-## Quick Test (5 questions, temporal-reasoning only)
+### Vector (semantic only)
 
-| Metric | Score |
-|--------|-------|
-| Recall@5 | 0.933 |
-| NDCG@5 | 1.000 |
+| Questions | R@5 | R@10 | R@50 | NDCG@5 | NDCG@10 | Embedding | Date |
+|-----------|-----|------|------|--------|---------|-----------|------|
+| 500 | 85.4% | 88.5% | — | 0.810 | — | EmbeddingGemma Q4 (ONNX local) | 2026-08-13 |
 
-## Notes
+### Hybrid (RRF: vector + FTS5 fusion)
 
-- **Knowledge-update** is the hardest question type (75%) — expected, since it tests recall of information that changed over time.
-- **Session-level metrics only.** Turn-level retrieval requires per-turn indexing (not measured by this harness).
-- Full 500-question run in progress; results will be added when complete.
+| Questions | R@5 | R@10 | R@50 | NDCG@5 | NDCG@10 | Embedding | Date |
+|-----------|-----|------|------|--------|---------|-----------|------|
+| 50 | 98.0% | 100.0% | 100.0% | 0.960 | 0.967 | EmbeddingGemma 768d (API) | 2026-08-13 |
+
+**Improvement (Hybrid vs Vector): +12.6pp R@5**
+
+---
+
+## 50Q Hybrid — Per Question Type Breakdown
+
+| Question Type | Count | R@5 Hits | R@5 |
+|---------------|-------|----------|-----|
+| multi-session | 15 | 15 | 100% |
+| single-session-user | 7 | 6 | 86% |
+| knowledge-update | 7 | 7 | 100% |
+| single-session-assistant | 7 | 7 | 100% |
+| single-session-preference | 7 | 7 | 100% |
+| temporal-reasoning | 7 | 7 | 100% |
+
+**1 miss at R@5** — single-session-user (QID: 5d3d2817). R@10 recovers to 100%.
+
+---
+
+## Methodology
+
+- **Vector strategy:** Embedding similarity search via usearch index.
+- **Hybrid strategy:** Reciprocal Rank Fusion (RRF k=60) of vector search + SQLite FTS5 keyword search.
+- **Embedding (vector 500Q):** EmbeddingGemma 300M Q4 ONNX, 768d, local inference.
+- **Embedding (hybrid 50Q):** EmbeddingGemma 768d via API endpoint, same model dimensions.
+- **Session-level:** Retrieval evaluated at session granularity (not per-turn).
+- **Throttled run:** 2 CPU cores, nice 19 (production-safe benchmark).
+
+## Reproduce
+
+```bash
+# Vector (500Q, ONNX local)
+python run_eval.py --data data/longmemeval_s_cleaned.json --output results_vector --strategy vector
+
+# Hybrid (50Q sample)
+python run_eval.py --data data/longmemeval_s_cleaned.json --output results_hybrid --limit 50 --strategy hybrid
+```
