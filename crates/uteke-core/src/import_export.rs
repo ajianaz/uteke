@@ -102,7 +102,11 @@ impl crate::Uteke {
                             .embedder
                             .lock()
                             .map_err(|_| Error::lock("embedder lock during import"))?;
-                        match lock.as_ref().expect("embedder ensured above").embed(&entry.content) {
+                        match lock
+                            .as_ref()
+                            .expect("embedder ensured above")
+                            .embed(&entry.content)
+                        {
                             Ok(emb) => {
                                 ok = Some(emb);
                                 break;
@@ -132,9 +136,7 @@ impl crate::Uteke {
             // Dedup check — parity with remember path (#1005).
             // Skip if an existing memory has cosine >= 0.95.
             if let Some(_existing_id) = self.check_duplicate(&embedding, namespace)? {
-                tracing::debug!(
-                    "Import dedup: skipping near-duplicate of {_existing_id}"
-                );
+                tracing::debug!("Import dedup: skipping near-duplicate of {_existing_id}");
                 skipped += 1;
                 continue;
             }
