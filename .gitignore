@@ -16,3 +16,12 @@ uteke_index.usearch
 progress.md
 .cora/
 scripts/demo-record.sh
+
+# Internal docs — never commit to public repo
+internal/
+
+# Benchmark results (large, ephemeral — commit RESULTS.md summaries, not raw data)
+benchmarks/longmemeval/results_*/
+
+# VitePress build artifacts (keep config.ts, not lock files)
+docs/package-lock.json
