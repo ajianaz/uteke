@@ -504,6 +504,18 @@ needs no duplicate key.
 See [configuration](#extraction) for the `[extraction]` config block and
 `UTEKE_EXTRACTION_*` environment variables.
 
+#### Scene-segmented output (#1009)
+
+When the LLM extracts facts, it groups them by topic (scene) and assigns
+a priority score (0.0–1.0) to each. This means:
+
+- **Scene tags** — each fact gets a `scene:<topic>` tag automatically, so you can filter by topic during recall.
+- **Priority** — important decisions get higher `importance` (0.7–0.9), routine facts get lower (0.3–0.5).
+- **Type** — facts are tagged with a semantic type (`decision`, `fact`, `preference`, etc.) when the model provides one.
+
+Offline extraction (no LLM) is unaffected — it continues to produce flat
+strings with default importance.
+
 ### Batch import (`--batch-dir`)
 
 Import all files from a directory in one command. Each file is processed
