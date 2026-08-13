@@ -16,3 +16,7 @@ uteke_index.usearch
 progress.md
 .cora/
 scripts/demo-record.sh
+# Internal docs — never commit to public repo
+internal/
+# Benchmark results (large, ephemeral)
+benchmarks/longmemeval/results_*/
