@@ -42,6 +42,14 @@ Unpin a memory by ID (legacy — prefer /memory/pin with pin=false).
 
 ## 📝 Other
 
+#### 🟢 `GET` `/guide`
+
+Returns the agent-facing memory tools guide for system prompt injection (#1010).
+
+**Response**: [`GuideResponse`](#guideresponse)
+
+*Related: `#1010`*
+
 #### 🟢 `GET` `/namespaces`
 
 List all namespaces in the memory store
@@ -91,6 +99,12 @@ Restore a deprecated memory back to active status.
 Get lifecycle status: active/deprecated counts and current configuration.
 
 *Related: `#935`*
+
+#### 🟢 `GET` `/lifecycle/deprecated`
+
+List deprecated memories with TTL metadata.
+
+*Related: `#1007`*
 
 
 ## 📦 Import/Export
