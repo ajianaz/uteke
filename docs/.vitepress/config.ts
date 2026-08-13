@@ -18,6 +18,7 @@ export default createConfig({
       items: [
         { text: 'Installation', link: '/install' },
         { text: 'Quick Start', link: '/getting-started' },
+        { text: 'Organizing Memories', link: '/organizing-memories' },
         { text: 'Configuration', link: '/configuration' },
         { text: 'Docker', link: '/docker' },
       ],

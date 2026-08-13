@@ -125,6 +125,20 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
             )
         }
 
+        // ── Memory Tools Guide (#1010) ──────────────────────────────────
+        (Method::Get, "/guide") => {
+            #[derive(serde::Serialize)]
+            struct GuideResponse<'a> {
+                guide: &'a str,
+            }
+            ctx.ok_response_for(
+                req,
+                &GuideResponse {
+                    guide: &uteke_core::guide::default_guide(),
+                },
+            )
+        }
+
         // ── Remember ───────────────────────────────────────────────────
         (Method::Post, "/remember") => match read_body::<RememberRequest>(req.as_reader()) {
             Ok(req_data) => {
@@ -637,6 +651,43 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                 deprecated: usize,
             }
             ctx.ok_response_for(req, &LifecycleStatusResponse { active, deprecated })
+        }
+
+        (Method::Get, "/lifecycle/deprecated") => {
+            let query = req.url().split('?').nth(1).unwrap_or("");
+            let params: std::collections::HashMap<String, String> = query
+                .split('&')
+                .filter_map(|pair| {
+                    let mut kv = pair.splitn(2, '=');
+                    Some((kv.next()?.to_string(), kv.next()?.to_string()))
+                })
+                .collect();
+            let ns_param = params.get("namespace").map(|s| s.as_str());
+            let limit: u32 = params
+                .get("limit")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(100);
+            match uteke.store().list_deprecated(ns_param, limit) {
+                Ok(items) => {
+                    #[derive(serde::Serialize)]
+                    struct DeprecatedListResponse {
+                        deprecated: Vec<uteke_core::DeprecatedMemoryInfo>,
+                        count: usize,
+                    }
+                    let count = items.len();
+                    ctx.ok_response_for(
+                        req,
+                        &DeprecatedListResponse {
+                            deprecated: items,
+                            count,
+                        },
+                    )
+                }
+                Err(e) => {
+                    error!("lifecycle deprecated list error: {e}");
+                    ctx.error_response_for(req, 500, "Internal server error")
+                }
+            }
         }
 
         (Method::Post, "/lifecycle/cycle") => {
@@ -1913,6 +1964,8 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                     };
 
                     if let Ok(id) = uteke.remember(fact, &tag_refs, metadata, fact_ns) {
+                        // Auto-populate source provenance (#1013).
+                        let _ = uteke.set_source(&id, Some("api:extraction"), "extract");
                         stored_ids.push(id);
                     }
                 }

@@ -18,6 +18,7 @@ mod error;
 pub mod extraction;
 pub mod graph;
 pub mod graph_rerank;
+pub mod guide;
 mod import_export;
 mod jaccard;
 mod maintenance;
@@ -44,6 +45,7 @@ pub use edges::{
 pub use graph::{GraphEdge, GraphNode, GraphPath, GraphStats, GraphStore, GraphTriple};
 pub use graph::{Relationship, VALID_REL_TYPES, build_meta_relationship, is_relationship_meta};
 pub use graph_rerank::{GraphRerankConfig, GraphSignals, compute_graph_signals, rerank_with_graph};
+pub use memory::aging::DeprecatedMemoryInfo;
 pub use memory::types::{
     AgingStatus, BulkDeleteResult, CleanupResult, ConsolidationResult, ContradictionResult,
     DEFAULT_NAMESPACE, ExportEntry, ImportResult, Memory, MemoryTier, MemoryType, PruneResult,

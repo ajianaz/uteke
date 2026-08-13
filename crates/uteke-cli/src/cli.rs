@@ -211,6 +211,8 @@ pub enum Commands {
     },
     /// Show memory store statistics
     Stats,
+    /// Print agent-facing memory tools guide for system prompt injection (#1010)
+    Guide,
     /// Check system health (DB, index, model, consistency)
     Doctor,
     /// Verify DB and index consistency

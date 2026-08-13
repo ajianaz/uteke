@@ -84,6 +84,51 @@ impl super::Store {
         Ok(count as usize)
     }
 
+    /// List deprecated memories with metadata for TTL display.
+    ///
+    /// Returns memories that are deprecated=1, ordered by most recently deprecated first.
+    /// Optionally filter by namespace.
+    pub fn list_deprecated(
+        &self,
+        namespace: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<DeprecatedMemoryInfo>, Error> {
+        let limit = limit.max(1) as i64;
+        let sql = if namespace.is_some() {
+            r#"SELECT id, content, memory_type, namespace, tags, importance,
+                      valid_until, deprecate_reason, updated_at
+               FROM memories
+               WHERE deprecated = 1 AND namespace = ?1
+               ORDER BY updated_at DESC
+               LIMIT ?2"#
+        } else {
+            r#"SELECT id, content, memory_type, namespace, tags, importance,
+                      valid_until, deprecate_reason, updated_at
+               FROM memories
+               WHERE deprecated = 1
+               ORDER BY updated_at DESC
+               LIMIT ?1"#
+        };
+
+        let ns = namespace.map(|s| s.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(sql)
+            .map_err(|e| Error::db("prepare list_deprecated", e))?;
+
+        let rows = match &ns {
+            Some(ns_val) => stmt.query_map(params![ns_val, limit], dep_row_to_info),
+            None => stmt.query_map(params![limit], dep_row_to_info),
+        }
+        .map_err(|e| Error::db("query list_deprecated", e))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row.map_err(|e| Error::db("row list_deprecated", e))?);
+        }
+        Ok(results)
+    }
+
     /// Find aged memories eligible for cleanup.
     ///
     /// Returns memories matching: older than `older_than_days`, access_count <= max_access_count,
@@ -239,4 +284,47 @@ impl super::Store {
 
         Ok((hot, warm, cold))
     }
+}
+
+/// Lightweight info about a deprecated memory, for lifecycle UI display.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DeprecatedMemoryInfo {
+    pub id: String,
+    pub content: String,
+    pub memory_type: String,
+    pub namespace: String,
+    pub tags: Vec<String>,
+    pub importance: f64,
+    pub deprecated_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub deprecate_reason: Option<String>,
+}
+
+fn dep_row_to_info(row: &rusqlite::Row<'_>) -> Result<DeprecatedMemoryInfo, rusqlite::Error> {
+    let id: String = row.get(0)?;
+    let content: String = row.get(1)?;
+    let memory_type: String = row.get(2).unwrap_or_else(|_| "fact".to_string());
+    let namespace: String = row.get(3).unwrap_or_else(|_| "default".to_string());
+    let tags_str: Option<String> = row.get(4).ok().flatten();
+    let tags = tags_str
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+        .unwrap_or_default();
+    let importance: f64 = row.get(5).unwrap_or(0.5);
+    let valid_until_str: Option<String> = row.get(6).ok().flatten();
+    let deprecated_at = valid_until_str
+        .as_deref()
+        .and_then(super::store::parse_datetime_opt);
+    let deprecate_reason: Option<String> = row.get(7).ok().flatten();
+    let _updated_at_str: Option<String> = row.get(8).ok().flatten();
+
+    Ok(DeprecatedMemoryInfo {
+        id,
+        content,
+        memory_type,
+        namespace,
+        tags,
+        importance,
+        deprecated_at,
+        deprecate_reason,
+    })
 }

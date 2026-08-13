@@ -48,6 +48,15 @@ pub const ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         method: "GET",
+        path: "/guide",
+        description: "Returns the agent-facing memory tools guide for system prompt injection (#1010).",
+        request_type: None,
+        response_type: Some("GuideResponse"),
+        excludes_deprecated: false,
+        issues: &["#1010"],
+    },
+    Endpoint {
+        method: "GET",
         path: "/namespaces",
         description: "List all namespaces in the memory store",
         request_type: None,
@@ -616,6 +625,15 @@ pub const ENDPOINTS: &[Endpoint] = &[
         response_type: None,
         excludes_deprecated: false,
         issues: &["#935"],
+    },
+    Endpoint {
+        method: "GET",
+        path: "/lifecycle/deprecated",
+        description: "List deprecated memories with TTL metadata.",
+        request_type: None,
+        response_type: None,
+        excludes_deprecated: false,
+        issues: &["#1007"],
     },
 ];
 
