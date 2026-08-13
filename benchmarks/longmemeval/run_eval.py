@@ -88,8 +88,14 @@ def turn_has_answer(turn):
 
 def run_uteke(args, store_path, subcommand, extra_args=None):
     """Run a uteke CLI command."""
+    # Resolve to the repo's release binary to avoid PATH ambiguity
+    # (e.g. /opt/data/.cargo/bin/uteke may be x86_64 on ARM hosts).
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    uteke_bin = str(repo_root / "target" / "release" / "uteke")
+    if not Path(uteke_bin).exists():
+        uteke_bin = shutil.which("uteke") or "uteke"
     cmd = [
-        "uteke",
+        uteke_bin,
         "--store", str(store_path),
         "--namespace", args.namespace,
         "--json",
