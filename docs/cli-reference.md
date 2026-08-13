@@ -310,9 +310,9 @@ uteke recall "deployment process" --at 2026-06-01T12:00:00Z
 uteke recall "auth" --related --depth 2
 
 # Recall strategy (vector | fts5 | hybrid | graph)
-uteke recall "auth" --strategy vector   # default — vector similarity only
+uteke recall "auth" --strategy hybrid   # default — vector + FTS5 (RRF fusion)
+uteke recall "auth" --strategy vector   # vector similarity only
 uteke recall "auth" --strategy fts5     # full-text search only
-uteke recall "auth" --strategy hybrid   # vector + FTS5 (RRF fusion)
 uteke recall "auth" --strategy graph    # hybrid + graph-signal reranking (#378)
 ```
 
