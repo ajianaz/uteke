@@ -31,6 +31,9 @@ if os.environ.get("EMBED_API_KEY") and os.environ.get("EMBED_API_BASE"):
     if os.environ.get("EMBED_MODEL"):
         os.environ.setdefault("UTEKE_EMBEDDING_MODEL", os.environ["EMBED_MODEL"])
 
+# Skip CLI update check in subprocess calls — saves ~500ms per call (#1006).
+os.environ["UTEKE_NO_UPDATE_CHECK"] = "1"
+
 try:
     from tqdm import tqdm
 except ImportError:
