@@ -71,6 +71,7 @@ See [CLI Reference → lifecycle](/cli-reference#uteke-lifecycle) for details.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/lifecycle/status` | Active vs deprecated counts |
+| `GET` | `/lifecycle/deprecated` | List deprecated memories with TTL metadata (#1007) |
 | `POST` | `/lifecycle/cycle` | Run lifecycle cycle |
 | `POST` | `/lifecycle/promote` | Promote deprecated → active |
 
