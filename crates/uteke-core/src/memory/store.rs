@@ -386,7 +386,7 @@ fn parse_datetime_flexible(
 
 /// Optional variant of [parse_datetime_flexible] — returns None on parse failure
 /// instead of an error. Used for nullable datetime columns (last_accessed, valid_from, etc).
-fn parse_datetime_opt(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+pub(crate) fn parse_datetime_opt(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     parse_datetime_flexible(s, 0).ok()
 }
 

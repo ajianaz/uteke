@@ -214,6 +214,9 @@ pub(crate) struct ExtractOpts<'a> {
     pub base_url: Option<String>,
     pub max_facts: Option<usize>,
     pub cfg: &'a crate::config::ExtractionConfig,
+    /// Auto-detected source label for provenance (#1013).
+    /// Set to the input filename/path, or None for stdin.
+    pub source_label: Option<&'a str>,
 }
 
 pub(crate) fn run_import(
@@ -241,8 +244,13 @@ pub(crate) fn run_import(
     // then store each fact as its own memory. Bypasses format detection because
     // the model handles arbitrary noisy text (transcripts, dumps, notes).
     if extract_opts.enabled {
+        // Auto-populate source label from input filename (#1013).
+        let mut opts = extract_opts;
+        if opts.source_label.is_none() && input != "-" {
+            opts.source_label = Some(input);
+        }
         let tag_refs: Vec<&str> = tags.iter().map(|s| s.as_str()).collect();
-        let result = import_with_extraction(uteke, &content, &tag_refs, ns, &extract_opts)?;
+        let result = import_with_extraction(uteke, &content, &tag_refs, ns, &opts)?;
         if cli.json {
             output::print_json(&result);
         } else {
@@ -376,7 +384,11 @@ fn import_with_extraction(
     let mut skipped = 0usize;
     for fact in &facts {
         match uteke.remember(fact, tags, None, ns) {
-            Ok(_) => imported += 1,
+            Ok(id) => {
+                // Auto-populate source provenance (#1013).
+                let _ = uteke.set_source(&id, opts.source_label, "extract");
+                imported += 1;
+            }
             Err(e) => {
                 tracing::warn!("Failed to store extracted fact: {e}");
                 skipped += 1;
