@@ -35,7 +35,12 @@ fn main() {
             | Commands::Bench { .. }
             | Commands::Upgrade { .. }
     );
-    let update_handle = if !early_exit {
+    // Skip update check in subprocess/batch mode (e.g. benchmarks calling
+    // `uteke recall` 1000× via subprocess). Env var set by benchmark scripts
+    // and any automated pipeline (#1006).
+    let skip_update_check = std::env::var("UTEKE_NO_UPDATE_CHECK").is_ok();
+
+    let update_handle = if !early_exit && !skip_update_check {
         commands::update_check::spawn()
     } else {
         None
