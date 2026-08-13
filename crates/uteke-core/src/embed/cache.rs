@@ -116,11 +116,7 @@ impl EmbeddingCache {
 
                 // Size-based eviction: if over limit, delete oldest entries
                 let count: i64 = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM embedding_cache",
-                        [],
-                        |row| row.get(0),
-                    )
+                    .query_row("SELECT COUNT(*) FROM embedding_cache", [], |row| row.get(0))
                     .unwrap_or(0);
                 if count > MAX_CACHE_ENTRIES {
                     let excess = count - MAX_CACHE_ENTRIES;
