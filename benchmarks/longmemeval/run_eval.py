@@ -263,12 +263,13 @@ def recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids,
 
     # Run recall — fetch top-50 for Recall@5/10/50
     try:
+        extra = ["--strategy", args.strategy] if args.strategy != "vector" else []
         output = run_uteke(args, store_path, [
             "recall", question,
             "--limit", "50",
             "--tags", "longmemeval",
             "--min", "0.0",  # Disable threshold — evaluate raw retrieval ranking (#995)
-        ])
+        ] + extra)
     except (RuntimeError, subprocess.TimeoutExpired) as e:
         print(f"  Warning: recall failed/timed out: {e}", file=sys.stderr)
         return None
@@ -368,6 +369,9 @@ def main():
                         help="Number of texts per embedding API request (default: 18)")
     parser.add_argument("--embed-parallel", type=int, default=3,
                         help="Max concurrent embedding API requests (default: 3)")
+    parser.add_argument("--strategy", default="vector",
+                        choices=["vector", "hybrid", "fts5", "graph"],
+                        help="Recall strategy (default: vector)")
 
     # Validate pre-compute args
     args = parser.parse_args()
@@ -428,7 +432,7 @@ def main():
                 continue
 
             # Periodic store reset to prevent memory buildup
-            if evaluated > 0 and evaluated % args.reset_every == 0:
+            if args.reset_every > 0 and evaluated > 0 and evaluated % args.reset_every == 0:
                 shutil.rmtree(store_path, ignore_errors=True)
                 store_path.mkdir(parents=True, exist_ok=True)
 
