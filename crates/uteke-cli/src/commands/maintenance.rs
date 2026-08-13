@@ -5,6 +5,7 @@ use std::io::Read;
 use crate::cli::Cli;
 use crate::output;
 use uteke_core::Uteke;
+use uteke_core::extraction::ExtractedFact;
 
 pub(crate) fn run_doctor(cli: &Cli, uteke: &Uteke) -> Result<(), String> {
     tracing::info!("Running doctor");
@@ -370,6 +371,9 @@ fn import_with_extraction(
         // Offline extraction path — zero API calls
         tracing::info!("Using offline rule-based extraction (zero API)");
         uteke_core::offline_extraction::extract_facts(content, max_facts)
+            .into_iter()
+            .map(ExtractedFact::flat)
+            .collect()
     };
 
     if facts.is_empty() {
@@ -383,8 +387,29 @@ fn import_with_extraction(
     let mut imported = 0usize;
     let mut skipped = 0usize;
     for fact in &facts {
-        match uteke.remember(fact, tags, None, ns) {
+        // Build tags: caller-provided tags + scene tag if present (#1009).
+        let mut all_tags: Vec<String> = tags.iter().map(|s| s.to_string()).collect();
+        if let Some(ref scene) = fact.scene {
+            let scene_tag = format!("scene:{}", scene);
+            if !all_tags.contains(&scene_tag) {
+                all_tags.push(scene_tag);
+            }
+        }
+        let tag_refs: Vec<&str> = all_tags.iter().map(|s| s.as_str()).collect();
+
+        // Use remember_typed when the LLM provided a type, otherwise remember() (#1009).
+        let result = if let Some(ref ft) = fact.fact_type {
+            uteke.remember_typed(&fact.content, &tag_refs, None, ns, ft)
+        } else {
+            uteke.remember(&fact.content, &tag_refs, None, ns)
+        };
+
+        match result {
             Ok(id) => {
+                // Set importance if the LLM provided a priority score (#1009).
+                if let Some(priority) = fact.priority {
+                    let _ = uteke.set_importance(&id, priority);
+                }
                 // Auto-populate source provenance (#1013).
                 let _ = uteke.set_source(&id, opts.source_label, "extract");
                 imported += 1;

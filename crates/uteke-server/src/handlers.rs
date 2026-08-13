@@ -1945,14 +1945,21 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
 
                 // Store each extracted fact as a memory
                 let mut stored_ids = Vec::new();
-                let tag_refs: Vec<&str> = req_data.tags.iter().map(|s| s.as_str()).collect();
                 let fact_ns = ns(&req_data.namespace);
 
                 for fact in &facts {
-                    let mut meta = serde_json::Map::new();
-                    if let Some(t) = &req_data.r#type {
-                        meta.insert("type".into(), serde_json::Value::String(t.clone()));
+                    // Build tags: caller-provided tags + scene tag if present (#1009).
+                    let mut all_tags: Vec<String> =
+                        req_data.tags.iter().map(|s| s.to_string()).collect();
+                    if let Some(ref scene) = fact.scene {
+                        let scene_tag = format!("scene:{}", scene);
+                        if !all_tags.contains(&scene_tag) {
+                            all_tags.push(scene_tag);
+                        }
                     }
+                    let tag_refs: Vec<&str> = all_tags.iter().map(|s| s.as_str()).collect();
+
+                    let mut meta = serde_json::Map::new();
                     meta.insert(
                         "source".into(),
                         serde_json::Value::String("extraction".into()),
@@ -1963,7 +1970,19 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                         Some(serde_json::Value::Object(meta))
                     };
 
-                    if let Ok(id) = uteke.remember(fact, &tag_refs, metadata, fact_ns) {
+                    // Use remember_typed when the LLM or request provided a type (#1009).
+                    let effective_type = fact.fact_type.as_deref().or(req_data.r#type.as_deref());
+                    let result = if let Some(ft) = effective_type {
+                        uteke.remember_typed(&fact.content, &tag_refs, metadata, fact_ns, ft)
+                    } else {
+                        uteke.remember(&fact.content, &tag_refs, metadata, fact_ns)
+                    };
+
+                    if let Ok(id) = result {
+                        // Set importance if the LLM provided a priority score (#1009).
+                        if let Some(priority) = fact.priority {
+                            let _ = uteke.set_importance(&id, priority);
+                        }
                         // Auto-populate source provenance (#1013).
                         let _ = uteke.set_source(&id, Some("api:extraction"), "extract");
                         stored_ids.push(id);
@@ -1973,7 +1992,7 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                 ctx.ok_response_for(
                     req,
                     &serde_json::json!({
-                        "facts": facts,
+                        "facts": facts.iter().map(|f| &f.content).collect::<Vec<_>>(),
                         "count": facts.len(),
                         "stored": stored_ids.len(),
                         "stored_ids": stored_ids,
