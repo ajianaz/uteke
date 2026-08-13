@@ -120,6 +120,7 @@ def insert_sessions(args, store_path, entry):
     # Build JSONL for batch import — dramatically faster than per-session subprocess calls.
     # 50 sessions via individual remember calls: ~115s. Via batch import: ~12s. (10x speedup)
     jsonl_lines = []
+    sid_order = []  # track session_ids in import order for counting
     for i, (sid, session) in enumerate(zip(session_ids, sessions)):
         text = session_to_text(session)
         date = dates[i] if i < len(dates) else None
@@ -144,8 +145,7 @@ def insert_sessions(args, store_path, entry):
                 "metadata": metadata,
             }
             jsonl_lines.append(json.dumps(record))
-
-        inserted_sids.add(sid)
+            sid_order.append(sid)
 
         # Track answer turns
         answer_indices = set()
@@ -163,9 +163,22 @@ def insert_sessions(args, store_path, entry):
 
     try:
         stdout = run_uteke(args, store_path, ["import", jsonl_path])
-        # Batch import returns {"imported": N, "skipped": M}
+        # Batch import returns {"imported": N, "skipped": M}.
         # We don't get individual memory_ids, so mid_to_sid stays empty.
         # For session-level eval, recall results are matched via metadata.session_id fallback.
+        try:
+            import_data = json.loads(stdout)
+            imported_count = import_data.get("imported", len(sid_order))
+        except (json.JSONDecodeError, TypeError):
+            imported_count = len(sid_order)
+
+        # Only mark sessions as inserted if import succeeded.
+        # If import partially succeeded, all sessions are still marked since
+        # we cannot map individual JSONL lines to import results.
+        if imported_count > 0:
+            inserted_sids.update(set(sid_order))
+        else:
+            print(f"  Warning: batch import returned 0 inserted", file=sys.stderr)
     except RuntimeError as e:
         print(f"  Warning: batch import failed: {e}", file=sys.stderr)
     finally:
