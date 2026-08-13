@@ -87,7 +87,7 @@ def turn_has_answer(turn):
 
 
 def run_uteke(args, store_path, subcommand, extra_args=None):
-    """Run a uteke CLI command."""
+    """Run a uteke CLI command (CPU-limited to 2 cores, nice 19)."""
     # Resolve to the repo's release binary to avoid PATH ambiguity
     # (e.g. /opt/data/.cargo/bin/uteke may be x86_64 on ARM hosts).
     repo_root = Path(__file__).resolve().parent.parent.parent
@@ -95,6 +95,8 @@ def run_uteke(args, store_path, subcommand, extra_args=None):
     if not Path(uteke_bin).exists():
         uteke_bin = shutil.which("uteke") or "uteke"
     cmd = [
+        "taskset", "-c", "0-1",  # Limit to cores 0-1 (max 50% CPU on 4-core box)
+        "nice", "-n", "19",      # Lowest priority — yield to everything else
         uteke_bin,
         "--store", str(store_path),
         "--namespace", args.namespace,
@@ -102,7 +104,7 @@ def run_uteke(args, store_path, subcommand, extra_args=None):
     ] + subcommand
     if extra_args:
         cmd += extra_args
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     if result.returncode != 0:
         raise RuntimeError(f"uteke failed: {' '.join(cmd)}\nstderr: {result.stderr}")
     return result.stdout.strip()
