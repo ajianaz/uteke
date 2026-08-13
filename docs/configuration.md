@@ -496,6 +496,14 @@ update_check = true    # Set to false to disable startup update notification
 
 When an update is available, a banner is printed to **stderr** (does not interfere with stdout pipes). The check is non-blocking: it runs in a background thread joined before process exit, so it never delays command execution.
 
+### Skipping in batch/subprocess mode (#1006)
+
+Set the `UTEKE_NO_UPDATE_CHECK=1` environment variable to skip the update check entirely. This is useful for benchmarks, scripts, or automated pipelines that invoke `uteke` many times via subprocess:
+
+```bash
+export UTEKE_NO_UPDATE_CHECK=1
+```
+
 ## Memory Lifecycle (#928–#937)
 
 Uteke uses a soft-delete lifecycle model. Memories are never hard-deleted directly by automated processes. They transition through a deprecated state before eventual pruning.
