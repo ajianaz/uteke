@@ -17,9 +17,9 @@ use std::path::PathBuf;
 const LEGACY_ORT_DIR: &str = "ort-legacy";
 
 /// ORT shared library filename per platform.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 const ORT_LIB_NAME: &str = "libonnxruntime.so";
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 const ORT_LIB_NAME: &str = "libonnxruntime.dylib";
 #[cfg(target_os = "windows")]
 const ORT_LIB_NAME: &str = "onnxruntime.dll";
