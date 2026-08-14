@@ -290,6 +290,29 @@ jobs:
         run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} -p uteke-server --allow-dirty
         continue-on-error: true
 
+      - name: Wait for crates.io index
+        run: sleep 30
+
+      - name: Verify crates.io versions
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          fail=0
+          for crate in uteke-core uteke-mcp uteke-cli uteke-server; do
+            for attempt in 1 2 3 4 5; do
+              MAX=$(curl -sf -A "uteke-release-verify" "https://crates.io/api/v1/crates/$crate" | jq -r '.crate.max_version') || MAX=""
+              [ "$MAX" = "$VERSION" ] && break
+              echo "attempt $attempt: $crate at $MAX (want $VERSION), waiting..."
+              sleep 30
+            done
+            if [ "$MAX" = "$VERSION" ]; then
+              echo "✓ $crate $VERSION live on crates.io"
+            else
+              echo "::error::$crate not at $VERSION on crates.io (found: $MAX) — publish step failed silently"
+              fail=1
+            fi
+          done
+          exit $fail
+
   package-legacy:
     name: Package Linux x64 legacy bundle
     needs: [build-release, build-ort-legacy]
