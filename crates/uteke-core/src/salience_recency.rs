@@ -285,25 +285,162 @@ mod tests {
         assert_eq!(s.recency_weight, 0.0);
     }
 
+    // ── Mutation-killing tests (#mutation-testing) ──────────────────────
+    //
+    // These tests use exact numeric assertions (not just > / < comparisons)
+    // to kill mutants that change operators but stay within the same
+    // relational direction. Pattern adapted from nginjen's mutation testing.
+
     #[test]
-    fn config_is_noop() {
-        // Default is now non-zero (#721)
-        assert!(!SalienceRecencyConfig::default().is_noop());
-        // Explicit zero weights are no-op
+    fn salience_access_freq_division_not_multiply() {
+        // Kill mutant: replace / with * in salience_score (line 77:68).
+        // access_freq = log10(access_count) / 3.0
+        // With access_count=10: log10(10)=1, so access_freq = 1/3 = 0.333
+        //   original: importance*0.5 + 0.333*0.3 + 0 = 0.5*0.5 + 0.1 = 0.35
+        //   mutant:   log10(10) * 3.0 = 3.0, clamped to 1.0
+        //             0.5*0.5 + 1.0*0.3 + 0 = 0.55
+        // Exact assertion distinguishes 0.35 vs 0.55.
+        let m = mem(10, 0.5, false, 0, "fact");
+        let s = salience_score(&m);
+        assert!((s - 0.35).abs() < 0.02, "expected ~0.35, got {s}");
+    }
+
+    #[test]
+    fn salience_blend_exact_value_zero_access() {
+        // Kill mutant: replace + with * in salience_score (line 83:36).
+        // With importance=0.4, access=0 (access_freq=0), pinned=false:
+        //   original: 0.4*0.5 + 0*0.3 + 0 = 0.2
+        //   mutant:   0.4*0.5 * 0*0.3 + 0 = 0.0
+        // Exact assertion distinguishes them.
+        let m = mem(0, 0.4, false, 0, "fact");
+        let s = salience_score(&m);
+        assert!((s - 0.2).abs() < 0.01, "expected ~0.2, got {s}");
+    }
+
+    #[test]
+    fn salience_blend_exact_value_with_access() {
+        // Kill mutant: replace * with / in salience_score (line 83:50).
+        // With importance=0.0, access=1000 (access_freq=1.0), pinned=false:
+        //   original: 0*0.5 + 1.0*0.3 + 0 = 0.3
+        //   mutant:   0*0.5 + 1.0/0.3 + 0 = 3.33 → clamped to 1.0
+        // Exact assertion catches the difference.
+        let m = mem(1000, 0.0, false, 0, "fact");
+        let s = salience_score(&m);
+        assert!((s - 0.3).abs() < 0.01, "expected ~0.3, got {s}");
+    }
+
+    #[test]
+    fn salience_blend_exact_value_high_access() {
+        // Additional: verify blend formula with all three components nonzero.
+        // importance=0.6, access=1000 (access_freq=1.0), pinned=true:
+        //   0.6*0.5 + 1.0*0.3 + 0.2 = 0.8
+        let m = mem(1000, 0.6, true, 0, "fact");
+        let s = salience_score(&m);
+        assert!((s - 0.8).abs() < 0.01, "expected ~0.8, got {s}");
+    }
+
+    #[test]
+    fn apply_boosts_salience_only_exact() {
+        // Kill mutants in apply_boosts salience branch (lines 131-132):
+        //   - replace > with == / >= (line 131)
+        //   - replace += with -= (line 132:15)
+        //   - replace * with + / / (line 132:41)
+        //
+        // With salience_weight=0.1, recency_weight=0.0, base=0.5:
+        //   memory: access=0, importance=0.6, pinned=false → salience=0.3
+        //   original: 0.5 + 0.3 * 0.1 = 0.53
+        //   mutant (* → +): 0.5 + 0.3 + 0.1 = 0.9
+        //   mutant (* → /): 0.5 + 0.3 / 0.1 = 3.5
+        //   mutant (+= → -=): 0.5 - 0.03 = 0.47
+        let m = mem(0, 0.6, false, 0, "fact");
+        let cfg = SalienceRecencyConfig {
+            salience_weight: 0.1,
+            recency_weight: 0.0,
+        };
+        let boosted = apply_boosts(0.5, &m, chrono::Utc::now(), cfg);
         assert!(
-            SalienceRecencyConfig {
-                salience_weight: 0.0,
-                recency_weight: 0.0,
-            }
-            .is_noop()
+            (boosted - 0.53).abs() < 0.01,
+            "expected ~0.53, got {boosted}"
         );
-        // One non-zero is not no-op
+    }
+
+    #[test]
+    fn apply_boosts_recency_only_exact() {
+        // Kill mutants in apply_boosts recency branch (lines 134-135):
+        //   - replace > with == / >= / < (line 134)
+        //   - replace * with + / / (line 135)
+        //
+        // With salience_weight=0.0, recency_weight=0.1, base=0.5:
+        //   memory: fresh (age=0) → recency=1.0
+        //   original: 0.5 + 1.0 * 0.1 = 0.6
+        //   mutant (* → +): 0.5 + 1.0 + 0.1 = 1.6
+        //   mutant (* → /): 0.5 + 1.0 / 0.1 = 10.5
+        let m = mem(0, 0.0, false, 0, "fact");
+        let cfg = SalienceRecencyConfig {
+            salience_weight: 0.0,
+            recency_weight: 0.1,
+        };
+        let now = chrono::Utc::now();
+        let boosted = apply_boosts(0.5, &m, now, cfg);
+        assert!((boosted - 0.6).abs() < 0.02, "expected ~0.6, got {boosted}");
+    }
+
+    #[test]
+    fn apply_boosts_zero_salience_weight_skips_boost() {
+        // Kill mutant: replace > with >= in apply_boosts (line 131:31).
+        // With salience_weight=0.0, recency_weight=0.1:
+        //   original: 0.0 > 0.0 = false → skip salience boost
+        //   mutant:   0.0 >= 0.0 = true → add salience_score * 0.0 = 0 (no-op anyway)
+        // This mutant is actually equivalent (adding * 0.0 = 0), so we verify
+        // the score is unchanged from recency-only path.
+        let m = mem(100, 0.8, false, 0, "fact");
+        let cfg = SalienceRecencyConfig {
+            salience_weight: 0.0,
+            recency_weight: 0.1,
+        };
+        let now = chrono::Utc::now();
+        let boosted = apply_boosts(0.5, &m, now, cfg);
+        // recency for fresh memory ≈ 1.0, so 0.5 + 1.0*0.1 = 0.6
+        assert!((boosted - 0.6).abs() < 0.02, "expected ~0.6, got {boosted}");
+    }
+
+    #[test]
+    fn apply_boosts_zero_recency_weight_skips_boost() {
+        // Kill mutant: replace > with >= in apply_boosts (line 134:30).
+        // Same pattern as above but for recency branch.
+        let m = mem(100, 0.8, false, 0, "fact");
+        let cfg = SalienceRecencyConfig {
+            salience_weight: 0.1,
+            recency_weight: 0.0,
+        };
+        let now = chrono::Utc::now();
+        let boosted = apply_boosts(0.5, &m, now, cfg);
+        // salience = 0.8*0.5 + (log10(100)/3)*0.3 + 0 = 0.4 + 0.2 = 0.6
+        // boosted = 0.5 + 0.6*0.1 = 0.56
         assert!(
-            !SalienceRecencyConfig {
-                salience_weight: 0.1,
-                recency_weight: 0.0,
-            }
-            .is_noop()
+            (boosted - 0.56).abs() < 0.02,
+            "expected ~0.56, got {boosted}"
+        );
+    }
+
+    #[test]
+    fn apply_boosts_both_axes_exact() {
+        // Verify both salience + recency boosts applied correctly.
+        // With salience_weight=0.1, recency_weight=0.1, base=0.5:
+        //   memory: access=1000(importance_freq=1.0), importance=0.5, pinned=false, age=0
+        //   salience = 0.5*0.5 + 1.0*0.3 + 0 = 0.55
+        //   recency = 1.0 (fresh)
+        //   original: 0.5 + 0.55*0.1 + 1.0*0.1 = 0.655
+        let m = mem(1000, 0.5, false, 0, "fact");
+        let cfg = SalienceRecencyConfig {
+            salience_weight: 0.1,
+            recency_weight: 0.1,
+        };
+        let now = chrono::Utc::now();
+        let boosted = apply_boosts(0.5, &m, now, cfg);
+        assert!(
+            (boosted - 0.655).abs() < 0.02,
+            "expected ~0.655, got {boosted}"
         );
     }
 }

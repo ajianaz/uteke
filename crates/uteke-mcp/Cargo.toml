@@ -3,10 +3,14 @@ name = "uteke-mcp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 description = "MCP server for uteke — expose persistent memory to AI coding agents"
 readme = "README.md"
 keywords = ["mcp", "ai", "memory", "embedding", "agents"]
 categories = ["command-line-utilities", "development-tools"]
+documentation = "https://docs.rs/uteke-mcp"
+homepage = "https://github.com/codecoradev/uteke"
 
 [[bin]]
 name = "uteke-mcp"
@@ -17,7 +21,7 @@ name = "uteke_mcp"
 path = "src/lib.rs"
 
 [dependencies]
-uteke-core = { path = "../uteke-core", version = "0.14.0", features = ["onnx"] }
+uteke-core = { path = "../uteke-core", version = "0.14.1", features = ["onnx"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"

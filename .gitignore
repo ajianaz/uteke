@@ -1,27 +1,9 @@
-/target/
-*.swp
-*.swo
-*~
-.DS_Store
-.idea/
-.vscode/
-*.pdb
-__pycache__/
-milestone*.md
-
-# Runtime index files
-uteke_index.keys
-uteke_index.usearch
-.fusion/
-progress.md
-.cora/
-scripts/demo-record.sh
-
-# Internal docs — never commit to public repo
-internal/
-
 # Benchmark results (large, ephemeral — commit RESULTS.md summaries, not raw data)
 benchmarks/longmemeval/results_*/
+
+# cargo-mutants output (local only — run before release)
+mutants*.out/
+mutants*.out.old/
 
 # VitePress build artifacts (keep config.ts, not lock files)
 docs/package-lock.json
