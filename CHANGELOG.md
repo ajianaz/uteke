@@ -1,3 +1,21 @@
+# Changelog
+
+## [0.14.1] — 2026-08-14
+
+Patch release: two chunker bug fixes found by mutation testing, plus test-suite hardening. No API or behavior changes beyond the fixes.
+
+### Fixed
+
+- **Markdown heading duplicated in oversized sections** — When a markdown section exceeded `max_chunk_chars`, its heading appeared twice in the first sub-chunk: once from `split_by_headings`, then again from the sub-chunking loop. Every oversized markdown document was quietly producing corrupted chunk content, which flows directly into embedding input and degrades retrieval quality. The dead re-prepend path is removed entirely (#1024).
+
+- **Infinite loop on multi-byte text with small chunk sizes** — The zero-progress guard in `split_long_text` advanced by raw byte offsets that could land inside multi-byte UTF-8 characters (CJK, emoji), flooring back to the start position forever. `chunk_markdown("日本語", 2)` would hang. The guard now advances to the next valid character boundary (#1024).
+
+### Changed
+
+- **cargo-mutants configuration moved to `.cargo/mutants.toml`** — The previous config at `crates/uteke-core/mutants.toml` used the key `exclude_files`, which is not a valid field in cargo-mutants v27 and was silently never applied. Migration to `.cargo/mutants.toml` (the location cargo-mutants actually reads) with the correct v27 schema (`exclude_globs`, `exclude_re` as arrays) and workspace-root-relative glob paths. This release is the first where mutant exclusions actually work.
+
+- **Chunker test suite grew from 20 to 60 tests** — Mutation score improved from 50% to 97% (149/164 mutants caught, 0 missed non-equivalent). 3 proven-equivalent mutants are excluded with documented reasoning.
+
 ## [0.14.0] — 2026-08-14
 
 Minor release: hybrid recall as default strategy, scene-segmented extraction, memory tools guide, lifecycle introspection, and source provenance. One behavior change (recall default).
