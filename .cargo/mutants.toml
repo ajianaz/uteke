@@ -1,0 +1,42 @@
+# cargo-mutants configuration for uteke
+#
+# Usage (from workspace root):
+#   cargo mutants --file crates/uteke-core/src/jaccard.rs        # single file
+#   cargo mutants --output mutants-run.out                      # custom output dir
+#   cargo mutants -j 4 --timeout 60                              # parallel jobs + timeout
+#
+# This is a LOCAL-ONLY tool — not in default CI.
+# Pre-release validation: run manually before tagging a new version.
+# CI integration (if added): only on develop→main PRs as a pre-release gate.
+#
+# Exclude modules that require external services (SQLite DB, embedding API, etc.)
+# Focus mutation testing on pure logic — the code most prone to silent bugs.
+
+# Files to EXCLUDE from mutation testing.
+# These are excluded because they require I/O, external services, or are
+# thin wrappers around stdlib/third-party calls — not pure logic worth mutating.
+exclude_globs = [
+    # Embedding backends — require external API/network
+    "crates/uteke-core/src/embed/*.rs",
+    # SQLite-backed modules — require on-disk database
+    "crates/uteke-core/src/memory/*.rs",
+    # Import/export — I/O heavy
+    "crates/uteke-core/src/import_export.rs",
+    # Update check — network fetch
+    "crates/uteke-core/src/update_check.rs",
+    "crates/uteke-cli/src/commands/update_check.rs",
+]
+
+# Equivalent mutants — PROVEN equivalent (behavior-identical, unkillable by any
+# test). Do not count against the mutation score. Reviewed & verified:
+#   chunker.rs:282:24 (< → <=) — is_char_boundary(text.len()) is always true,
+#     so the loop-guard condition is identical either way.
+#   chunker.rs:425:25 (&& → ||) — invariant: in_block == !current_lines.is_empty()
+#     always holds when reached (set together at ~line 435), so both
+#     operands always have the same truth value.
+#   chunker.rs:443:17 (&& → ||) — same invariant as above, at the final flush.
+exclude_re = [
+    "chunker.rs:282:24: replace < with <=",
+    "chunker.rs:425:25: replace && with \\|\\|",
+    "chunker.rs:443:17: replace && with \\|\\|",
+]
