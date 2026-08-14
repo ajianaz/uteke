@@ -13,7 +13,7 @@ use std::time::Duration;
 /// Embedding failures silently drop vector entries, causing the vector
 /// index to desync from SQLite. This helper retries up to 3 times with
 /// 200ms, 400ms, then 800ms delays between attempts.
-fn retry_embed(
+pub(crate) fn retry_embed(
     embedder: &Mutex<Option<Box<dyn crate::embed::Embedder>>>,
     text: &str,
 ) -> Result<Vec<f32>, Error> {
@@ -213,7 +213,7 @@ impl crate::Uteke {
     /// Searches the vector index for cosine >= 0.95. If found, returns
     /// the existing memory ID so caller can skip the insert.
     /// Only checks within the same namespace.
-    fn check_duplicate(
+    pub(crate) fn check_duplicate(
         &self,
         embedding: &[f32],
         namespace: Option<&str>,

@@ -70,6 +70,7 @@ impl crate::Uteke {
         };
 
         let mut imported = 0;
+        let mut deduped = 0;
 
         for entry in entries {
             if entry.content.is_empty() {
@@ -77,15 +78,15 @@ impl crate::Uteke {
                 continue;
             }
 
-            // Re-embed the content
+            // Re-embed the content with retry (consistent with remember path, #1005).
             self.ensure_embedder()?;
-            let embedding = self
-                .embedder
-                .lock()
-                .map_err(|_| Error::lock("embedder lock during import"))?
-                .as_ref()
-                .expect("embedder ensured above")
-                .embed(&entry.content)?;
+            let embedding = crate::operations::retry_embed(&self.embedder, &entry.content)?;
+
+            // Dedup check: skip if cosine >= 0.95 to existing memory (#1005).
+            if let Some(_existing_id) = self.check_duplicate(&embedding, namespace)? {
+                deduped += 1;
+                continue;
+            }
 
             let id = uuid::Uuid::new_v4().to_string();
             let now = chrono::Utc::now();
@@ -137,6 +138,10 @@ impl crate::Uteke {
                 continue;
             }
 
+            // Auto-link cosine edges (consistent with remember path, #1005).
+            // Must run AFTER index.insert() so the new memory is searchable.
+            self.auto_link_cosine(&id, &embedding, Some(memory.namespace.as_str()));
+
             imported += 1;
         }
 
@@ -149,10 +154,9 @@ impl crate::Uteke {
             index.save()?;
         }
 
-        if skipped > 0 {
-            tracing::warn!(
-                "Import completed with {imported} imported and {skipped} skipped entries. \
-                 Check logs above for individual entry errors."
+        if skipped > 0 || deduped > 0 {
+            tracing::info!(
+                "Import completed: {imported} imported, {deduped} duplicates skipped, {skipped} errored entries."
             );
         }
 

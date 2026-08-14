@@ -106,7 +106,7 @@ pub enum Commands {
         strict: bool,
         /// Recall strategy: vector, fts5, hybrid, or graph (graph = hybrid +
         /// graph-signal reranking, #378). Defaults to config's
-        /// `[recall].default_strategy` (vector).
+        /// `[recall].default_strategy` (hybrid).
         #[arg(long)]
         strategy: Option<String>,
         /// Enable salience boost (how much each result matters) (#352).
@@ -211,6 +211,8 @@ pub enum Commands {
     },
     /// Show memory store statistics
     Stats,
+    /// Print agent-facing memory tools guide for system prompt injection (#1010)
+    Guide,
     /// Check system health (DB, index, model, consistency)
     Doctor,
     /// Verify DB and index consistency

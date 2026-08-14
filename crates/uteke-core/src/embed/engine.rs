@@ -229,8 +229,24 @@ impl OnnxEmbedder {
                 .as_ref()
                 .ok_or_else(|| Error::embed_msg("tokenizer not loaded after lazy_load"))?;
 
+            // Pre-truncate text to avoid tokenizing content beyond MAX_SEQ_LEN (#1002).
+            // ~4 chars per token is a conservative estimate; truncating slightly short
+            // is harmless because we discard tokens past MAX_SEQ_LEN anyway.
+            const CHARS_PER_TOKEN: usize = 4;
+            let max_chars = MAX_SEQ_LEN.saturating_mul(CHARS_PER_TOKEN);
+            let truncated_text: &str = if text.len() > max_chars {
+                // Find the nearest char boundary at or below max_chars (MSRV-safe).
+                let mut end = max_chars;
+                while end > 0 && !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                &text[..end]
+            } else {
+                text
+            };
+
             let encoding = tokenizer
-                .encode(text, true)
+                .encode(truncated_text, true)
                 .map_err(|e| Error::embed("tokenize text", e))?;
 
             let input_ids = encoding.get_ids();

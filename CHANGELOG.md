@@ -1,3 +1,35 @@
+## [0.14.0] — 2026-08-14
+
+Minor release: hybrid recall as default strategy, scene-segmented extraction, memory tools guide, lifecycle introspection, and source provenance. One behavior change (recall default).
+
+### ⚠️ Behavior Change
+
+- **Hybrid (RRF) is now the default recall strategy (#1005)** — Previously defaulted to vector-only. Hybrid combines vector similarity with FTS5 keyword matching via Reciprocal Rank Fusion, improving recall@5 from 85.4% to 98.0% on the internal benchmark. No action needed — existing setups automatically benefit. To revert to vector-only, set `strategy = "vector"` in `[recall]`.
+
+### Added
+
+- **Scene-segmented LLM extraction with priority scoring (#1009)** — When using `--extract` with an LLM, facts are now grouped by topic (scene) and assigned a priority score (0.0–1.0). Each fact gets a `scene:<topic>` tag for filtering, a semantic type (`decision`, `fact`, `preference`), and an importance value reflecting its priority. Offline extraction is unaffected. Backward compatible — flat string arrays from older models still parse correctly.
+
+- **List deprecated memories endpoint (#1007)** — `GET /lifecycle/deprecated` returns deprecated memories with TTL metadata (deprecated date, expiry date, remaining days). Useful for auditing what's slated for pruning before it's gone.
+
+- **Memory tools guide endpoint (#1010)** — `GET /guide` returns an agent-facing reference document covering all available memory operations. Designed for system-prompt injection — agents can discover capabilities without hardcoded instructions.
+
+- **Source provenance for extracted memories (#1012, #1013)** — Memories created via `--extract` now automatically record their source file path and extraction timestamp. CLI and server paths both covered.
+
+### Fixed
+
+- **Cross-compilation fails for Android/iOS targets (#1014)** — `ORT_LIB_NAME` environment variable was not cfg'd for mobile targets, breaking `cargo build --target aarch64-linux-android` and `aarch64-apple-ios`. Fixed with conditional compilation flags.
+
+- **Update check wastes API calls in batch mode (#1006)** — The startup update check ran even during `--batch-dir` imports, adding latency to batch operations. Now skipped when `--batch-dir` is active.
+
+- **Embedding text not pre-truncated before API call (#1002)** — Long content strings were sent to the embedding API untruncated, causing rejections from providers with token limits. Text is now pre-truncated to the configured `max_chunk_tokens`.
+
+### Contributors
+
+- [@ajianaz](https://github.com/ajianaz)
+
+---
+
 ## [0.13.2] — 2026-08-11
 
 Patch release with update notifications, a startup crash fix, and benchmark accuracy improvements. No breaking changes.

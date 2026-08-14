@@ -167,6 +167,11 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
 
         Commands::Stats => list::run_stats(cli, uteke, ns),
 
+        Commands::Guide => {
+            println!("{}", uteke_core::guide::default_guide());
+            Ok(())
+        }
+
         Commands::Doctor => maintenance::run_doctor(cli, uteke),
 
         Commands::Verify => maintenance::run_verify(cli, uteke),
@@ -210,6 +215,7 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
                 base_url: extract_base_url.clone(),
                 max_facts: *extract_max_facts,
                 cfg: &config.extraction,
+                source_label: None, // Populated per-input in run_import (#1013)
             };
 
             // Batch mode: import entire directory
