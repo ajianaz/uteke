@@ -4,7 +4,7 @@ on:
   push:
     branches: [develop, main]
   pull_request:
-    branches: [develop]
+    branches: [develop, main]
   schedule:
     # Run daily at 06:00 UTC
     - cron: "0 6 * * *"
