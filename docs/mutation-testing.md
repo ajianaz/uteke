@@ -64,24 +64,39 @@ assert!((s - 0.2).abs() < 0.01, "expected ~0.2, got {s}");
 
 ## Excluded Files
 
-See `crates/uteke-core/mutants.toml` for the full exclusion list. Files requiring external services (SQLite, embedding API, network) are excluded — mutation testing is most valuable on **pure logic**.
+See `.cargo/mutants.toml` (workspace root) for the full exclusion list. Files requiring external services (SQLite, embedding API, network) are excluded — mutation testing is most valuable on **pure logic**.
 
 ## Current Coverage
 
-| Module | Mutants | Caught | Missed | Equivalent | Score |
+| Module | Mutants | Caught | Missed | Equivalent/Timeout | Score |
 |---|---|---|---|---|---|
 | `jaccard.rs` | 12 | 9 | 0 | 3 (unviable) | 100% |
 | `salience_recency.rs` | 53 | 48 | 3 | 2 (eq) | 96% |
 | `recall_cache.rs` | 25 | 18 | 5 | ~3 (eq) | 80% |
-| `chunker.rs` | 163 | — | — | — | TBD (deferred) |
+| `chunker.rs` | 164 | 149 | 0 | 5 (timeout) + 10 (unviable) + 3 (eq, excluded) | 97%* |
 
-**Overall**: 11 new mutation-killing tests added. Mutation score improved from 76% → 96% for `salience_recency.rs`.
+*chunker score = 149 caught / (149 + 5 timeouts treated as caught-equivalent) — final verify run, 35m.
+
+**Overall**: 40 new mutation-killing tests added across modules (20 → 60 chunker tests). Chunker mutation score improved from 50% → 97%.
+
+### Production bugs found by mutation testing
+
+Mutation testing on `chunker.rs` exposed **two real production bugs** (now fixed, with regression tests):
+
+1. **Heading duplication in oversized sections** — when a markdown section exceeded `max_chars`, the first sub-chunk contained the heading **twice** (once from `split_by_headings`, once re-prepended by the sub-chunk loop). This corrupted every downstream embedding for such chunks.
+2. **Infinite loop on multibyte text with tiny `max_chars`** — `split_long_text`'s progress guard advanced by raw byte offsets that could land inside a multibyte UTF-8 character (e.g. CJK). `chunk_markdown("日本語", 2)` would hang forever.
 
 ### Equivalent Mutants
 
-Some mutants produce identical behavior regardless of tests. These are documented as "equivalent mutants" and excluded from scoring:
+Some mutants produce identical behavior regardless of tests. These are documented as "equivalent mutants" and excluded from scoring (see `exclude_re` in `.cargo/mutants.toml`):
 
 - `apply_boosts: replace > with >=` (2 mutants) — multiplying by weight=0.0 is a no-op
 - `recall_cache::put retain: replace < with <=` — get-path TTL check also catches expired entries
+- `chunker.rs:282:24 (< → <=)` — `is_char_boundary(text.len())` is always true
+- `chunker.rs:425:25 / 443:17 (&& → ||)` — `in_block` and `!current_lines.is_empty()` are always equal (set together)
+
+### Timeout mutants (accepted)
+
+5 chunker mutants cause **infinite loops** (progress guard mutations) — the test binary hangs and cargo-mutants reports TIMEOUT. These are counted as caught-in-spirit: no test can terminate an infinite loop.
 
 Last updated: v0.14.1

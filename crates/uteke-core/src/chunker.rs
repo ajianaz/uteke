@@ -103,31 +103,20 @@ pub fn chunk_markdown(text: &str, max_chars: usize) -> Vec<TextChunk> {
                 char_end: char_offset + section_len,
             });
         } else {
-            // Section too large — split by paragraphs, keeping heading.
+            // Section too large — split by paragraphs.
+            // NOTE: the heading line is already part of section.content
+            // (split_by_headings seeds each section with its own heading
+            // line), so sub_chunks[0] already begins with the heading.
+            // No prefix is needed — prepending one would duplicate it.
             let sub_chunks = split_by_paragraphs(&section.content, max_chars);
-            let heading_prefix = if section.heading.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    "{} {}\n\n",
-                    "#".repeat(section.level as usize),
-                    section.heading
-                )
-            };
-
             for (i, sub) in sub_chunks.iter().enumerate() {
-                let full = if i == 0 && !heading_prefix.is_empty() {
-                    format!("{heading_prefix}{sub}")
-                } else {
-                    sub.clone()
-                };
                 chunks.push(TextChunk {
                     heading: if i == 0 {
                         section.heading.clone()
                     } else {
                         format!("{} (part {})", section.heading, i + 1)
                     },
-                    content: full,
+                    content: sub.clone(),
                     level: section.level,
                     char_start: char_offset,
                     char_end: char_offset + sub.len(),
@@ -285,10 +274,15 @@ fn split_long_text(text: &str, max_chars: usize) -> Vec<String> {
         let chunk_end = break_at.unwrap_or(end);
         let chunk_end = floor_char_boundary(text, chunk_end);
         // Guard against zero-length chunks that would cause an infinite loop.
-        // If chunk_end didn't advance past start, force at least 1 char forward.
+        // Advance at least one full character: `start + 1` may still be a
+        // non-boundary inside a multi-byte char (CJK/emoji), which would
+        // floor back to `start` and loop forever.
         let chunk_end = if chunk_end <= start {
-            let next = (start + 1).min(text.len());
-            floor_char_boundary(text, next)
+            let mut next = start + 1;
+            while next < text.len() && !text.is_char_boundary(next) {
+                next += 1;
+            }
+            next
         } else {
             chunk_end
         };
@@ -624,6 +618,215 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_language_all_extensions() {
+        // Kill all match-arm deletion mutants in detect_language (lines 313-321).
+        // Each extension must return the correct language, not "text".
+        assert_eq!(detect_language("App.ts"), "typescript");
+        assert_eq!(detect_language("app.js"), "javascript");
+        assert_eq!(detect_language("App.jsx"), "javascript");
+        assert_eq!(detect_language("app.mjs"), "javascript");
+        assert_eq!(detect_language("app.cjs"), "javascript");
+        assert_eq!(detect_language("Main.java"), "java");
+        assert_eq!(detect_language("App.kt"), "java");
+        assert_eq!(detect_language("main.c"), "c");
+        assert_eq!(detect_language("header.h"), "c");
+        assert_eq!(detect_language("src.cpp"), "cpp");
+        assert_eq!(detect_language("src.cc"), "cpp");
+        assert_eq!(detect_language("src.cxx"), "cpp");
+        assert_eq!(detect_language("header.hpp"), "cpp");
+        assert_eq!(detect_language("app.rb"), "ruby");
+        assert_eq!(detect_language("App.swift"), "swift");
+        assert_eq!(detect_language("script.lua"), "lua");
+        assert_eq!(detect_language("Component.svelte"), "svelte");
+    }
+
+    #[test]
+    fn test_extract_imports_all_languages() {
+        // Kill mutant: line 348 (extract_imports → vec!["xyzzy"] / vec![String::new()]).
+        // Also kills match-arm deletion mutants.
+        // Rust
+        let rust_code = "use std::io;\nuse serde::Serialize;\nfn main() {}";
+        let imports = extract_imports(rust_code, "rust");
+        assert_eq!(imports.len(), 2);
+        assert!(imports[0].contains("std::io"));
+        assert!(imports[1].contains("serde"));
+        // Python
+        let py_code = "import os\nfrom pathlib import Path\nprint('hi')";
+        let py_imports = extract_imports(py_code, "python");
+        assert_eq!(py_imports.len(), 2);
+        // Go
+        let go_code = "import \"fmt\"\nfunc main() {}";
+        let go_imports = extract_imports(go_code, "go");
+        assert_eq!(go_imports.len(), 1);
+        // TypeScript/JavaScript
+        let ts_code = "import { foo } from 'bar';\nconst baz = require('qux');";
+        let ts_imports = extract_imports(ts_code, "typescript");
+        assert_eq!(ts_imports.len(), 2);
+        // Dart
+        let dart_code = "import 'package:flutter/material.dart';\nvoid main() {}";
+        let dart_imports = extract_imports(dart_code, "dart");
+        assert_eq!(dart_imports.len(), 1);
+    }
+
+    #[test]
+    fn test_chunk_code_dart() {
+        // Kill mutant: line 336 (delete match arm "dart" in chunk_code).
+        // If arm deleted, Dart code falls through to generic → single chunk.
+        let code =
+            "void main() {\n  print('hello');\n}\n\nclass Foo {\n  int bar() { return 42; }\n}";
+        let chunks = chunk_code(code, "dart");
+        // chunk_dart should find at least the function and class.
+        assert!(
+            chunks.len() >= 2,
+            "expected Dart code to be chunked into multiple parts, got {}",
+            chunks.len()
+        );
+    }
+
+    #[test]
+    fn test_chunk_python_multiple_defs() {
+        // Kill mutants: lines 431, 449, 449 in chunk_python.
+        // Tests def + class detection with multiple blocks.
+        let code = "def foo():\n    return 1\n\ndef bar(x):\n    return x + 1\n\nclass Baz:\n    def method(self):\n        return True";
+        let chunks = chunk_code(code, "python");
+        // Should find: foo, bar, Baz (at minimum).
+        assert!(
+            chunks.len() >= 3,
+            "expected at least 3 Python chunks, got {}: {:?}",
+            chunks.len(),
+            chunks.iter().map(|c| &c.symbol_name).collect::<Vec<_>>()
+        );
+        // Verify names.
+        let names: Vec<&str> = chunks.iter().map(|c| c.symbol_name.as_str()).collect();
+        assert!(names.contains(&"foo"));
+        assert!(names.contains(&"bar"));
+        assert!(names.contains(&"Baz"));
+    }
+
+    #[test]
+    fn test_chunk_python_nested_class_method() {
+        // Kill mutants: line 449 (replace && with ||, delete !) in last-block flush.
+        let code = "class Calculator:\n    def add(self, a, b):\n        return a + b";
+        let chunks = chunk_code(code, "python");
+        assert!(!chunks.is_empty());
+        assert_eq!(chunks[0].symbol_name, "Calculator");
+        assert_eq!(chunks[0].symbol_type, "class");
+    }
+
+    #[test]
+    fn test_chunk_typescript_functions_and_classes() {
+        // Kill mutants: lines 485-486 in chunk_typescript (replace || with &&).
+        // The retain filter uses || to check for function-like syntax.
+        let code = "function greet(): string {\n  return 'hello';\n}\n\nclass Foo {\n  bar(): void {}\n}\n\nconst add = (a: number, b: number): number => a + b;\n\nconst PI = 3.14;";
+        let chunks = chunk_code(code, "typescript");
+        // Should find: greet (function), Foo (class), add (const with =>).
+        // PI should be filtered out (no => or function).
+        let names: Vec<&str> = chunks.iter().map(|c| c.symbol_name.as_str()).collect();
+        assert!(names.contains(&"greet"), "expected 'greet' in {:?}", names);
+        assert!(names.contains(&"Foo"), "expected 'Foo' in {:?}", names);
+        assert!(
+            names.contains(&"add"),
+            "expected 'add' (arrow fn) in {:?}",
+            names
+        );
+        // PI should be filtered out (no function syntax).
+        assert!(
+            !names.contains(&"PI"),
+            "PI should be filtered out, got {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_chunk_go_funcs_and_types() {
+        // Kill mutants in chunk_go path.
+        let code = "package main\n\nimport \"fmt\"\n\nfunc greet() {\n    fmt.Println(\"hello\")\n}\n\ntype Config struct {\n    Port int\n}";
+        let chunks = chunk_code(code, "go");
+        assert!(
+            chunks.len() >= 2,
+            "expected at least 2 Go chunks, got {}",
+            chunks.len()
+        );
+        let names: Vec<&str> = chunks.iter().map(|c| c.symbol_name.as_str()).collect();
+        assert!(names.contains(&"greet"));
+        assert!(names.contains(&"Config"));
+    }
+
+    #[test]
+    fn test_extract_block_balanced_braces() {
+        // Kill mutants in extract_block (lines 582-609).
+        // Tests depth tracking with nested braces.
+        let lines: Vec<&str> = vec![
+            "function outer() {",
+            "  let x = 1;",
+            "  function inner() {",
+            "    let y = 2;",
+            "  }",
+            "  let z = x + y;",
+            "}",
+            "function other() {",
+            "  return;",
+            "}",
+        ];
+        // Extract from line 0 (function outer).
+        let block = extract_block(&lines, 0, '{', '}').expect("should find block");
+        // Should include lines 0-6 (outer function with nested inner).
+        assert!(block.contains("function outer"));
+        assert!(block.contains("inner"));
+        assert!(block.contains("let z"));
+        // Should NOT include other().
+        assert!(!block.contains("function other"));
+        // Verify depth tracking: nested braces must balance.
+        let open_count = block.matches('{').count();
+        let close_count = block.matches('}').count();
+        assert_eq!(open_count, close_count, "braces should be balanced");
+    }
+
+    #[test]
+    fn test_extract_block_no_braces_fallback() {
+        // Kill mutants: lines 598-606 in extract_block.
+        // When no braces found, should return first 5 lines as fallback.
+        let lines: Vec<&str> = vec![
+            "def foo():",
+            "    x = 1",
+            "    y = 2",
+            "    z = 3",
+            "    return x",
+            "extra = 99",
+        ];
+        let block = extract_block(&lines, 0, '{', '}').expect("should return fallback");
+        // Python-style: no braces found, fallback to 5 lines.
+        assert!(block.contains("foo"));
+        assert!(block.contains("x = 1"));
+        // Should include up to 5 lines (start + 5 = 5).
+        assert!(!block.contains("extra = 99"));
+    }
+
+    #[test]
+    fn test_extract_block_empty_lines() {
+        // Kill mutant: line 604 (delete !) and line 604:8 (delete !).
+        // Empty block_lines or found_open=true should return None.
+        let lines: Vec<&str> = vec![];
+        let result = extract_block(&lines, 0, '{', '}');
+        assert!(result.is_none(), "empty lines should return None");
+    }
+    #[test]
+    fn test_chunk_by_patterns_export_keyword() {
+        // Kill mutants: line 533 (replace && with ||), lines 539 in chunk_by_patterns.
+        // Tests export keyword detection (contains check, not starts_with).
+        let code = "export function foo() {\n  return 1;\n}\n\nexport default function bar() {\n  return 2;\n}";
+        let chunks = chunk_code(code, "typescript");
+        // Export patterns match and produce chunks (names may vary based on
+        // keyword extraction, but chunks should be produced and filtered).
+        assert!(!chunks.is_empty(), "export functions should produce chunks");
+        // Verify the content includes the function bodies.
+        let has_foo = chunks.iter().any(|c| c.content.contains("return 1"));
+        let has_bar = chunks.iter().any(|c| c.content.contains("return 2"));
+        assert!(has_foo, "should find foo's body");
+        assert!(has_bar, "should find bar's body");
+    }
+
+    #[test]
     fn test_chunk_rust_functions() {
         let code = r#"
 fn hello() {
@@ -820,27 +1023,462 @@ class MyApp extends StatelessWidget {
         assert_eq!(chunks[0].heading, "");
     }
 
+    // ---- Mutation-killing tests for chunker ----
+
+    #[test]
+    fn test_md_multi_section_char_offsets_exact() {
+        // Kill mutant: line 138 (+= → *=) char_offset accumulation.
+        // "# A\n\nText A\n\n# B\n\nText B" → section 1 content "# A\n\nText A"
+        // (10 bytes) → section 2 must start at offset 11 (10 + 1 separator).
+        let md = "# A\n\nText A\n\n# B\n\nText B";
+        let chunks = chunk_markdown(md, 1024);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].char_start, 0);
+        assert_eq!(chunks[0].char_end, 12, "section 1 is 12 bytes");
+        assert_eq!(
+            chunks[1].char_start, 13,
+            "section 2 starts after section 1 + separator"
+        );
+        assert_eq!(chunks[1].char_end, 24);
+    }
+
+    #[test]
+    fn test_md_subchunk_char_end_exact() {
+        // Kill mutant: line 133 (+ → *) in sub-chunk path.
+        // char_end = char_offset + sub.len() → mutant: char_offset * sub.len()
+        // For sub-chunks, char_offset is the section start, sub.len() > 0.
+        // Mutant: char_offset * sub.len() could be 0 or huge → wrong.
+        let para = "Word ".repeat(100); // 500 chars
+        let md = format!("# Heading\n\n{para}");
+        let chunks = chunk_markdown(&md, 100);
+        assert!(chunks.len() > 1);
+        // Every chunk must have char_end >= char_start.
+        for (i, chunk) in chunks.iter().enumerate() {
+            assert!(
+                chunk.char_end >= chunk.char_start,
+                "chunk {i}: char_end ({}) should be >= char_start ({})",
+                chunk.char_end,
+                chunk.char_start
+            );
+            // char_end must be > 0 for all non-empty chunks (kills * at line 133
+            // when char_offset=0: 0 * sub.len() = 0).
+            assert!(
+                chunk.char_end > 0,
+                "chunk {i}: char_end ({}) must be > 0",
+                chunk.char_end
+            );
+        }
+    }
+
+    #[test]
+    fn test_md_subchunk_no_heading_duplication() {
+        // Regression: section.content already contains the heading line
+        // (split_by_headings seeds current_lines with the heading itself).
+        // Prepending heading_prefix again duplicates the heading — embedding
+        // input would see the title twice.
+        let para = "X".repeat(300);
+        let md = format!("# My Heading\n\n{para}");
+        let chunks = chunk_markdown(&md, 100);
+        assert!(chunks.len() >= 3);
+        let occurrences = chunks[0].content.matches("My Heading").count();
+        assert_eq!(
+            occurrences, 1,
+            "heading must appear exactly once in first sub-chunk, got {occurrences}: {:?}",
+            chunks[0].content
+        );
+    }
+
+    #[test]
+    fn test_md_subchunk_heading_prefix_first_chunk_only() {
+        // Kill mutants: line 119 (&& → ||, == → !=, delete !).
+        // Need section large enough to split into sub_chunks WITH heading.
+        // Original: heading_prefix only on i==0 AND heading non-empty.
+        // Mutant && → ||: heading prefix on ALL sub_chunks (wrong).
+        // Mutant == → !=: heading prefix on i!=0 (wrong).
+        // Mutant delete !: heading prefix when heading_prefix IS empty (wrong).
+        let para = "X".repeat(300);
+        let md = format!("# My Heading\n\n{para}");
+        let chunks = chunk_markdown(&md, 100);
+        assert!(chunks.len() >= 3);
+        // First sub-chunk CONTENT must start with heading prefix.
+        // (Kills == → != and delete ! mutants: they strip the prefix.)
+        assert!(
+            chunks[0].content.starts_with("# My Heading"),
+            "first chunk content must start with heading prefix, got: {:?}",
+            &chunks[0].content[..40.min(chunks[0].content.len())]
+        );
+        // Second sub-chunk CONTENT must NOT repeat the heading.
+        // (Kills && → || mutant: it prefixes ALL sub-chunks.)
+        assert!(
+            !chunks[1].content.contains("My Heading"),
+            "second chunk content must not repeat heading, got: {:?}",
+            &chunks[1].content[..40.min(chunks[1].content.len())]
+        );
+    }
+
+    #[test]
+    fn test_parse_heading_level_6_boundary() {
+        // Kill mutants: line 206 (> → ==, > → >=) in parse_heading.
+        // Original: hashes > 6 → None. h6 is valid (6 > 6 = false → accepted).
+        // Mutant >=: 6 >= 6 = true → None → h6 rejected (wrong).
+        // Mutant ==: 6 == 6 = true → None → h6 rejected (wrong).
+        let md = "###### Level Six Heading\n\nBody text.";
+        let chunks = chunk_markdown(md, 1024);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].heading, "Level Six Heading");
+        assert_eq!(chunks[0].level, 6);
+    }
+
+    #[test]
+    fn test_parse_heading_level_7_rejected() {
+        // Verify headings with > 6 hashes are rejected (not a mutant test,
+        // but ensures the boundary is correct from both sides).
+        let md = "####### Seven Hashes\n\nBody.";
+        let chunks = chunk_markdown(md, 1024);
+        // Should NOT be parsed as heading.
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].heading, "");
+    }
+
+    #[test]
+    fn test_md_hashtag_no_space_rejected() {
+        // Kill mutant: line 211 (delete !) in parse_heading.
+        // #hashtag without space should NOT be heading.
+        // Mutant delete !: !rest.starts_with(' ') → rest.starts_with(' ')
+        //   → #tag would check if rest starts with space → false → AND
+        //   !rest.is_empty() → rest.is_empty() → false → heading accepted (wrong).
+        let md = "#tag\n\nBody text here.";
+        let chunks = chunk_markdown(md, 1024);
+        // Should be treated as plain text, not a heading.
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].heading, "");
+    }
+
+    #[test]
+    fn test_split_by_paragraphs_exact_boundary() {
+        // Kill mutants on line 226:
+        //   > → ==, > → >=, > → <, && → ||, + → -, + → *, delete !.
+        // Also kills line 231 (> → >=), 233 (delete !), 240 (delete !), 247 (delete !).
+        // Construct text where paragraph boundary exactly hits max_chars.
+        // Para1 = 10 chars, para2 = 10 chars. max_chars = 24.
+        // current.len() + para.len() + 2 = 0+10+2=12 > 24? No → accumulate.
+        // Then current.len()=10, 10+10+2=22 > 24? No → accumulate.
+        // current.len()=20+2=22 (with \n\n). Hmm, need more precise.
+        let text = "AAAAAAAAAA\n\nBBBBBBBBBB";
+        // Each para = 10 chars. max_chars = 12.
+        // Iteration 1: current="" → 0+10+2=12 > 12? No (not strictly greater).
+        //   current.is_empty() → skip flush. para.len()=10 > 12? No.
+        //   current = "AAAAAAAAAA"
+        // Iteration 2: current.len()=10 → 10+10+2=22 > 12? Yes → flush.
+        //   But mutant > → >=: 22 >= 12? Yes → same result.
+        //   Mutant > → ==: 22 == 12? No → does NOT flush → accumulates wrong!
+        //   Mutant > → <: 22 < 12? No → does NOT flush → accumulates wrong!
+        let chunks = chunk_markdown(text, 12);
+        // With max_chars=12: first para fits, second triggers flush.
+        // Expect 2 chunks.
+        assert!(
+            chunks.len() >= 2,
+            "expected at least 2 chunks for 2 paragraphs with max_chars=12"
+        );
+    }
+
+    #[test]
+    fn test_split_by_paragraphs_oversized_single() {
+        // Kill mutant: line 231 (> → >=) in split_by_paragraphs.
+        // para.len() > max_chars → hard split.
+        // Mutant >=: para.len() == max_chars also triggers hard split.
+        // Need para exactly == max_chars to differentiate.
+        let text = "A".repeat(50);
+        // max_chars = 50. para.len() = 50.
+        // Original: 50 > 50 = false → accumulated normally.
+        // Mutant >=: 50 >= 50 = true → hard split triggered (wrong path).
+        let md = format!("# Heading\n\n{text}");
+        let chunks = chunk_markdown(&md, 50);
+        // With max_chars=50 and para=50: section heading (9 chars) + para (50).
+        // Should split but the para itself should NOT be hard-split
+        // (50 > 50 is false in original).
+        // The exact chunk count depends on heading overhead, but we verify
+        // no chunk is empty.
+        for chunk in &chunks {
+            assert!(!chunk.content.is_empty(), "no chunk should be empty");
+        }
+    }
+
+    #[test]
+    fn test_split_long_text_exact_multiple() {
+        // Kill mutant: line 266 (< → <=) in split_long_text.
+        // while start < text.len() → mutant: while start <= text.len().
+        // If text.len() is exact multiple of max_chars, the mutant will
+        // iterate one extra time when start == text.len(), slicing text[len..]
+        // which is empty → produces an extra empty chunk.
+        let text = "A".repeat(20);
+        let chunks = chunk_markdown(&text, 10);
+        // 20 chars / 10 = exactly 2 chunks.
+        // Mutant <= would produce 3 chunks (extra empty one).
+        // But chunk_markdown wraps, so verify no empty content chunks.
+        for chunk in &chunks {
+            assert!(!chunk.content.is_empty(), "chunk should not be empty");
+        }
+    }
+
+    #[test]
+    fn test_split_long_text_multibyte_tiny_limit() {
+        // Regression: original guard used (start+1).min(len) then floored —
+        // inside a 3-byte CJK char that floors back to `start` → infinite
+        // loop on inputs like "日本語" with max_chars < 3.
+        let text = "日本語テスト";
+        let chunks = chunk_markdown(text, 2);
+        assert!(
+            !chunks.is_empty(),
+            "multibyte tiny-limit split must terminate"
+        );
+        // Reassembly must preserve all characters (no char loss/corruption).
+        let reassembled = chunks
+            .iter()
+            .map(|c| c.content.as_str())
+            .collect::<String>();
+        assert_eq!(reassembled.chars().count(), 6, "no chars may be lost");
+        // Kill mutant: while start < text.len() → <=. The mutant re-enters
+        // the loop once more at start == len and pushes an EXTRA EMPTY chunk.
+        assert_eq!(
+            chunks.len(),
+            6,
+            "exactly one chunk per CJK char, got {chunks:?}"
+        );
+    }
+
+    #[test]
+    fn test_split_long_text_sentence_split_exact() {
+        // Kill mutants at break_at: |pos| start + pos + 1 (+ → *, + → -).
+        // Direct call (private fn is visible to this module).
+        // text = "AA. BB CC" (9 bytes), max=6 → slice "AA. BB", rfind(". ")=2
+        // → break_at = 0+2+1 = 3 → chunk "AA."; remainder "BB CC".
+        let chunks = split_long_text("AA. BB CC", 6);
+        assert_eq!(chunks.len(), 2, "got {chunks:?}");
+        assert_eq!(chunks[0], "AA.", "+→* gives 'AA', +→- gives 'A'");
+        assert_eq!(
+            chunks[1], " BB CC",
+            "space after period stays in next chunk"
+        );
+    }
+
+    #[test]
+    fn test_extract_imports_ts_const_require() {
+        // Kill mutant: line 351 (&& → ||) — starts_with("const ") alone
+        // would count ANY const as an import. Only const + require() counts.
+        let code = "const PI = 3.14;\nconst fs = require(\"fs\");\nlet x = 1;";
+        let imports = extract_imports(code, "typescript");
+        assert_eq!(imports.len(), 1, "got {imports:?}");
+        assert_eq!(imports[0], "const fs = require(\"fs\");");
+    }
+
+    #[test]
+    fn test_chunk_python_two_defs_flush() {
+        // Kill mutants: line 428 (&& → ||) save-previous-block and
+        // line 443 (delete !) last-block flush.
+        // Mutant &&→||: on FIRST def (in_block=false, current_lines empty)
+        // false||true → pushes an EMPTY chunk before the real ones.
+        // Mutant delete ! at last flush: drops the last block → fallback.
+        let code = "def a():\n    return 1\n\ndef b():\n    return 2";
+        let chunks = chunk_python(code);
+        assert_eq!(chunks.len(), 2, "got {chunks:?}");
+        assert_eq!(chunks[0].symbol_name, "a");
+        assert_eq!(chunks[1].symbol_name, "b");
+        assert_eq!(chunks[0].content, "def a():\n    return 1\n");
+    }
+
+    #[test]
+    fn test_chunk_python_no_defs_fallback() {
+        // Kill mutant: line 443 (&& → ||) last-block flush.
+        // With no defs at all: in_block=false, current_lines empty →
+        // original falls through to the whole-file fallback chunk.
+        // Mutant (false||true) pushes an EMPTY chunk and skips the
+        // fallback → symbol_name "" instead of "full".
+        let code = "# just a comment\nx = 1\n";
+        let chunks = chunk_python(code);
+        assert_eq!(chunks.len(), 1, "got {chunks:?}");
+        assert_eq!(chunks[0].symbol_type, "file");
+        assert_eq!(chunks[0].symbol_name, "full");
+        assert_eq!(chunks[0].content, code);
+    }
+
+    #[test]
+    fn test_chunk_rust_comment_with_keyword_no_match() {
+        // Kill mutant: line 546 inner (&& → ||) — mid-line keyword matches.
+        // A comment CONTAINING "fn " (no braces in the comment!) must NOT
+        // chunk; only lines STARTING with the keyword may.
+        let code = "// calls fn helper below\nfn real() {\n    1\n}";
+        let chunks = chunk_code(code, "rust");
+        assert_eq!(chunks.len(), 1, "got {chunks:?}");
+        assert_eq!(chunks[0].symbol_name, "real");
+        assert_eq!(chunks[0].symbol_type, "function");
+    }
+
+    #[test]
+    fn test_chunk_ts_default_export_contains() {
+        // Kill mutant: line 545 outer (|| → &&) — `export default` does not
+        // start with "export default " via starts_with... wait, it does.
+        // The inner contains() arm exists for lines like `};` — keep an
+        // exact-behavior test for the export default pattern.
+        let code = "export default function foo() {\n    return 1;\n}";
+        let chunks = chunk_code(code, "typescript");
+        assert_eq!(chunks.len(), 1, "got {chunks:?}");
+        assert_eq!(chunks[0].symbol_type, "export");
+        assert!(chunks[0].content.contains("function foo"));
+    }
+
+    #[test]
+    fn test_split_by_paragraphs_exact_len_leading_space() {
+        // Kill mutant: line 220 (> → >=). A paragraph of EXACTLY max_chars
+        // with leading whitespace: original accumulates it (final flush does
+        // trim_end only, keeping leading spaces); mutant hard-splits via
+        // split_long_text which fully trims → loses the leading spaces.
+        let chunks = split_by_paragraphs("AA\n\n  BBBB", 6);
+        assert_eq!(chunks.len(), 2, "got {chunks:?}");
+        assert_eq!(chunks[0], "AA");
+        assert_eq!(chunks[1], "  BBBB", "leading spaces must survive");
+    }
+
+    #[test]
+    fn test_split_by_paragraphs_exact_len_trailing_space() {
+        // Kill mutant: line 220 (> → >=). "AAAA  " has len 6 == max_chars.
+        // Original: accumulate path → final flush trim_end → "AAAA".
+        // Mutant (>=): hard-split path → split_long_text early-exit (line
+        // 257: end == text.len()) pushes the slice UNTRIMMED → "AAAA  ".
+        // The trailing spaces are observable → mutant killed.
+        let chunks = split_by_paragraphs("AAAA  ", 6);
+        assert_eq!(chunks.len(), 1, "got {chunks:?}");
+        assert_eq!(chunks[0], "AAAA", "trailing spaces must be trimmed");
+    }
+
+    #[test]
+    fn test_chunk_rust_generic_struct_name() {
+        // Kill mutant: line 533 first-ish || → && ('<' no longer splits).
+        // "struct Foo<T> {": original name "Foo" (split at '<');
+        // mutant keeps going to the space → "Foo<T>".
+        let code = "struct Foo<T> {\n    x: T,\n}";
+        let chunks = chunk_code(code, "rust");
+        assert_eq!(chunks.len(), 1, "got {chunks:?}");
+        assert_eq!(chunks[0].symbol_name, "Foo");
+        assert_eq!(chunks[0].symbol_type, "struct");
+    }
+
+    #[test]
+    fn test_chunk_ts_class_no_space_brace() {
+        // Kill mutant: line 533 later || → && ('{' and ':' no longer split).
+        // "class Foo{": original name "Foo" (split at '{');
+        // mutant finds no delimiter → "Foo{".
+        let code = "class Foo{\n    a: number;\n}";
+        let chunks = chunk_code(code, "typescript");
+        assert_eq!(chunks.len(), 1, "got {chunks:?}");
+        assert_eq!(chunks[0].symbol_name, "Foo");
+        assert_eq!(chunks[0].symbol_type, "class");
+    }
+
+    #[test]
+    fn test_split_by_paragraphs_plus_two_boundary() {
+        // Kill mutant: line 226 second + → - (len + para - 2 > max).
+        // len+para = 9: original 9+2=11 > 10 → flush; mutant 9-2=7 ≤ 10 → merge.
+        let chunks = split_by_paragraphs("AAAA\n\nBBBBB", 10);
+        assert_eq!(
+            chunks.len(),
+            2,
+            "original flushes at 11 > 10, got {chunks:?}"
+        );
+        assert_eq!(chunks[0], "AAAA");
+        assert_eq!(chunks[1], "BBBBB");
+    }
+
+    #[test]
+    fn test_split_long_text_sentence_boundary_offsets() {
+        // Kill mutants: lines 283 (+ → *, + → -), 290 (+ → *) in split_long_text.
+        // line 283: .map(|pos| start + pos + 1)
+        //   mutant + → *: start + pos * 1 = start + pos (no +1 → off by one)
+        //   mutant + → -: start + pos - 1 (off by one backward)
+        // line 290: (start + 1).min(text.len())
+        //   mutant + → *: start * 1 = start → floor_char_boundary(text, start)
+        //   → chunk_end <= start → infinite loop guard → no progress
+        // Need text with sentence boundary (". ") to trigger break_at path.
+        let text = "First sentence. Second part. Third segment.";
+        // max_chars=20: slice = "First sentence. Sec"
+        // rfind(". ") = position of ". " before "Second" → break_at = start + pos + 1
+        let chunks = chunk_markdown(text, 20);
+        // Should split at sentence boundary, not mid-word.
+        assert!(chunks.len() >= 2, "expected split at sentence boundary");
+        // Verify no chunk is empty (kills + → * and + → - at line 283).
+        for chunk in &chunks {
+            assert!(!chunk.content.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_split_long_text_no_word_boundary_progress() {
+        // Kill mutant: line 290 (+ → *) in split_long_text.
+        // This line is the guard: if chunk_end <= start, force start+1.
+        // Mutant + → *: (start * 1) = start → floor_char_boundary(text, start)
+        //   → if start is valid boundary, returns start → chunk_end = start
+        //   → chunk_text = text[start..start] = "" → skip → start = chunk_end = start
+        //   → INFINITE LOOP → test times out, caught as timeout not missed.
+        // So this mutant is actually unviable (timeout), not missed.
+        // We test with text that has no spaces to force the guard path.
+        let text = "A".repeat(30);
+        let chunks = chunk_markdown(&text, 10);
+        // Should produce 3 chunks without infinite loop.
+        assert!(!chunks.is_empty());
+        for chunk in &chunks {
+            assert!(!chunk.content.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_split_by_paragraphs_flush_and_accumulate() {
+        // Kill mutants: lines 226 (all), 231 (> → >=), 233/240/247 (delete !).
+        // Constructed so chunk count is EXACT — any operator mutation changes it.
+        // Paragraphs: "AAAA"(4) "\n\n" "BBBB"(4) "\n\n" "CCCC"(4)
+        // max_chars = 10:
+        //  - para A: current="" → 0+4+2=6 > 10? NO → accumulate. current="AAAA"
+        //  - para B: 4+4+2=10 > 10? NO → accumulate. current="AAAA\n\nBBBB" (10)
+        // - para C: 10+4+2=16 > 10? YES → flush "AAAA\n\nBBBB", accumulate C
+        // Final flush → 2 chunks total. Mutant > → >= at 226: A: 6>=10 no;
+        //   B: 10>=10 YES → flush early → 3 chunks → caught.
+        let text = "AAAA\n\nBBBB\n\nCCCC";
+        let chunks = split_by_paragraphs(text, 10);
+        assert_eq!(chunks.len(), 2, "expected exactly 2 chunks, got {chunks:?}");
+        assert_eq!(chunks[0], "AAAA\n\nBBBB");
+        assert_eq!(chunks[1], "CCCC");
+    }
+
+    #[test]
+    fn test_split_by_paragraphs_accumulate_separator() {
+        // Kill mutant: line 240 (delete !) — "\n\n" separator only added
+        // when current is non-empty. delete ! → always prepend "\n\n" →
+        // first paragraph starts with leading "\n\n" → exact content check.
+        let chunks = split_by_paragraphs("AA\n\nBB", 100);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], "AA\n\nBB", "no leading separator allowed");
+    }
+
+    // Shared mock embedder for embed-aware chunking tests.
+    struct MockEmbedder {
+        seq_len: usize,
+    }
+    impl crate::embed::Embedder for MockEmbedder {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, crate::Error> {
+            Ok(vec![0.0; 8])
+        }
+        fn dims(&self) -> usize {
+            8
+        }
+        fn max_seq_len(&self) -> usize {
+            self.seq_len
+        }
+        fn name(&self) -> &str {
+            "mock"
+        }
+    }
+
     #[test]
     fn test_embed_aware_chunking() {
-        // Mock embedder with small seq len for testing.
-        struct MockEmbedder {
-            seq_len: usize,
-        }
-        impl crate::embed::Embedder for MockEmbedder {
-            fn embed(&self, _text: &str) -> Result<Vec<f32>, crate::Error> {
-                Ok(vec![0.0; 8])
-            }
-            fn dims(&self) -> usize {
-                8
-            }
-            fn max_seq_len(&self) -> usize {
-                self.seq_len
-            }
-            fn name(&self) -> &str {
-                "mock"
-            }
-        }
-
         // 256 tokens * 4 chars/token = 1024 chars.
         let embedder = MockEmbedder { seq_len: 256 };
         let long_text = "A".repeat(2000);
@@ -851,6 +1489,58 @@ class MyApp extends StatelessWidget {
             "expected multiple chunks for 2000 chars with 1024 limit"
         );
         assert!(chunks[0].content.len() <= 1024);
+    }
+
+    #[test]
+    fn test_chunk_markdown_zero_max_chars_fallback() {
+        // Kill mutant: replace == with != on line 85.
+        // Original: max_chars == 0 → fallback to 1024.
+        // Mutant !=: max_chars != 0 → 1024 is used when max_chars != 0,
+        //   and original max_chars (0) is used when == 0 → empty/tiny chunks.
+        // With max_chars=0 and mutant, chunks would have 0-char limit → many tiny chunks.
+        let text = "A".repeat(50);
+        let chunks = chunk_markdown(&text, 0);
+        // Original: 0 → fallback to 1024 → 1 chunk of 50 chars.
+        assert_eq!(chunks.len(), 1, "max_chars=0 should fallback to 1024");
+        assert_eq!(chunks[0].content.len(), 50);
+    }
+
+    #[test]
+    fn test_chunk_markdown_embed_aware_small_seq_len_fallback() {
+        // Kill mutants on line 68: replace < with ==, >, <= in guard.
+        // seq_len=10 → max_chars=40 → 40 < 100 → fallback to 1024.
+        // Mutants:
+        //   == : 40 == 100 = false → uses 40 (wrong: tiny chunks)
+        //   >  : 40 > 100 = false → uses 40 (wrong)
+        //   <= : at boundary 100, different result (see next test)
+        let embedder = MockEmbedder { seq_len: 10 };
+        let long_text = "A".repeat(500);
+        let chunks = chunk_markdown_embed_aware(&long_text, &embedder);
+        // With fallback to 1024, 500 chars fits in 1 chunk.
+        assert_eq!(
+            chunks.len(),
+            1,
+            "seq_len=10 should fallback to 1024 chars, fitting 500 in 1 chunk"
+        );
+    }
+
+    #[test]
+    fn test_chunk_markdown_embed_aware_boundary_100() {
+        // Kill mutant: replace < with <= on line 68.
+        // seq_len=25 → max_chars=100 → original: 100 < 100 = false → use 100.
+        // Mutant <= : 100 <= 100 = true → fallback to 1024 (wrong: larger chunks).
+        let embedder = MockEmbedder { seq_len: 25 };
+        let long_text = "A".repeat(250);
+        let chunks = chunk_markdown_embed_aware(&long_text, &embedder);
+        // With max_chars=100, 250 chars → 3 chunks (100+100+50).
+        assert!(
+            chunks.len() >= 2,
+            "seq_len=25 → max_chars=100, should split 250 chars into multiple chunks"
+        );
+        assert!(
+            chunks[0].content.len() <= 100,
+            "first chunk should be ≤100 chars with seq_len=25"
+        );
     }
 
     #[test]
