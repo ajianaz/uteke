@@ -24,4 +24,3 @@ internal/
 benchmarks/longmemeval/results_*/
 
 # VitePress build artifacts (keep config.ts, not lock files)
-docs/package-lock.json
