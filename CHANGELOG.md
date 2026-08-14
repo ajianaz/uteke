@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.14.2] — 2026-08-14
+
+Patch release to restore the uteke-cli crates.io publish. The CLI crate embedded asset files from outside its package root, which `cargo publish` cannot bundle, so every publish attempt since June failed silently while the release workflow reported success. The crate was stuck at 0.4.3 on crates.io while the repo shipped 0.14.x.
+
+### Fixed
+
+- `uteke-cli` publishes again: the memory-skill and provider templates now live inside `crates/uteke-cli/assets/` and ship inside the `.crate` archive
+- The release workflow now verifies every crate reports the tagged version on crates.io and fails the job if a publish step was silently skipped
+
+### Note for `cargo install` users
+
+If you installed `uteke-cli` before this release, you have a build from June. Run `cargo install uteke-cli --version 0.14.2` to get the current CLI.
+
 ## [0.14.1] — 2026-08-14
 
 Patch release: two chunker bug fixes found by mutation testing, plus test-suite hardening. No API or behavior changes beyond the fixes.
