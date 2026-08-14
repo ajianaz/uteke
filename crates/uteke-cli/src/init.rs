@@ -695,10 +695,8 @@ fn init_hermes_memory_provider(json: bool) -> Result<(), String> {
 mod tests {
     /// The Hermes memory-provider templates are embedded at build time. Guard
     /// against them going missing or losing their entry points.
-    const INIT_PY: &str =
-        include_str!("../assets/hermes-memory-provider/__init__.py.tmpl");
-    const PLUGIN_YAML: &str =
-        include_str!("../assets/hermes-memory-provider/plugin.yaml.tmpl");
+    const INIT_PY: &str = include_str!("../assets/hermes-memory-provider/__init__.py.tmpl");
+    const PLUGIN_YAML: &str = include_str!("../assets/hermes-memory-provider/plugin.yaml.tmpl");
 
     #[test]
     fn memory_provider_template_has_register_entrypoint() {
@@ -723,8 +721,7 @@ mod tests {
 
     // Pi memory-provider template guards (#575).
     const PI_INDEX_TS: &str = include_str!("../assets/pi-memory-provider/index.ts");
-    const PI_PACKAGE_JSON: &str =
-        include_str!("../assets/pi-memory-provider/package.json");
+    const PI_PACKAGE_JSON: &str = include_str!("../assets/pi-memory-provider/package.json");
 
     #[test]
     fn pi_memory_provider_has_before_agent_start_hook() {
