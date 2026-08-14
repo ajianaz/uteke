@@ -1,0 +1,58 @@
+# Mutation testing — pre-release validation only.
+#
+# This workflow runs ONLY on PRs from develop → main, serving as a pre-release
+# quality gate. It is NOT part of the default CI pipeline.
+#
+# Mutation testing validates test quality: cargo-mutants modifies source code
+# (operator mutations, boundary changes, etc.) and checks if existing tests
+# catch the mutation. "Missed mutants" = tests that pass on buggy code.
+#
+# Usage:
+#   - Runs automatically on develop → main PRs
+#   - Can be triggered manually via workflow_dispatch
+#   - Results are informational — they don't block merge by default
+#
+# To fix missed mutants, see the pattern in:
+#   crates/uteke-core/src/salience_recency.rs (mutation-killing test comments)
+#   Reference: nginjen project (78% missed-mutant reduction)
+
+name: Mutation Testing
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel in-progress runs for the same PR
+concurrency:
+  group: mutation-testing-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutation-test:
+    name: Cargo Mutants
+    runs-on: ubuntu-latest
+    # Only run on PRs from develop (pre-release validation)
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && startsWith(github.head_ref, 'develop'))
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked
+
+      - name: Run cargo-mutants on core logic
+        working-directory: crates/uteke-core
+        run: cargo mutants --timeout 120 -j 2
+        continue-on-error: true
+
+      - name: Upload mutant results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutant-results
+          path: crates/uteke-core/mutants.out/
+          retention-days: 30
