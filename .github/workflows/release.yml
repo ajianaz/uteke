@@ -269,13 +269,22 @@ jobs:
         run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} -p uteke-core --allow-dirty
         continue-on-error: true
 
+      - name: Wait for crates.io index propagation
+        run: sleep 60
+
       - name: Publish uteke-mcp
         run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} -p uteke-mcp --allow-dirty
         continue-on-error: true
 
+      - name: Wait for crates.io index propagation
+        run: sleep 30
+
       - name: Publish uteke-cli
         run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} -p uteke-cli --allow-dirty
         continue-on-error: true
+
+      - name: Wait for crates.io index propagation
+        run: sleep 30
 
       - name: Publish uteke-server
         run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} -p uteke-server --allow-dirty

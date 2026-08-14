@@ -301,6 +301,75 @@ mod tests {
     }
 
     #[test]
+    fn test_cache_ttl_boundary_expired() {
+        // Kill mutant: replace < with <= in TTL check (line 86).
+        // With ttl_secs=0, any entry is immediately expired:
+        //   original: elapsed >= 0 → always true → expired (returns None)
+        //   mutant:   elapsed <= 0 → false for any elapsed > 0 → NOT expired
+        // ttl_secs=0 makes the boundary explicit.
+        let cache = RecallCache::new(RecallCacheConfig {
+            max_entries: 10,
+            ttl_secs: 0,
+        });
+
+        cache.put("query", "default", 5, None, RecallStrategy::Vector, vec![]);
+
+        // With ttl=0, entry should be expired immediately.
+        // Mutant (<=) would still return the cached entry.
+        assert!(
+            cache
+                .get("query", "default", 5, None, RecallStrategy::Vector)
+                .is_none(),
+            "ttl_secs=0 should expire immediately"
+        );
+    }
+
+    #[test]
+    fn test_cache_fifo_eviction_on_capacity() {
+        // Kill mutants: replace >= with < in capacity check (line 120).
+        // and replace < with ==/>/<= in TTL retain (line 117).
+        // Fill cache to capacity, then add one more → oldest must be evicted.
+        let cache = RecallCache::new(RecallCacheConfig {
+            max_entries: 2,
+            ttl_secs: 60,
+        });
+
+        // Insert 2 entries (at capacity)
+        cache.put("q1", "default", 5, None, RecallStrategy::Vector, vec![]);
+        cache.put("q2", "default", 5, None, RecallStrategy::Vector, vec![]);
+
+        // Both should be present
+        assert!(
+            cache
+                .get("q1", "default", 5, None, RecallStrategy::Vector)
+                .is_some(),
+            "q1 should be cached"
+        );
+        assert!(
+            cache
+                .get("q2", "default", 5, None, RecallStrategy::Vector)
+                .is_some(),
+            "q2 should be cached"
+        );
+
+        // Insert 3rd → FIFO evicts q1 (oldest)
+        cache.put("q3", "default", 5, None, RecallStrategy::Vector, vec![]);
+
+        assert!(
+            cache
+                .get("q1", "default", 5, None, RecallStrategy::Vector)
+                .is_none(),
+            "q1 should be evicted (FIFO)"
+        );
+        assert!(
+            cache
+                .get("q3", "default", 5, None, RecallStrategy::Vector)
+                .is_some(),
+            "q3 should be cached"
+        );
+    }
+
+    #[test]
     fn test_cache_clear() {
         let cache = RecallCache::new(RecallCacheConfig {
             max_entries: 10,
