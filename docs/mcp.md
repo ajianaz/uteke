@@ -137,7 +137,7 @@ Both transports expose the same 35 tools (MCP protocol version `2025-06-18`):
 | Tool | Description |
 |------|-------------|
 | `uteke_remember` | Store a memory (supports type, room, author, tags) |
-| `uteke_recall` | Semantic search (supports tags filter, min_score) |
+| `uteke_recall` | Semantic search (supports tags filter, min_score, strategy: hybrid/vector/fts5/graph — default hybrid) |
 | `uteke_search` | Text search with optional tag filter |
 | `uteke_list` | List memories (supports pagination via offset) |
 | `uteke_forget` | Delete a memory |
