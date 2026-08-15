@@ -316,27 +316,29 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                 };
                 let has_temporal = after_ts.is_some() || before_ts.is_some();
 
-                let recall_result = if let Some(pit) = point_in_time {
-                    uteke.recall_at_time(
-                        &req_data.query,
-                        limit,
-                        tags_filter,
-                        ns(&req_data.namespace),
-                        pit,
-                        min_score,
-                        entity_filter,
-                        category_filter,
-                    )
-                } else {
-                    uteke.recall(
-                        &req_data.query,
-                        limit,
-                        tags_filter,
-                        ns(&req_data.namespace),
-                        min_score,
-                        entity_filter,
-                        category_filter,
-                    )
+                // Resolve recall strategy ONCE for every path (#1034):
+                // request `strategy` > config `[recall] default_strategy` >
+                // Hybrid — matching the CLI default. Unknown values are a
+                // loud 400 on all paths, never a silent no-op.
+                let strategy_name = req_data.strategy.as_deref().or_else(|| {
+                    ctx.recall_config
+                        .as_ref()
+                        .and_then(|r| r.default_strategy.as_deref())
+                });
+                let strategy = match strategy_name {
+                    Some(name) => match uteke_core::RecallStrategy::from_str_opt(name) {
+                        Some(s) => s,
+                        None => {
+                            return ctx.error_response_for(
+                                req,
+                                400,
+                                format!(
+                                    "Invalid strategy: '{name}'. Use 'vector', 'fts5', 'hybrid', or 'graph'."
+                                ),
+                            );
+                        }
+                    },
+                    None => uteke_core::RecallStrategy::Hybrid,
                 };
 
                 // Unified search path (#531): when search_type is specified,
@@ -353,22 +355,6 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                                 400,
                                 format!(
                                     "Invalid search_type: '{other}'. Use 'all', 'memory', or 'doc'."
-                                ),
-                            );
-                        }
-                    };
-                    // Parse strategy (#900)
-                    let strategy = match req_data.strategy.as_deref() {
-                        Some("fts5") => uteke_core::RecallStrategy::Fts5,
-                        Some("hybrid") => uteke_core::RecallStrategy::Hybrid,
-                        Some("graph") => uteke_core::RecallStrategy::Graph,
-                        Some("vector") | None => uteke_core::RecallStrategy::Vector,
-                        Some(other) => {
-                            return ctx.error_response_for(
-                                req,
-                                400,
-                                format!(
-                                    "Invalid strategy: '{other}'. Use 'vector', 'fts5', 'hybrid', or 'graph'."
                                 ),
                             );
                         }
@@ -416,10 +402,65 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                         ctx.error_response_for(req, 500, "Internal server error")
                     }
                     None => {
-                        // Memory-only recall path — entity/category filtering
-                        // is already applied in the core recall candidate loop (#663).
+                        // Memory-only recall path (#1034): route through
+                        // recall_hybrid so the resolved strategy applies to
+                        // the default path too — not just when search_type is
+                        // present. recall_hybrid has no native entity/category
+                        // support, so apply them as post-filters with 3×
+                        // over-fetch (same pattern as recall_unified_memories).
+                        let needs_post_filter =
+                            entity_filter.is_some() || category_filter.is_some();
+                        let fetch_limit = if needs_post_filter {
+                            (limit.saturating_mul(3)).max(limit + 10)
+                        } else {
+                            limit
+                        };
+                        let recall_result = if let Some(pit) = point_in_time {
+                            // Time-travel: strategy doesn't apply to
+                            // recall_at_time (point-in-time semantics).
+                            uteke.recall_at_time(
+                                &req_data.query,
+                                limit,
+                                tags_filter,
+                                ns(&req_data.namespace),
+                                pit,
+                                min_score,
+                                entity_filter,
+                                category_filter,
+                            )
+                        } else {
+                            uteke.recall_hybrid(
+                                &req_data.query,
+                                fetch_limit,
+                                tags_filter,
+                                ns(&req_data.namespace),
+                                strategy,
+                                min_score,
+                            )
+                        };
+                        // Entity/category post-filter (memory results only) —
+                        // mirrors the CLI recall post-filter and core
+                        // recall_unified_memories (#663, #900).
                         match recall_result {
                             Ok(mut results) => {
+                                if needs_post_filter && point_in_time.is_none() {
+                                    results.retain(|sr| {
+                                        entity_filter.is_none_or(|ent| {
+                                            sr.memory
+                                                .metadata
+                                                .get("entity")
+                                                .and_then(|v| v.as_str())
+                                                .is_some_and(|e| e == ent)
+                                        }) && category_filter.is_none_or(|cat| {
+                                            sr.memory
+                                                .metadata
+                                                .get("category")
+                                                .and_then(|v| v.as_str())
+                                                .is_some_and(|c| c == cat)
+                                        })
+                                    });
+                                    results.truncate(limit);
+                                }
                                 // #902: Post-filter by temporal range (before/after).
                                 if has_temporal {
                                     results.retain(|r| {
