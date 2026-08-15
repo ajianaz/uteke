@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.14.3] — 2026-08-15
+
+Patch release: recall `strategy` now behaves the same everywhere. The CLI got the fix in #900; the HTTP API and MCP server never got the wiring, so the same request quietly returned different results depending on which surface you asked.
+
+### Fixed
+
+- **HTTP recall strategy: default is hybrid, not legacy vector (#1034)** — A request without `strategy` silently fell back to the legacy vector path, and `strategy: "bogus"` returned 200 OK with vector results behind it. Strategy is now resolved once per request (request > `[recall] default_strategy` from uteke.toml > hybrid) and invalid values return HTTP 400 on every path — bare recall, unified search, and v1. The eager legacy recall that ran before strategy resolution is gone, which also removes a wasted query on every memory recall.
+- **MCP `uteke_recall` exposes `strategy` (#1035)** — The tool schema didn't list a `strategy` parameter, silently hardcoded vector, and ignored invalid values. The schema now documents `vector | fts5 | hybrid | graph`, the default resolves to hybrid, and invalid values return a loud JSON-RPC error instead of a quiet vector search.
+- **Server honors `[recall] default_strategy`** — The HTTP server now reads the config key the CLI has documented all along. A typo'd value is caught at startup with a warning and falls back to hybrid, so one bad config line can't 400 every request with a message blaming the request.
+- **Memory recall with entity/category filters** now routes through the hybrid engine with the same 3× over-fetch post-filter the unified path uses, instead of a vector-only path that could miss FTS5 matches.
+
+### Verified
+
+Empirically, against a scratch store with a release build: HTTP matrix 10/10 (default hybrid, all four strategies, 400 on invalid across all three paths, config override, startup sanitization), MCP harness 8/8 (schema, defaults, loud errors, engine parity default == hybrid on warm cache). Workspace suite 538/538.
+
+Known issues filed during this work: #1036 (export drops namespace), #1037 (recall cache-hit skips salience/recency boosts).
+
 ## [0.14.2] — 2026-08-14
 
 Patch release to restore the uteke-cli crates.io publish. The CLI crate embedded asset files from outside its package root, which `cargo publish` cannot bundle, so every publish attempt since June failed silently while the release workflow reported success. The crate was stuck at 0.4.3 on crates.io while the repo shipped 0.14.x.
