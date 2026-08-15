@@ -245,6 +245,7 @@ pub struct RecallRequest {
     /// Recall strategy: "hybrid" (default), "vector", "fts5", or "graph" (#900, #1034).
     /// When absent, the server falls back to `[recall] default_strategy` from
     /// uteke.toml, then to "hybrid" — matching the CLI default.
+    /// Invalid values return HTTP 400.
     #[serde(default)]
     pub strategy: Option<String>,
     /// Temporal range filter: only return memories created at or after this
