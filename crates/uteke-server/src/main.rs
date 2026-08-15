@@ -326,7 +326,28 @@ fn main() {
         auth_token_hash,
         read_only_token_hash,
         cors_origins: cors_origins.clone(),
-        recall_config: config.recall.clone(),
+        recall_config: {
+            // Sanitize [recall] default_strategy at startup (#1034): the
+            // server only recently started honoring this key. An invalid
+            // value (typo in uteke.toml) must not 400 every recall request
+            // with a message blaming the request — warn loudly and fall
+            // back to hybrid instead. Explicit request-level `strategy`
+            // values remain strictly validated (HTTP 400).
+            let mut recall = config.recall.clone();
+            if let Some(r) = recall.as_mut() {
+                if let Some(s) = r.default_strategy.as_deref() {
+                    if uteke_core::RecallStrategy::from_str_opt(s).is_none() {
+                        warn!(
+                            "Invalid [recall] default_strategy='{s}' in config — \
+                             falling back to 'hybrid'. \
+                             Expected: vector | fts5 | hybrid | graph."
+                        );
+                        r.default_strategy = Some("hybrid".to_string());
+                    }
+                }
+            }
+            recall
+        },
         extraction_config: config.extraction.clone(),
     };
 

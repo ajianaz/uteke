@@ -242,7 +242,10 @@ pub struct RecallRequest {
     /// `linked_memory_ids` on document results.
     #[serde(default)]
     pub enrich: bool,
-    /// Recall strategy: "vector" (default), "fts5", "hybrid", or "graph" (#900).
+    /// Recall strategy: "hybrid" (default), "vector", "fts5", or "graph" (#900, #1034).
+    /// When absent, the server falls back to `[recall] default_strategy` from
+    /// uteke.toml, then to "hybrid" — matching the CLI default.
+    /// Invalid values return HTTP 400.
     #[serde(default)]
     pub strategy: Option<String>,
     /// Temporal range filter: only return memories created at or after this
@@ -428,6 +431,9 @@ pub struct RecallFileSection {
     pub min_score: Option<f64>,
     /// Strict mode threshold (higher, for critical queries).
     pub min_score_strict: Option<f64>,
+    /// Default recall strategy when a request omits `strategy` (#1034).
+    /// One of: vector | fts5 | hybrid | graph. Server-side default: hybrid.
+    pub default_strategy: Option<String>,
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────

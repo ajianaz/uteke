@@ -222,8 +222,8 @@ pub struct RecallConfig {
     pub min_score_strict: f64,
     /// Default recall strategy for the `recall` command when `--strategy` is
     /// not given. One of: `vector`, `fts5`, `hybrid`, `graph`. Default
-    /// `vector` preserves the original CLI behavior; `graph` enables
-    /// graph-augmented reranking (#378).
+    /// `hybrid` (RRF: vector + FTS5, R@5 98.0% vs vector-only 85.4% on
+    /// LongMemEval-S); `graph` enables graph-augmented reranking (#378).
     pub default_strategy: String,
     /// Weight for the edge-density boost applied by the `graph` strategy.
     /// 0.0 disables; 0.1 is subtle (default).
