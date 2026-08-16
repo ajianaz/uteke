@@ -85,6 +85,10 @@ fn main() {
                     std::process::exit(1);
                 }
             }
+            "--version" | "-V" => {
+                println!("uteke-serve {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
             "--help" | "-h" => {
                 println!("uteke-serve — persistent warm memory server");
                 println!();
@@ -97,6 +101,7 @@ fn main() {
                 println!("  --cors-origin <URL>  Allowed CORS origin (repeatable)");
                 println!("  --read-only-token <T> Read-only API token (GET endpoints only) (#409)");
                 println!("  -h, --help           Show this help");
+                println!("  -V, --version        Show version and exit");
                 println!();
                 println!("Config: reads [server] section from uteke.toml");
                 println!("  CLI args override config values.");
