@@ -2020,8 +2020,25 @@ impl crate::Uteke {
                 .map_err(|e| Error::db("commit supersede tx", e))?;
         }
 
-        // Soft-deprecated rows leave the recall cache scope via namespace
-        // invalidation — same hygiene soft_forget() applies.
+        // Same hygiene soft_forget() applies to deprecated rows: remove from
+        // the vector index (deprecated memories must not surface in
+        // semantic recall — code-scanning #685) and invalidate the recall
+        // cache for the namespace.
+        {
+            let mut index = self
+                .index
+                .write()
+                .map_err(|_| Error::lock("index write lock during supersede"))?;
+            if !index.remove(&old.id) {
+                tracing::debug!(
+                    "Vector index entry not found during supersede for id={} (ok if never embedded)",
+                    old.id
+                );
+            }
+            if let Err(e) = index.save() {
+                tracing::warn!("Failed to persist vector index after supersede: {e}");
+            }
+        }
         self.recall_cache.invalidate_namespace(&old.namespace);
 
         Ok((old.id, new.id))
@@ -2103,6 +2120,18 @@ mod supersession_tests {
         assert!(m.deprecated, "old memory soft-deprecated");
         let listed = uteke.list(None, 100, 0, Some("ss-ns")).unwrap();
         assert!(listed.iter().all(|x| x.id != old));
+
+        // Deprecated memory must also leave the VECTOR INDEX — otherwise it
+        // still surfaces in semantic recall (code-scanning #685).
+        {
+            let idx = uteke.index.read().unwrap();
+            let needle = vec![0.5_f32; 768];
+            let hits = idx.search(&needle, 10, 100);
+            assert!(
+                hits.iter().all(|(id, _)| id != &old),
+                "superseded memory must not remain in the vector index"
+            );
+        }
 
         // Both edges exist.
         let conn = uteke.graph_store();

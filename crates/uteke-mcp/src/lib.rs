@@ -2268,11 +2268,12 @@ mod id_resolution_tests {
         // Unique per call (tests run in parallel threads; shared names hit
         // "database busy" on WAL setup).
         let dir = std::env::temp_dir().join(format!(
-            "mcp-id-{}-{}",
+            "mcp-id-{}-{}-{}",
+            module_path!().len(), // stable per test module
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos())
+                .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -2411,7 +2412,14 @@ mod supersession_mcp_tests {
 
     #[test]
     fn exec_supersede_via_short_ids() {
-        let dir = std::env::temp_dir().join(format!("ssmcp-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "ssmcp-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
 
