@@ -55,7 +55,7 @@ installing to `~/.hermes/plugins/uteke-memory/`.
 
 ```bash
 # Copy to Hermes plugins dir
-cp -r extensions/hermes-memory-provider ~/.hermes/plugins/uteke-memory/
+cp -r extensions/hermes-uteke-memory ~/.hermes/plugins/uteke-memory/
 cd ~/.hermes/plugins/uteke-memory/
 for f in *.tmpl; do mv "$f" "${f%.tmpl}"; done
 
