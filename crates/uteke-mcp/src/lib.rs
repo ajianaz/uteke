@@ -488,7 +488,7 @@ fn tool_dream() -> Value {
 fn tool_room_recall() -> Value {
     serde_json::json!({
         "name": "uteke_room_recall",
-        "description": "Semantic recall within a room context. Searches across all namespaces in the room using hybrid RRF ranking.",
+        "description": "Semantic recall within a room context. Requires an EXISTING room_id (create via uteke_room_create first) — unknown room ids error at call time. Searches across all namespaces in the room using hybrid RRF ranking.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -965,13 +965,45 @@ fn exec_stats(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
 
     let stats = uteke.stats(namespace).map_err(|e| format!("Failed: {e}"))?;
 
+    // #1052: agents need triage fields on one call — tiers, pinned/deprecated
+    // split, and (when unscoped) the per-namespace breakdown.
+    let pinned = uteke.count_pinned(namespace).unwrap_or(0);
+    let deprecated = uteke.count_deprecated(namespace).unwrap_or(0);
+
+    let mut lines = vec![
+        format!(
+            "Total: {} | Tags: {} | DB: {} bytes",
+            stats.total_memories, stats.unique_tags, stats.db_size_bytes
+        ),
+        format!(
+            "Tiers: hot {} | warm {} | cold {}",
+            stats.hot, stats.warm, stats.cold
+        ),
+        format!(
+            "Pinned: {} | Deprecated (soft-deleted): {}",
+            pinned, deprecated
+        ),
+        format!(
+            "Recall cache: {} hits / {} misses",
+            stats.cache_hits, stats.cache_misses
+        ),
+    ];
+
+    if namespace.is_none() {
+        if let Ok(ns_counts) = uteke.namespace_counts() {
+            if ns_counts.len() > 1 {
+                lines.push("Namespaces:".to_string());
+                for (ns, count) in ns_counts {
+                    lines.push(format!("  {ns}: {count}"));
+                }
+            }
+        }
+    }
+
     Ok(ToolResult {
         content: vec![McpContent::Text {
             r#type: "text".to_string(),
-            text: format!(
-                "Total: {} | Tags: {} | DB: {} bytes",
-                stats.total_memories, stats.unique_tags, stats.db_size_bytes
-            ),
+            text: lines.join("\n"),
         }],
         is_error: false,
     })
@@ -1159,7 +1191,22 @@ fn exec_doc_search(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
 
     let lines: Vec<String> = results
         .iter()
-        .map(|d| format!("{} — {}", d.document.slug, d.document.title))
+        .map(|d| {
+            // #1052: score + chunk snippet make ranking visible and results
+            // actionable (was: bare "slug — title").
+            let mut line = format!(
+                "[{:.2}] {} — {}",
+                d.score, d.document.slug, d.document.title
+            );
+            if !d.chunk_heading.is_empty() {
+                line.push_str(&format!(" § {}", d.chunk_heading));
+            }
+            if !d.chunk_snippet.is_empty() {
+                let snip: String = d.chunk_snippet.chars().take(120).collect();
+                line.push_str(&format!(" \"{snip}…\""));
+            }
+            line
+        })
         .collect();
 
     Ok(ToolResult {
@@ -1450,8 +1497,11 @@ fn exec_room_memories(uteke: &Uteke, args: &Value) -> Result<ToolResult, String>
     let lines: Vec<String> = memories
         .iter()
         .map(|m| {
+            // #1052/#1048: include the short id so the next tool call
+            // (pin/forget/graph edges) can act on the row directly.
             let created = m.created_at.format("%Y-%m-%d %H:%M");
-            format!("[{created} | {}] {}", m.namespace, m.content)
+            let short_id: String = m.id.chars().take(8).collect();
+            format!("[{created} | {} | {}] {}", short_id, m.namespace, m.content)
         })
         .collect();
     Ok(ToolResult {

@@ -804,6 +804,31 @@ impl super::Store {
     }
 }
 
+impl super::Store {
+    /// Count PINNED (never-decay) memories, optionally per namespace (#1052).
+    pub fn count_pinned(&self, namespace: Option<&str>) -> Result<usize, Error> {
+        let count: usize = match namespace {
+            Some(ns) => self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memories WHERE namespace = ?1 AND pinned = 1 AND deprecated = 0",
+                    params![ns],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|e| Error::db("count_pinned", e))? as usize,
+            None => self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memories WHERE pinned = 1 AND deprecated = 0",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|e| Error::db("count_pinned", e))? as usize,
+        };
+        Ok(count)
+    }
+}
+
 #[cfg(test)]
 mod content_type_tests {
     use super::*;
