@@ -544,12 +544,23 @@ impl crate::Uteke {
         // and the caller re-applies threshold, ensuring correctness regardless
         // of what threshold a previous caller used.
         let cache_ns = namespace.unwrap_or("all");
+        // Boost window: salience/recency boosts can reorder results across the
+        // limit boundary, so we cache a larger candidate set and re-apply
+        // boosts + truncate on every read (#1037). Without the window, a
+        // memory outside the raw top-N could never enter warm results even
+        // though boosts would lift it there on a cold call.
+        let boost_window = (limit.saturating_mul(4)).saturating_add(16);
 
         if let Some(cached) = self
             .recall_cache
             .get(query, cache_ns, limit, tags_filter, strategy)
         {
             let mut results = cached;
+            // Cache stores RAW (pre-boost) scores — re-apply salience/recency
+            // boosts on every read so warm-cache results match cold-compute
+            // results exactly (#1037). Boosts are time-dependent, so applying
+            // them at cache-write time would freeze staleness into the cache.
+            self.apply_salience_recency_boosts(&mut results, limit);
             if min_score > 0.0 {
                 results.retain(|r| r.score >= min_score);
             }
@@ -557,25 +568,31 @@ impl crate::Uteke {
             return Ok(results);
         }
 
+        // Compute against the boost window so the cached candidate set is
+        // large enough for boosts to reorder into the final top-N (#1037).
+        // min_score is passed as 0.0 to the underlying paths: thresholding
+        // happens AFTER boosts (on both cache-miss and cache-hit reads) so
+        // cold and warm calls filter identical boosted score sets.
         let results = match strategy {
             RecallStrategy::Vector => {
-                self.recall(query, limit, tags_filter, namespace, min_score, None, None)?
+                self.recall(query, boost_window, tags_filter, namespace, 0.0, None, None)?
             }
             RecallStrategy::Fts5 => {
-                self.recall_fts5_only(query, limit, tags_filter, namespace, min_score)?
+                self.recall_fts5_only(query, boost_window, tags_filter, namespace, 0.0)?
             }
             // Hybrid (RRF): min_score is passed but not used for filtering.
             // RRF scores are rank-based, not cosine similarity. Applying a
             // cosine threshold to RRF scores would incorrectly filter results.
             RecallStrategy::Hybrid => {
-                self.recall_rrf(query, limit, tags_filter, namespace, min_score)?
+                self.recall_rrf(query, boost_window, tags_filter, namespace, min_score)?
             }
             // Graph (#378): hybrid RRF, then fuse graph-signal boosts.
             // The boost is additive + log-scaled, so isolated memories are
             // untouched and well-connected memories drift upward. Reranking
             // happens *before* caching so cache entries store the final scores.
             RecallStrategy::Graph => {
-                let rrf = self.recall_rrf(query, limit, tags_filter, namespace, min_score)?;
+                let rrf =
+                    self.recall_rrf(query, boost_window, tags_filter, namespace, min_score)?;
                 if self.graph_rerank_config.enabled && !rrf.is_empty() {
                     let ids: Vec<String> = rrf.iter().map(|r| r.memory.id.clone()).collect();
                     let signals =
@@ -588,39 +605,50 @@ impl crate::Uteke {
         };
 
         // Cache results for future queries (without min_score filtering,
-        // so cached results are reusable for any threshold)
-        self.recall_cache.put(
-            query,
-            cache_ns,
-            limit,
-            tags_filter,
-            strategy,
-            results.clone(),
-        );
-
-        // Apply salience/recency boosts AFTER caching so cached entries
-        // store the raw scores (time-independent). Boosts are recomputed
-        // on every call (#352).
+        // so cached results are reusable for any threshold). The cached set
+        // is the boost_window candidate set — truncated to `limit` on every
+        // read after boost re-application (#1037).
+        //
+        // Post-process in place (identical to the cache-hit read path):
+        // boost → sort → truncate → min_score. No put-then-get round-trip —
+        // a cache eviction or lock failure between put and get must never
+        // turn a successful computation into an empty result (cora finding).
         let mut results = results;
-        if !self.salience_recency_config.is_noop() {
-            let now = chrono::Utc::now();
-            for sr in &mut results {
-                sr.score = crate::salience_recency::apply_boosts(
-                    sr.score,
-                    &sr.memory,
-                    now,
-                    self.salience_recency_config,
-                );
-            }
-            results.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            results.truncate(limit);
-        }
+        results.truncate(boost_window);
+        let raw = results.clone();
+        self.recall_cache
+            .put(query, cache_ns, limit, tags_filter, strategy, raw);
 
+        self.apply_salience_recency_boosts(&mut results, limit);
+        if min_score > 0.0 {
+            results.retain(|r| r.score >= min_score);
+        }
+        results.truncate(limit);
         Ok(results)
+    }
+
+    /// Apply salience/recency boosts in place, then re-sort and truncate.
+    /// Shared by the cache-miss and cache-hit paths of `recall_hybrid` so
+    /// both produce identical scores for the same query (#1037).
+    fn apply_salience_recency_boosts(&self, results: &mut Vec<SearchResult>, limit: usize) {
+        if self.salience_recency_config.is_noop() {
+            return;
+        }
+        let now = chrono::Utc::now();
+        for sr in results.iter_mut() {
+            sr.score = crate::salience_recency::apply_boosts(
+                sr.score,
+                &sr.memory,
+                now,
+                self.salience_recency_config,
+            );
+        }
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(limit);
     }
 
     /// Recall memories and return a formatted context string for AI prompt injection.
@@ -1717,6 +1745,202 @@ mod forget_tests {
             "doctor must not report mismatch after soft-forget, got: {}",
             consistency.detail
         );
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod recall_cache_parity_tests {
+    use crate::RecallStrategy;
+    use crate::Uteke;
+
+    /// #1037: cold (cache miss) and warm (cache hit) recall_hybrid calls must
+    /// return identical scores. The cache-hit path used to skip salience/
+    /// recency boosts, so warm results scored lower than cold results.
+    #[test]
+    fn test_recall_hybrid_cold_warm_score_parity() {
+        let dir = std::env::temp_dir().join(format!("parity-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+
+        // Non-noop boosts (default config is 0.1/0.1 — already non-noop, but be explicit)
+        uteke.set_salience_recency_config(crate::salience_recency::SalienceRecencyConfig {
+            salience_weight: 0.1,
+            recency_weight: 0.1,
+        });
+
+        let embedding = vec![0.42_f32; 768];
+        for i in 0..3 {
+            uteke
+                .remember_precomputed(
+                    &format!("parity probe memory number {i} about pod scheduling cluster"),
+                    &[],
+                    None,
+                    Some("parity-ns"),
+                    "fact",
+                    "text",
+                    &embedding,
+                )
+                .unwrap();
+        }
+
+        let ns = Some("parity-ns");
+        let cold = uteke
+            .recall_hybrid(
+                "pod scheduling cluster",
+                10,
+                None,
+                ns,
+                RecallStrategy::Hybrid,
+                0.0,
+            )
+            .unwrap();
+        assert!(!cold.is_empty(), "cold call must return results");
+
+        let warm = uteke
+            .recall_hybrid(
+                "pod scheduling cluster",
+                10,
+                None,
+                ns,
+                RecallStrategy::Hybrid,
+                0.0,
+            )
+            .unwrap();
+        assert_eq!(cold.len(), warm.len(), "warm call must return same count");
+
+        let max_delta = cold
+            .iter()
+            .zip(warm.iter())
+            .map(|(c, w)| (c.score - w.score).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            max_delta < 0.001,
+            "cold vs warm scores must match (max delta {max_delta}); cold={:?} warm={:?}",
+            cold.iter().map(|r| r.score).collect::<Vec<_>>(),
+            warm.iter().map(|r| r.score).collect::<Vec<_>>(),
+        );
+
+        // Cold scores must actually be boosted (not raw 1.0-RRF plateaus only):
+        // sanity — identical ids, same order
+        for (c, w) in cold.iter().zip(warm.iter()) {
+            assert_eq!(c.memory.id, w.memory.id);
+        }
+
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// #1037 (noop case): with boosts disabled, warm cache hits must still
+    /// respect `limit` even though the cache stores a boost_window-sized set.
+    #[test]
+    fn test_recall_hybrid_noop_respects_limit_on_warm() {
+        let dir = std::env::temp_dir().join(format!("parity-n-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+        uteke.set_salience_recency_config(crate::salience_recency::SalienceRecencyConfig {
+            salience_weight: 0.0,
+            recency_weight: 0.0,
+        });
+        let embedding = vec![0.11_f32; 768];
+        for i in 0..20 {
+            uteke
+                .remember_precomputed(
+                    &format!("noop limit probe {i} alpha beta"),
+                    &[],
+                    None,
+                    Some("noop-ns"),
+                    "fact",
+                    "text",
+                    &embedding,
+                )
+                .unwrap();
+        }
+        let ns = Some("noop-ns");
+        let cold = uteke
+            .recall_hybrid("alpha beta", 3, None, ns, RecallStrategy::Hybrid, 0.0)
+            .unwrap();
+        let warm = uteke
+            .recall_hybrid("alpha beta", 3, None, ns, RecallStrategy::Hybrid, 0.0)
+            .unwrap();
+        assert!(cold.len() <= 3, "cold ≤ limit, got {}", cold.len());
+        assert!(
+            warm.len() <= 3,
+            "warm ≤ limit even with noop boosts + window cache, got {}",
+            warm.len()
+        );
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// #1037 (cora finding): boosts can lift a memory from outside the raw
+    /// top-N into the boosted top-N. The cached candidate set must therefore
+    /// be wider than `limit` (boost window), else warm calls could never
+    /// surface the boosted-in memory even though cold calls do.
+    #[test]
+    fn test_recall_hybrid_boost_reorder_across_limit() {
+        let dir = std::env::temp_dir().join(format!("parity-r-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+        uteke.set_salience_recency_config(crate::salience_recency::SalienceRecencyConfig {
+            salience_weight: 0.4,
+            recency_weight: 0.4,
+        });
+
+        // Strong boosts: heavy access_count on the LAST raw-scored memory
+        // so boosts should lift it into the top-N.
+        let embedding = vec![0.42_f32; 768];
+        for i in 0..6 {
+            let id = uteke
+                .remember_precomputed(
+                    &format!("reorder probe {i} queue scheduling topic"),
+                    &[],
+                    None,
+                    Some("reorder-ns"),
+                    "fact",
+                    "text",
+                    &embedding,
+                )
+                .unwrap();
+            if i == 5 {
+                // Simulate heavy access: last_accessed=now, access_count high
+                // via direct store touch (recall path touches, but we want it
+                // ranked dead-last raw yet boosted-top after boosts).
+                uteke.store.touch_access_batch(&[id.as_str()]).unwrap_or(());
+                for _ in 0..20 {
+                    uteke.store.touch_access_batch(&[id.as_str()]).unwrap_or(());
+                }
+            }
+        }
+
+        let ns = Some("reorder-ns");
+        let cold = uteke
+            .recall_hybrid(
+                "queue scheduling topic",
+                3,
+                None,
+                ns,
+                RecallStrategy::Hybrid,
+                0.0,
+            )
+            .unwrap();
+        let warm = uteke
+            .recall_hybrid(
+                "queue scheduling topic",
+                3,
+                None,
+                ns,
+                RecallStrategy::Hybrid,
+                0.0,
+            )
+            .unwrap();
+
+        assert_eq!(cold.len(), warm.len(), "same count cold vs warm");
+        for (c, w) in cold.iter().zip(warm.iter()) {
+            assert_eq!(c.memory.id, w.memory.id, "same ids in same order");
+        }
+
         drop(uteke);
         std::fs::remove_dir_all(&dir).ok();
     }
