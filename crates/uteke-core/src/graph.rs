@@ -285,7 +285,7 @@ impl<'a> GraphStore<'a> {
             return Ok(id);
         }
 
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = uuid::Uuid::now_v7().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         self.conn
             .execute(
@@ -305,7 +305,7 @@ impl<'a> GraphStore<'a> {
         relation: &str,
         weight: f64,
     ) -> Result<(), Error> {
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = uuid::Uuid::now_v7().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         let affected = self
             .conn

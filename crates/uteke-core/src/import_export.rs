@@ -88,7 +88,7 @@ impl crate::Uteke {
                 continue;
             }
 
-            let id = uuid::Uuid::new_v4().to_string();
+            let id = uuid::Uuid::now_v7().to_string();
             let now = chrono::Utc::now();
 
             let memory = Memory {
