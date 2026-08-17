@@ -984,7 +984,7 @@ mod tests {
 
     fn mem(content: &str, tags: &[&str]) -> Memory {
         Memory {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: uuid::Uuid::now_v7().to_string(),
             content: content.to_string(),
             embedding: vec![],
             tags: tags.iter().map(|s| s.to_string()).collect(),
