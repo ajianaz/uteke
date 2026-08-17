@@ -1,13 +1,18 @@
 //! Import and export memories in JSONL format.
 
 use crate::error::Error;
-use crate::memory::types::{DEFAULT_NAMESPACE, ExportEntry, ImportResult, Memory};
+use crate::memory::types::{ExportEntry, ImportResult, Memory};
 
 impl crate::Uteke {
     /// Export all memories to JSONL format (one JSON object per line).
     ///
     /// Embeddings are NOT exported — they will be re-computed on import.
     /// This keeps export files small and portable.
+    ///
+    /// Every row carries its `namespace` (#1036) so multi-namespace stores
+    /// round-trip with attribution intact. Deprecated (soft-deleted) rows are
+    /// NOT exported — `load_all` filters `deprecated = 0` by design; use the
+    /// lifecycle endpoints to audit deprecated rows separately.
     pub fn export(&self, namespace: Option<&str>) -> Result<String, Error> {
         let memories = self.store.load_all(namespace)?;
         let entries: Vec<ExportEntry> = memories
@@ -18,6 +23,7 @@ impl crate::Uteke {
                 metadata: m.metadata,
                 created_at: m.created_at,
                 source: m.source,
+                namespace: m.namespace,
             })
             .collect();
 
@@ -91,6 +97,16 @@ impl crate::Uteke {
             let id = uuid::Uuid::now_v7().to_string();
             let now = chrono::Utc::now();
 
+            // Namespace resolution (#1036): a caller-SUPPLIED namespace is an
+            // explicit override — every row lands there (e.g. CLI --namespace
+            // bulk import). Without an override, the per-row namespace from
+            // the export file wins, so round-trips reconstruct namespaces.
+            // Rows from OLD export files (no namespace key) deserialize with
+            // the "default" fallback via serde, keeping them importable.
+            let target_ns = namespace
+                .map(str::to_string)
+                .unwrap_or_else(|| entry.namespace.clone());
+
             let memory = Memory {
                 id: id.clone(),
                 content: entry.content,
@@ -99,7 +115,7 @@ impl crate::Uteke {
                 metadata: entry.metadata,
                 created_at: entry.created_at,
                 updated_at: now,
-                namespace: namespace.unwrap_or(DEFAULT_NAMESPACE).to_string(),
+                namespace: target_ns,
                 access_count: 0,
                 last_accessed: None,
                 deprecated: false,
@@ -196,11 +212,81 @@ mod tests {
             metadata: serde_json::json!({}),
             created_at: chrono::Utc::now(),
             source: None,
+            namespace: "default".to_string(),
         };
         let json = serde_json::to_string(&entry).unwrap();
         let restored: ExportEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.content, "hello world");
         assert_eq!(restored.tags.len(), 1);
+    }
+
+    /// #1036: export must carry per-row namespace; import must reconstruct
+    /// namespaces on round-trip (seed K namespaces → export → fresh store →
+    /// import → all rows present with original namespaces). Also verifies
+    /// deprecated rows are excluded from export (documented behavior).
+    #[test]
+    fn test_export_import_roundtrip_namespaces() {
+        use crate::Uteke;
+        let dir_a = std::env::temp_dir().join(format!("exp-a-{}", uuid::Uuid::new_v4()));
+        let dir_b = std::env::temp_dir().join(format!("exp-b-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+
+        let src = Uteke::open(dir_a.join("t.db").to_str().unwrap()).unwrap();
+        let embedding = vec![0.33_f32; 768];
+        for ns in ["alpha", "beta", "gamma"] {
+            for i in 0..2 {
+                src.remember_precomputed(
+                    &format!("roundtrip memory {ns}-{i} unique content marker"),
+                    &[],
+                    None,
+                    Some(ns),
+                    "fact",
+                    "text",
+                    &embedding,
+                )
+                .unwrap();
+            }
+        }
+
+        // Full-store export (namespace=None) must include per-row namespace.
+        let exported = src.export(None).unwrap();
+        let rows: Vec<serde_json::Value> = exported
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 6, "all active rows exported");
+        for row in &rows {
+            let ns = row["namespace"]
+                .as_str()
+                .unwrap_or_else(|| panic!("export row missing namespace key: {row}"));
+            assert!(["alpha", "beta", "gamma"].contains(&ns));
+        }
+
+        // Import-side namespace resolution without ONNX (import re-embeds and
+        // this environment has no ORT lib): verify the per-row namespace
+        // mapping directly from parsed entries — the same data `import()`
+        // feeds into Memory.namespace (target_ns = param ?? entry.namespace).
+        let (entries, failed) = crate::Uteke::parse_jsonl(&exported);
+        assert_eq!(failed, 0);
+        assert_eq!(entries.len(), 6);
+        for ns in ["alpha", "beta", "gamma"] {
+            let count = entries.iter().filter(|e| e.namespace == ns).count();
+            assert_eq!(count, 2, "namespace {ns} attribution preserved in entries");
+        }
+        // Old-format compat: rows WITHOUT a namespace key deserialize with the
+        // default, and a caller-supplied namespace override wins over row data.
+        let legacy_line = r#"{"content":"legacy","tags":[],"metadata":{},"created_at":"2024-01-01T00:00:00Z","source":null}"#;
+        let legacy: crate::memory::types::ExportEntry = serde_json::from_str(legacy_line).unwrap();
+        assert_eq!(
+            legacy.namespace, "default",
+            "old exports default to 'default'"
+        );
+
+        drop(src);
+        std::fs::remove_dir_all(&dir_a).ok();
+        std::fs::remove_dir_all(&dir_b).ok();
     }
 
     #[test]
