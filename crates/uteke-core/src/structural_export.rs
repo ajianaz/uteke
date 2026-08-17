@@ -376,7 +376,7 @@ impl crate::Uteke {
                             m["content_type"].as_str().unwrap_or("text"),
                             m["slug"].as_str(),
                             m["source"].as_str(),
-                            "import".to_string(),
+                            m["source_type"].as_str().unwrap_or("import"),
                         ],
                     )
                     .map_err(|e| Error::db_msg(format!("import memory: {e}")))?;
