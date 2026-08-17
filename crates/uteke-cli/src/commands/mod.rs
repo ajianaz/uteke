@@ -190,7 +190,7 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
 
         Commands::Lifecycle { command } => lifecycle::run(cli, uteke, ns, command),
 
-        Commands::Export { output } => maintenance::run_export(cli, uteke, ns, output),
+        Commands::Export { output, full } => maintenance::run_export(cli, uteke, ns, output, *full),
 
         Commands::Import {
             input,

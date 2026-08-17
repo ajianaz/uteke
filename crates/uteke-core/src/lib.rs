@@ -29,6 +29,7 @@ mod orphans;
 mod recall_cache;
 mod rooms;
 pub mod salience_recency;
+pub mod structural_export;
 mod timeline;
 mod types;
 pub mod update_check;

@@ -757,8 +757,8 @@ uteke timeline <memory-id> --json
 | `uteke consolidate` | Find and merge duplicate memories |
 | `uteke prune` | Remove deprecated/expired memories |
 | `uteke stats` | Show store statistics with tier breakdown |
-| `uteke export` | Export memories to JSONL (no embeddings) |
-| `uteke import <file>` | Import memories from JSONL/Markdown/text (`--extract` distills with an LLM) |
+| `uteke export` | Export memories to JSONL (no embeddings) · `--full` = structural export: manifest + rooms/graph/edges/documents/chunks/timeline (round-trips the whole store, format `structural-v1`) |
+| `uteke import <file>` | Import memories from JSONL/Markdown/text (`--extract` distills with an LLM) — auto-detects structural exports (manifest first line) and restores the full store; restored memories re-embed via `uteke repair --reembed` |
 | `uteke doctor` | Health check (DB, index, model, consistency) |
 | `uteke verify` | Verify DB and index consistency |
 | `uteke verify-checksums --binary <path>` | Verify binary integrity against SHA256 checksums |
