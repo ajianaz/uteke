@@ -473,13 +473,14 @@ fn tool_context() -> Value {
 fn tool_dream() -> Value {
     serde_json::json!({
         "name": "uteke_dream",
-        "description": "Run the dream cycle maintenance pipeline: lint → backlinks → dedup → orphans → compact → verify. Cleans up and optimizes the memory store. Safe to run periodically.",
+        "description": "Run the dream cycle maintenance pipeline: lint → backlinks → dedup → orphans → compact → verify. DESTRUCTIVE when applied — defaults to dry_run (preview only). To apply changes you MUST pass dry_run=false, and ideally scope to a single namespace. Always dry-run first to preview projected changes.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "namespace": { "type": "string", "description": "Namespace to process (default: all)" },
-                "dry_run": { "type": "boolean", "description": "Preview changes without applying (default: false)" },
-                "phases": { "type": "array", "items": { "type": "string" }, "description": "Specific phases: lint, backlinks, dedup, orphans, compact, verify (default: all)" }
+                "namespace": { "type": "string", "description": "Namespace to process. STRONGLY RECOMMENDED — omitting processes ALL namespaces" },
+                "dry_run": { "type": "boolean", "description": "Preview changes without applying (default: TRUE — no mutations). Pass false explicitly to apply" },
+                "phases": { "type": "array", "items": { "type": "string" }, "description": "Specific phases: lint, backlinks, dedup, orphans, compact, verify (default: all)" },
+                "confirm_large": { "type": "boolean", "description": "Required when an APPLYING run projects more than 100 changes (default: false — run refuses instead)" }
             }
         }
     })
@@ -1345,7 +1346,11 @@ fn exec_context(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
 
 fn exec_dream(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
     let namespace = args["namespace"].as_str();
-    let dry_run = args["dry_run"].as_bool().unwrap_or(false);
+    // #1050: dry_run defaults to TRUE — a no-args call must never mutate.
+    // Applying requires an explicit dry_run=false.
+    let dry_run = args["dry_run"].as_bool().unwrap_or(true);
+    let confirm_large = args["confirm_large"].as_bool().unwrap_or(false);
+    const LARGE_BATCH_THRESHOLD: usize = 100;
 
     // Parse phases if specified.
     let phases: Vec<uteke_core::DreamPhase> = args["phases"]
@@ -1366,17 +1371,94 @@ fn exec_dream(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
         })
         .unwrap_or_default();
 
+    // Applying runs are guarded (#1050):
+    // 1. Unscoped (namespace=None) applying runs must announce the scope —
+    //    we require a namespace for applying runs unless confirm_large is
+    //    also set, making "accidental whole-store maintenance" a two-flag
+    //    decision instead of a default.
+    // 2. Large batches (>100 projected changes) need confirm_large=true,
+    //    else the run refuses and reports what it WOULD have done.
+    if !dry_run && namespace.is_none() && !confirm_large {
+        return Ok(ToolResult {
+            content: vec![McpContent::Text {
+                r#type: "text".to_string(),
+                text: "Refused: applying run without a namespace scope. Pass namespace=<ns> to scope the maintenance, or set confirm_large=true to apply across ALL namespaces.".to_string(),
+            }],
+            is_error: true,
+        });
+    }
+
+    // First pass: always compute the DRY report to learn projected changes.
+    let preview = uteke
+        .dream(namespace, true, &phases)
+        .map_err(|e| format!("Failed: {e}"))?;
+
+    if !dry_run && preview.total_changes > LARGE_BATCH_THRESHOLD && !confirm_large {
+        return Ok(ToolResult {
+            content: vec![McpContent::Text {
+                r#type: "text".to_string(),
+                text: format!(
+                    "Refused: applying run projects {} changes (> {LARGE_BATCH_THRESHOLD}). Re-run with confirm_large=true to apply, or keep dry_run=true to preview.",
+                    preview.total_changes
+                ),
+            }],
+            is_error: true,
+        });
+    }
+
+    // Dry-run request (or nothing to apply) → return the preview report.
+    if dry_run || preview.total_changes == 0 {
+        let mut lines = vec![format!(
+            "Dream dry-run preview: {} changes, {} warnings, {} errors ({}ms){}",
+            preview.total_changes,
+            preview.total_warnings,
+            preview.total_errors,
+            preview.duration_ms,
+            if namespace.is_none() {
+                " [SCOPE: ALL NAMESPACES]"
+            } else {
+                ""
+            }
+        )];
+        for phase in &preview.phases {
+            lines.push(format!(
+                "  {}: {} changes, {} warnings",
+                phase.phase, phase.changes, phase.warnings
+            ));
+        }
+        if !dry_run && preview.total_changes == 0 {
+            lines.push("Nothing to apply — no changes projected.".to_string());
+        } else {
+            lines.push(
+                "To apply: dry_run=false (scope a namespace, or confirm_large=true for all-namespaces / >100 changes)."
+                    .to_string(),
+            );
+        }
+        return Ok(ToolResult {
+            content: vec![McpContent::Text {
+                r#type: "text".to_string(),
+                text: lines.join("\n"),
+            }],
+            is_error: false,
+        });
+    }
+
+    // Applying run (scoped, or confirm_large, and under threshold / confirmed).
     let report = uteke
-        .dream(namespace, dry_run, &phases)
+        .dream(namespace, false, &phases)
         .map_err(|e| format!("Failed: {e}"))?;
 
     let mut lines = vec![format!(
-        "Dream cycle complete: {} changes, {} warnings, {} errors ({}ms{})",
+        "Dream cycle applied: {} changes, {} warnings, {} errors ({}ms){}",
         report.total_changes,
         report.total_warnings,
         report.total_errors,
         report.duration_ms,
-        if dry_run { " [DRY RUN]" } else { "" }
+        if namespace.is_none() {
+            " [SCOPE: ALL NAMESPACES]"
+        } else {
+            ""
+        }
     )];
 
     for phase in &report.phases {
