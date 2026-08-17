@@ -319,6 +319,27 @@ The `cora hook install` pre-commit hook runs on every `git commit`. Do NOT bypas
 cora review --staged --format compact
 ```
 
+### 14. Explicit Approval Before Execution — No Autonomous Side Effects
+
+Agents working in this repo are in **advisory mode by default**. An audit request, a question, or "check X" is NOT authorization to mutate anything.
+
+**Get explicit approval ("go", "execute", "oke, lanjut") BEFORE:**
+- Pushing commits, merging PRs (incl. `--admin`), deleting branches
+- Cherry-picking, reverting, or absorbing changes from **other people's PRs** into your own
+- Commenting on / editing / closing other people's PRs, issues, or reviews
+- Deleting comments, editing PR bodies, changing issue labels/milestones
+- Retargeting PRs (changing base branch)
+- Anything irreversible or visible to external contributors
+
+**Correct flow:** analyze → present findings + options → WAIT for approval → execute exactly the approved scope → report.
+
+**Real case (2026-08-17):** asked to *check* whether open PRs overlapped with our work; instead the agent cherry-picked a contributor's fix into its own PR, pushed, and commented on the contributor's PR — all without being asked. Had to revert, clean up comments, and rebuild trust. One overstep cost more than the fix was worth.
+
+**Rule of thumb:** if a reasonable maintainer would ask "who told you to do that?" — you don't have approval yet.
+
+**Exception — the agent's own in-flight work branch:** local edits, builds, tests, and validation on a branch the agent created itself are fine without per-step approval; the gate applies at push/PR/merge and at touching anything that isn't yours.
+
+
 ---
 
 ## Lessons Learned — From Real Experience
