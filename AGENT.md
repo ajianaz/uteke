@@ -7,13 +7,13 @@
 **Uteke** is a local-first semantic memory engine for AI agents. Single Rust binary, fully offline, ~30ms recall. No API key, Docker, or cloud service needed.
 
 - **Repo:** `codecoradev/uteke` (remote GitHub), local clone
-- **Version:** 0.10.0
+- **Version:** 0.14.3
 - **License:** Apache 2.0
 - **Main branches:** `develop` (default branch, all PRs go here), `main` (release mirror)
 
 ## Architecture
 
-### Workspace Crates (4 crates)
+### Workspace Crates (5 crates)
 
 | Crate | Path | Purpose |
 |-------|------|---------|
@@ -21,6 +21,7 @@
 | `uteke-cli` | `crates/uteke-cli/` | CLI binary — clap commands, JSON output, server proxy |
 | `uteke-server` | `crates/uteke-server/` | HTTP server — persistent daemon for fast agent access |
 | `uteke-mcp` | `crates/uteke-mcp/` | MCP server — JSON-RPC for AI tool integration |
+| `docgen` | `crates/docgen/` | Dev tool — regenerates `docs/api-reference.md` from server routes (CI enforces freshness) |
 
 ### Module Structure
 
@@ -383,7 +384,7 @@ Entity, category, and meta are stored as JSON in the `metadata` column. This mea
 
 ### Unit Tests Are Not Enough — Manual Stress Testing Is Required
 
-Unit tests (108) don't cover:
+Unit tests (550+) don't cover:
 - Bulk insert of 100+ memories (performance regression?)
 - Concurrent access via server mode
 - Unicode / special characters in content
@@ -497,7 +498,7 @@ docs: update CLI reference for metadata flags
 # Build
 cargo build --workspace
 
-# Test (295 unit tests)
+# Test (530+ tests)
 cargo test --workspace
 
 # Format + Lint

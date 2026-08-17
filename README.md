@@ -376,7 +376,7 @@ Yes. Uteke ships with an MCP server that works with Claude Code, Cursor, and Her
 <details>
 <summary><strong>Is it production-ready?</strong></summary>
 
-Uteke is at v0.13.0 with 460+ tests, CI/CD on every commit, and benchmark harness. It's used in production by the CodeCora team and other early adopters. Still in 0.x, so expect rough edges, but the core is stable.
+Uteke is at v0.14.3 with 530+ tests, CI/CD on every commit, and benchmark harness. It's used in production by the CodeCora team and other early adopters. Still in 0.x, so expect rough edges, but the core is stable.
 </details>
 
 ---
@@ -385,7 +385,7 @@ Uteke is at v0.13.0 with 460+ tests, CI/CD on every commit, and benchmark harnes
 
 ```bash
 cargo build --workspace        # Build
-cargo test --workspace         # Test (460+ tests)
+cargo test --workspace         # Test (530+ tests)
 cargo clippy -- -D warnings    # Lint
 cargo fmt                      # Format
 ```

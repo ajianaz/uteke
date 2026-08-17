@@ -6,6 +6,27 @@ title: Roadmap
 
 Demand-gated — we build what people actually use. Track progress on [GitHub Issues](https://github.com/codecoradev/uteke/issues).
 
+## v0.14.0–v0.14.3 — Hybrid Default, Scene Extraction, Surface Parity `✓ Released 2026-08-14–15`
+
+- **Hybrid (RRF) is now the default recall strategy (#1005)** — recall@5 85.4% → 98.0%; revert via `strategy = "vector"` in `[recall]`
+- Scene-segmented LLM extraction with priority scoring (#1009) — `scene:<topic>` tags, semantic types, importance values
+- `GET /lifecycle/deprecated` + `GET /guide` endpoints (#1007, #1010)
+- Source provenance for extracted memories (#1012, #1013)
+- Chunker fixes via mutation testing: heading duplication + multibyte infinite loop (#1024) — mutation score 50% → 97%
+- `uteke-cli` crates.io publish restored + release verify step (#1021, #1030)
+- HTTP & MCP recall `strategy` parity — default hybrid, loud 400/JSON-RPC errors on invalid values (#1034, #1035, #1038)
+- Cross-compilation for Android/iOS targets (#1014), batch-mode update check skip (#1006), embedding pre-truncation (#1002)
+- Release notes heredoc hardening — template file, no shell expansion (#1041)
+
+## v0.13.0–v0.13.2 — Safe Lifecycle, Offline Extraction, Security Hardening `✓ Released 2026-08-08–11`
+
+- **Safe memory lifecycle (#928–#937)** — `ACTIVE → DEPRECATED (30-day TTL, restorable) → PRUNED`; soft-delete default, `uteke lifecycle` commands + HTTP endpoints
+- Offline rule-based extractor as default (#890) — no LLM/API key needed for basic extraction
+- Persistent embedding cache + lazy ONNX load (#896), `repair --reembed/--rebuild` (#919, #901)
+- Update check on all surfaces (#990), NULL-embedding startup crash fix (#992, #993)
+- Security batch (#966–#987): command injection fix, checksum abort, pinned-memory data-loss guard, UTF-8 panics, zero unsafe blocks, N+1 elimination, case-sensitive routes
+- Branding refresh (#991) — "One memory. Every agent. Zero cloud."
+
 ## v0.12.0 — Full-text Doc Search, Junction Tools, Windows Installer `✓ Released 2026-07-22`
 
 - FTS5 indexes full document content body — every word searchable, not just titles (#783)

@@ -293,7 +293,7 @@ This installs uteke as the agent's default memory provider — relevant memories
 >
 > The `--memory-provider` pattern remains supported for **pi**, **Claude Code**, and **Cursor**.
 > See [Memory-Provider for Other Agents](#memory-provider-for-other-agents).
-> The template source lives at [`extensions/hermes-memory-provider/`](../extensions/hermes-memory-provider/).
+> The template source lives at [`extensions/hermes-uteke-memory/`](../extensions/hermes-uteke-memory/).
 >
 > Historical reference: Mode B made uteke Hermes's long-term memory backend via
 > `uteke init --agent hermes --memory-provider` + `memory.provider: uteke` config.
@@ -353,12 +353,12 @@ curl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh |
 
 #### 2. Install the plugin
 
-The plugin files live at `extensions/hermes-memory-provider/` in the uteke repo.
+The plugin files live at `extensions/hermes-uteke-memory/` in the uteke repo.
 Copy them to your Hermes plugins directory:
 
 ```bash
 # Copy from uteke repo
-cp -r extensions/hermes-memory-provider ~/.hermes/plugins/uteke-memory/
+cp -r extensions/hermes-uteke-memory ~/.hermes/plugins/uteke-memory/
 # Remove .tmpl extension
 cd ~/.hermes/plugins/uteke-memory/
 for f in *.tmpl; do mv "$f" "${f%.tmpl}"; done

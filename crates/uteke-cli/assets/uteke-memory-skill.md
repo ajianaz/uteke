@@ -9,7 +9,7 @@ Version: **0.10.0** — SQLite + usearch HNSW + FTS5 hybrid search (RRF k=60). Z
 
 > **Hermes integration:** Install the `uteke-memory` plugin for automatic recall
 > on every turn via the `pre_llm_call` hook. No shell hook or daemon needed.
-> See `extensions/hermes-memory-provider/` for the plugin source.
+> See `extensions/hermes-uteke-memory/` for the plugin source.
 > Manual tool calls via `uteke-tool` plugin remain available for explicit
 > remember/forget/room operations.
 
