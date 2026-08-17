@@ -144,6 +144,7 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 tool_search(),
                 tool_list(),
                 tool_get(),
+                tool_supersede(),
                 tool_update(),
                 tool_forget(),
                 tool_stats(),
@@ -193,6 +194,7 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 "uteke_search" => exec_search(uteke, &arguments)?,
                 "uteke_list" => exec_list(uteke, &arguments)?,
                 "uteke_get" => exec_get(uteke, &arguments)?,
+                "uteke_supersede" => exec_supersede(uteke, &arguments)?,
                 "uteke_update" => exec_update(uteke, &arguments)?,
                 "uteke_forget" => exec_forget(uteke, &arguments)?,
                 "uteke_stats" => exec_stats(uteke, &arguments)?,
@@ -306,6 +308,22 @@ fn tool_get() -> Value {
                 "id": { "type": "string", "description": "Full UUID or unambiguous prefix (8-char id from recall/list works)" }
             },
             "required": ["id"]
+        }
+    })
+}
+
+fn tool_supersede() -> Value {
+    serde_json::json!({
+        "name": "uteke_supersede",
+        "description": "Mark a memory as superseded by a newer one (e.g. a decision pivot). Wires superseded_by/supersedes edges and soft-deprecates the old memory — recall flags the pair so agents don't act on stale info.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "old_id": { "type": "string", "description": "Full UUID or unambiguous prefix of the STALE memory" },
+                "new_id": { "type": "string", "description": "Full UUID or unambiguous prefix of the CURRENT memory" },
+                "reason": { "type": "string", "description": "Why it was superseded (stored on the deprecation, e.g. 'ADR-0005 pivot')" }
+            },
+            "required": ["old_id", "new_id"]
         }
     })
 }
@@ -937,6 +955,19 @@ fn exec_recall(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
         if !detail.is_empty() {
             lines.push(format!("       {}", detail));
         }
+        // #1053: flag memories superseded by a newer decision so agents
+        // don't act on stale info. Deprecated memories are already excluded
+        // from recall by default; this covers legacy/hard-restored rows.
+        if let uteke_core::SearchResultType::Memory = r.result_type {
+            if let Some(mid) = &r.memory_id {
+                if let Ok(Some(newer)) = uteke.supersession_of(mid) {
+                    let short: String = newer.chars().take(8).collect();
+                    lines.push(format!(
+                        "       ⚠ superseded by {short} — verify before acting"
+                    ));
+                }
+            }
+        }
     }
 
     Ok(ToolResult {
@@ -999,6 +1030,35 @@ fn resolve_id<'a>(uteke: &'a Uteke, id: &'a str) -> Result<String, String> {
         Ok(None) => Err(format!("No memory matches id prefix '{id}'")),
         Err(e) => Err(format!("{e}")),
     }
+}
+
+/// #1053: mark old_id superseded by new_id — wires the edge pair
+/// (superseded_by / supersedes) and soft-deprecates the old memory.
+fn exec_supersede(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let old_arg = args["old_id"].as_str().ok_or("Missing 'old_id'")?;
+    let new_arg = args["new_id"].as_str().ok_or("Missing 'new_id'")?;
+    let reason = args["reason"].as_str();
+    let old_id = resolve_id(uteke, old_arg)?;
+    let new_id = resolve_id(uteke, new_arg)?;
+
+    let (o, n) = uteke
+        .supersede(&old_id, &new_id, reason)
+        .map_err(|e| format!("Failed: {e}"))?;
+
+    let mut text = format!("✓ Superseded {o} → {n}");
+    text.push_str("\n  old memory soft-deprecated (restore: uteke lifecycle promote)");
+    text.push_str("\n  recall results now flag the pair until the old row is pruned");
+    if let Some(r) = reason {
+        text.push_str(&format!("\n  reason: {r}"));
+    }
+
+    Ok(ToolResult {
+        content: vec![McpContent::Text {
+            r#type: "text".to_string(),
+            text,
+        }],
+        is_error: false,
+    })
 }
 
 /// #1049: read a single memory by id (or unambiguous prefix) — full record,
@@ -2208,11 +2268,12 @@ mod id_resolution_tests {
         // Unique per call (tests run in parallel threads; shared names hit
         // "database busy" on WAL setup).
         let dir = std::env::temp_dir().join(format!(
-            "mcp-id-{}-{}",
+            "mcp-id-{}-{}-{}",
+            module_path!().len(), // stable per test module
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos())
+                .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -2339,6 +2400,83 @@ mod id_resolution_tests {
             m.content, "id resolution probe content",
             "content untouched"
         );
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod supersession_mcp_tests {
+    use super::*;
+    use uteke_core::Uteke;
+
+    #[test]
+    fn exec_supersede_via_short_ids() {
+        let dir = std::env::temp_dir().join(format!(
+            "ssmcp-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+
+        let mk = |content: &str| -> String {
+            use uteke_core::memory::types::Memory;
+            let id = uuid::Uuid::new_v4().to_string();
+            let m = Memory {
+                id: id.clone(),
+                content: content.to_string(),
+                embedding: vec![0.5; 768],
+                tags: vec![],
+                metadata: serde_json::json!({}),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                namespace: "ssmcp-ns".to_string(),
+                access_count: 0,
+                last_accessed: None,
+                deprecated: false,
+                valid_from: None,
+                valid_until: None,
+                memory_type: "decision".to_string(),
+                importance: 0.5,
+                pinned: false,
+                content_type: "text".to_string(),
+                slug: None,
+                source: None,
+                source_type: "user".to_string(),
+            };
+            uteke.store().insert(&m).unwrap();
+            id
+        };
+        let old = mk("old auth decision");
+        let new = mk("new auth decision");
+        let old_short: String = old.chars().take(8).collect();
+        let new_short: String = new.chars().take(8).collect();
+
+        let result = exec_supersede(
+            &uteke,
+            &serde_json::json!({"old_id": old_short, "new_id": new_short, "reason": "pivot"}),
+        )
+        .unwrap();
+        assert!(!result.is_error);
+
+        // Edge + deprecation landed.
+        assert_eq!(
+            uteke.supersession_of(&old).unwrap().as_deref(),
+            Some(new.as_str())
+        );
+        assert!(uteke.get_by_id(&old).unwrap().unwrap().deprecated);
+
+        // Self-supersession refused loudly.
+        let err = exec_supersede(
+            &uteke,
+            &serde_json::json!({"old_id": &old_short, "new_id": &old_short}),
+        );
+        assert!(err.is_err());
+
         drop(uteke);
         std::fs::remove_dir_all(&dir).ok();
     }
