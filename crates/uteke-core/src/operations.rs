@@ -1664,6 +1664,62 @@ mod forget_tests {
         let mem2 = uteke.get_by_id(&id2).unwrap().unwrap();
         assert!(!mem2.deprecated, "new memory should be active");
     }
+
+    /// #1047: after soft-forget, the deprecated row must vanish from list(),
+    /// load_all(), and the doctor/verify count — otherwise list shows ghosts
+    /// and doctor reports DB/Index mismatch forever.
+    #[test]
+    fn test_soft_forget_hides_from_list_and_doctor() {
+        // Isolated temp-dir store: ":memory:" stores still resolve the vector
+        // index to a file in the CWD, which cross-contaminates parallel runs.
+        let dir = std::env::temp_dir().join(format!("ghost-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+        let embedding = vec![0.7_f32; 768];
+        let id = uteke
+            .remember_precomputed(
+                "ghost row after soft forget",
+                &[],
+                None,
+                Some("ghost-test"),
+                "fact",
+                "text",
+                &embedding,
+            )
+            .unwrap();
+
+        uteke.forget(&id).unwrap();
+
+        // list() must not return the deprecated row
+        let listed = uteke.list(None, 100, 0, Some("ghost-test")).unwrap();
+        assert!(
+            listed.iter().all(|m| m.id != id),
+            "deprecated row must not appear in list()"
+        );
+
+        // store-level list filter
+        let rows = uteke.store.list(None, Some("ghost-test"), 100, 0).unwrap();
+        assert!(rows.iter().all(|m| m.id != id));
+
+        // load_all() (repair/verify source) must exclude it
+        let all = uteke.store.load_all(Some("ghost-test")).unwrap();
+        assert!(all.iter().all(|m| m.id != id));
+
+        // doctor: DB count (active-only now) must equal index count
+        let report = uteke.doctor().unwrap();
+        let consistency = report
+            .checks
+            .iter()
+            .find(|c| c.name == "Index consistency")
+            .expect("doctor reports index consistency");
+        assert!(
+            !consistency.detail.contains("MISMATCH"),
+            "doctor must not report mismatch after soft-forget, got: {}",
+            consistency.detail
+        );
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
 
 #[cfg(test)]

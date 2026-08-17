@@ -398,6 +398,12 @@ impl VectorIndex {
         self.index.size()
     }
 
+    /// Capacity of the underlying usearch index (diagnostics).
+    #[allow(dead_code)]
+    pub fn capacity(&self) -> usize {
+        self.index.capacity()
+    }
+
     /// Embedding dimensionality of this index.
     ///
     /// Used by backend dispatch to detect dim mismatch when the user swaps

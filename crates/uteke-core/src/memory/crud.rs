@@ -454,7 +454,7 @@ impl super::Store {
                          created_at, updated_at, namespace, access_count, \
                          last_accessed, deprecated, valid_from, valid_until, \
                          memory_type, importance, pinned, content_type, slug \
-                         FROM memories WHERE namespace = ?1 AND EXISTS \
+                         FROM memories WHERE namespace = ?1 AND deprecated = 0 AND EXISTS \
                          (SELECT 1 FROM memory_tags WHERE memory_id = memories.id AND tag = ?2) \
                          ORDER BY created_at DESC LIMIT ?3 OFFSET ?4",
                     )
@@ -475,7 +475,7 @@ impl super::Store {
                          created_at, updated_at, namespace, access_count, \
                          last_accessed, deprecated, valid_from, valid_until, \
                          memory_type, importance, pinned, content_type, slug \
-                         FROM memories WHERE namespace = ?1 \
+                         FROM memories WHERE namespace = ?1 AND deprecated = 0 \
                          ORDER BY created_at DESC LIMIT ?2 OFFSET ?3",
                     )
                     .map_err(|e| Error::db("database operation", e))?;
@@ -495,7 +495,7 @@ impl super::Store {
                          created_at, updated_at, namespace, access_count, \
                          last_accessed, deprecated, valid_from, valid_until, \
                          memory_type, importance, pinned, content_type, slug \
-                         FROM memories WHERE EXISTS \
+                         FROM memories WHERE deprecated = 0 AND EXISTS \
                          (SELECT 1 FROM memory_tags WHERE memory_id = memories.id AND tag = ?1) \
                          ORDER BY created_at DESC LIMIT ?2 OFFSET ?3",
                     )
@@ -516,7 +516,7 @@ impl super::Store {
                          created_at, updated_at, namespace, access_count, \
                          last_accessed, deprecated, valid_from, valid_until, \
                          memory_type, importance, pinned, content_type, slug \
-                         FROM memories \
+                         FROM memories WHERE deprecated = 0 \
                          ORDER BY created_at DESC LIMIT ?1 OFFSET ?2",
                     )
                     .map_err(|e| Error::db("database operation", e))?;
@@ -550,7 +550,7 @@ impl super::Store {
             .conn
             .prepare(
                 "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug
-                 FROM memories WHERE namespace = ?1 AND content LIKE ?2 ESCAPE '!'
+                 FROM memories WHERE namespace = ?1 AND deprecated = 0 AND content LIKE ?2 ESCAPE '!'
                  ORDER BY created_at DESC LIMIT ?3",
             )
             .map_err(|e| Error::db("database operation", e))?;
@@ -571,12 +571,14 @@ impl super::Store {
     pub fn load_all(&self, namespace: Option<&str>) -> Result<Vec<Memory>, Error> {
         // Filter out NULL embeddings — they cannot be inserted into the vector
         // index and cause dimension-mismatch crashes during build() (#992).
+        // Deprecated (soft-deleted) rows are excluded: they are hidden from
+        // recall and must not re-enter the vector index on repair/verify (#1047).
         let sql = match namespace {
             Some(_) => {
-                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug FROM memories WHERE namespace = ?1 AND embedding IS NOT NULL ORDER BY created_at"
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug FROM memories WHERE namespace = ?1 AND embedding IS NOT NULL AND deprecated = 0 ORDER BY created_at"
             }
             None => {
-                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug FROM memories WHERE embedding IS NOT NULL ORDER BY created_at"
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug FROM memories WHERE embedding IS NOT NULL AND deprecated = 0 ORDER BY created_at"
             }
         };
 
@@ -613,7 +615,41 @@ impl super::Store {
     }
 
     /// Count total memories, optionally filtered by namespace.
+    /// Count ACTIVE (non-deprecated) memories, optionally filtered by namespace.
+    ///
+    /// Uniform contract: deprecated (soft-deleted) rows are excluded for both
+    /// the namespaced and un-namespaced paths. The vector index only ever holds
+    /// active rows (#1047), so counts from this method are directly comparable
+    /// against `index.len()` in doctor/verify.
+    ///
+    /// Callers that need totals INCLUDING deprecated rows (reporting, stats)
+    /// should use [`Store::count_all`].
     pub fn count(&self, namespace: Option<&str>) -> Result<usize, Error> {
+        let count: usize = match namespace {
+            Some(ns) => self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memories WHERE namespace = ?1 AND deprecated = 0",
+                    params![ns],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|e| Error::db("database operation", e))? as usize,
+            None => self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memories WHERE deprecated = 0",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|e| Error::db("database operation", e))? as usize,
+        };
+        Ok(count)
+    }
+
+    /// Count ALL memories including deprecated (soft-deleted) rows,
+    /// optionally filtered by namespace. For reporting/audit callers that
+    /// need raw totals; index comparisons should use [`Store::count`].
+    pub fn count_all(&self, namespace: Option<&str>) -> Result<usize, Error> {
         let count: usize = match namespace {
             Some(ns) => self
                 .conn
