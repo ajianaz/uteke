@@ -140,7 +140,9 @@ Both transports expose the same 35 tools (MCP protocol version `2025-06-18`):
 | `uteke_recall` | Semantic search (supports tags filter, min_score, strategy: hybrid/vector/fts5/graph — default hybrid) |
 | `uteke_search` | Text search with optional tag filter |
 | `uteke_list` | List memories (supports pagination via offset) |
-| `uteke_forget` | Delete a memory |
+| `uteke_get` | Fetch a single memory's full record by id — no truncation (accepts UUID or unambiguous prefix) |
+| `uteke_update` | Partial update — only provided fields change; content changes re-embed |
+| `uteke_forget` | Delete a memory (accepts UUID or unambiguous prefix) |
 | `uteke_stats` | Memory store statistics |
 | `uteke_context` | AI-optimized context output for prompts |
 | `uteke_dream` | One-command maintenance pipeline (lint → backlinks → dedup → orphans) |

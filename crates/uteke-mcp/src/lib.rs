@@ -143,6 +143,8 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 tool_recall(),
                 tool_search(),
                 tool_list(),
+                tool_get(),
+                tool_update(),
                 tool_forget(),
                 tool_stats(),
                 tool_context(),
@@ -190,6 +192,8 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 "uteke_recall" => exec_recall(uteke, &arguments)?,
                 "uteke_search" => exec_search(uteke, &arguments)?,
                 "uteke_list" => exec_list(uteke, &arguments)?,
+                "uteke_get" => exec_get(uteke, &arguments)?,
+                "uteke_update" => exec_update(uteke, &arguments)?,
                 "uteke_forget" => exec_forget(uteke, &arguments)?,
                 "uteke_stats" => exec_stats(uteke, &arguments)?,
                 "uteke_context" => exec_context(uteke, &arguments)?,
@@ -292,6 +296,40 @@ fn tool_list() -> Value {
     })
 }
 
+fn tool_get() -> Value {
+    serde_json::json!({
+        "name": "uteke_get",
+        "description": "Fetch a single memory's FULL record by id — content, tags, metadata, timestamps, importance, no truncation. Use after recall/search when you need the complete entry.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Full UUID or unambiguous prefix (8-char id from recall/list works)" }
+            },
+            "required": ["id"]
+        }
+    })
+}
+
+fn tool_update() -> Value {
+    serde_json::json!({
+        "name": "uteke_update",
+        "description": "Partially update a memory — only provided fields change (same semantics as HTTP PUT /memory). Changing content regenerates its embedding.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Full UUID or unambiguous prefix" },
+                "content": { "type": "string", "description": "New content (triggers re-embed)" },
+                "tags": { "type": "array", "items": { "type": "string" }, "description": "Replacement tag set" },
+                "metadata": { "type": "object", "description": "Replacement metadata JSON" },
+                "importance": { "type": "number", "description": "0.0–1.0" },
+                "pinned": { "type": "boolean", "description": "Pin (never decays) or unpin" },
+                "memory_type": { "type": "string", "description": "fact | procedure | preference | decision | context | note | insight | reference | event" }
+            },
+            "required": ["id"]
+        }
+    })
+}
+
 fn tool_forget() -> Value {
     serde_json::json!({
         "name": "uteke_forget",
@@ -299,7 +337,7 @@ fn tool_forget() -> Value {
         "inputSchema": {
             "type": "object",
             "properties": {
-                "id": { "type": "string", "description": "The memory ID (UUID)" }
+                "id": { "type": "string", "description": "Full UUID or unambiguous prefix (8-char id from recall/list works)" }
             },
             "required": ["id"]
         }
@@ -712,7 +750,7 @@ fn tool_pin() -> Value {
         "inputSchema": {
             "type": "object",
             "properties": {
-                "id": { "type": "string", "description": "The memory ID (UUID)" }
+                "id": { "type": "string", "description": "Full UUID or unambiguous prefix (8-char id from recall/list works)" }
             },
             "required": ["id"]
         }
@@ -726,7 +764,7 @@ fn tool_unpin() -> Value {
         "inputSchema": {
             "type": "object",
             "properties": {
-                "id": { "type": "string", "description": "The memory ID (UUID)" }
+                "id": { "type": "string", "description": "Full UUID or unambiguous prefix (8-char id from recall/list works)" }
             },
             "required": ["id"]
         }
@@ -946,10 +984,114 @@ fn exec_list(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
     })
 }
 
-fn exec_forget(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
-    let id = args["id"].as_str().ok_or("Missing 'id'")?;
+/// Resolve an id argument to a full UUID (#1048).
+///
+/// Accepts the full UUID or any unambiguous prefix (e.g. the 8-char ids
+/// printed by recall/list). Errors loudly on ambiguous prefixes instead of
+/// silently no-oping. Exact UUIDs skip the prefix scan.
+fn resolve_id<'a>(uteke: &'a Uteke, id: &'a str) -> Result<String, String> {
+    if id.len() == 36 {
+        return Ok(id.to_string());
+    }
+    match uteke.resolve_id_prefix(id) {
+        Ok(Some(full)) => Ok(full),
+        Ok(None) => Err(format!("No memory matches id prefix '{id}'")),
+        Err(e) => Err(format!("{e}")),
+    }
+}
 
-    uteke.forget(id).map_err(|e| format!("Failed: {e}"))?;
+/// #1049: read a single memory by id (or unambiguous prefix) — full record,
+/// no truncation. recall/search return ranked excerpts; list truncates.
+fn exec_get(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let id_arg = args["id"].as_str().ok_or("Missing 'id'")?;
+    let id = resolve_id(uteke, id_arg)?;
+
+    let m = uteke
+        .get_by_id(&id)
+        .map_err(|e| format!("Failed: {e}"))?
+        .ok_or_else(|| format!("Memory not found: {id}"))?;
+
+    let body = serde_json::json!({
+        "id": m.id,
+        "content": m.content,
+        "tags": m.tags,
+        "metadata": m.metadata,
+        "namespace": m.namespace,
+        "memory_type": m.memory_type,
+        "importance": m.importance,
+        "pinned": m.pinned,
+        "deprecated": m.deprecated,
+        "created_at": m.created_at,
+        "updated_at": m.updated_at,
+        "last_accessed": m.last_accessed,
+        "access_count": m.access_count,
+        "source": m.source,
+    });
+
+    Ok(ToolResult {
+        content: vec![McpContent::Text {
+            r#type: "text".to_string(),
+            text: serde_json::to_string_pretty(&body)
+                .map_err(|e| format!("Serialization failed: {e}"))?,
+        }],
+        is_error: false,
+    })
+}
+
+/// #1049: partial update — same semantics as HTTP PUT /memory (#659):
+/// only provided fields change; content changes regenerate the embedding.
+fn exec_update(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let id_arg = args["id"].as_str().ok_or("Missing 'id'")?;
+    let id = resolve_id(uteke, id_arg)?;
+
+    let content = args["content"].as_str();
+    let importance = args["importance"].as_f64();
+    let pinned = args["pinned"].as_bool();
+    let memory_type = args["memory_type"].as_str();
+    let tags: Option<Vec<String>> = args["tags"].as_array().map(|a| {
+        a.iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect()
+    });
+    let tags_ref = tags.as_deref();
+    let metadata = args.get("metadata").filter(|m| !m.is_null());
+
+    let updated = uteke
+        .update_memory(
+            &id,
+            content,
+            tags_ref,
+            metadata,
+            importance,
+            pinned,
+            memory_type,
+        )
+        .map_err(|e| format!("Failed: {e}"))?;
+
+    if !updated {
+        return Ok(ToolResult {
+            content: vec![McpContent::Text {
+                r#type: "text".to_string(),
+                text: format!("Memory not found: {id}"),
+            }],
+            is_error: true,
+        });
+    }
+
+    Ok(ToolResult {
+        content: vec![McpContent::Text {
+            r#type: "text".to_string(),
+            text: format!("✓ Updated memory {id}"),
+        }],
+        is_error: false,
+    })
+}
+
+fn exec_forget(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let id_arg = args["id"].as_str().ok_or("Missing 'id'")?;
+    let id = resolve_id(uteke, id_arg)?;
+
+    uteke.forget(&id).map_err(|e| format!("Failed: {e}"))?;
 
     Ok(ToolResult {
         content: vec![McpContent::Text {
@@ -1241,8 +1383,10 @@ fn exec_graph(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
 }
 
 fn exec_graph_add_edge(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
-    let source = args["source"].as_str().ok_or("Missing 'source'")?;
-    let target = args["target"].as_str().ok_or("Missing 'target'")?;
+    let source_arg = args["source"].as_str().ok_or("Missing 'source'")?;
+    let source = resolve_id(uteke, source_arg)?;
+    let target_arg = args["target"].as_str().ok_or("Missing 'target'")?;
+    let target = resolve_id(uteke, target_arg)?;
     let edge_type = args["edge_type"].as_str().unwrap_or("related");
     let weight = args["weight"].as_f64().unwrap_or(1.0);
 
@@ -1257,7 +1401,7 @@ fn exec_graph_add_edge(uteke: &Uteke, args: &Value) -> Result<ToolResult, String
     }
 
     // Validate both memories exist
-    match uteke.get_by_id(source) {
+    match uteke.get_by_id(&source) {
         Ok(Some(_)) => {}
         Ok(None) => {
             return Ok(ToolResult {
@@ -1270,7 +1414,7 @@ fn exec_graph_add_edge(uteke: &Uteke, args: &Value) -> Result<ToolResult, String
         }
         Err(e) => return Err(format!("Failed: {e}")),
     }
-    match uteke.get_by_id(target) {
+    match uteke.get_by_id(&target) {
         Ok(Some(_)) => {}
         Ok(None) => {
             return Ok(ToolResult {
@@ -1286,7 +1430,7 @@ fn exec_graph_add_edge(uteke: &Uteke, args: &Value) -> Result<ToolResult, String
 
     let conn = uteke.graph_store();
     let gs = uteke_core::graph::GraphStore::new(conn);
-    gs.add_edge(source, target, edge_type, weight)
+    gs.add_edge(&source, &target, edge_type, weight)
         .map_err(|e| format!("Failed: {e}"))?;
 
     Ok(ToolResult {
@@ -1299,13 +1443,15 @@ fn exec_graph_add_edge(uteke: &Uteke, args: &Value) -> Result<ToolResult, String
 }
 
 fn exec_graph_remove_edge(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
-    let source = args["source"].as_str().ok_or("Missing 'source'")?;
-    let target = args["target"].as_str().ok_or("Missing 'target'")?;
+    let source_arg = args["source"].as_str().ok_or("Missing 'source'")?;
+    let source = resolve_id(uteke, source_arg)?;
+    let target_arg = args["target"].as_str().ok_or("Missing 'target'")?;
+    let target = resolve_id(uteke, target_arg)?;
 
     let conn = uteke.graph_store();
     let gs = uteke_core::graph::GraphStore::new(conn);
     let removed = gs
-        .remove_edge(source, target)
+        .remove_edge(&source, &target)
         .map_err(|e| format!("Failed: {e}"))?;
 
     if removed {
@@ -1875,9 +2021,10 @@ fn exec_tags_delete(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
 }
 
 fn exec_pin(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
-    let id = args["id"].as_str().ok_or("Missing 'id'")?;
+    let id_arg = args["id"].as_str().ok_or("Missing 'id'")?;
+    let id = resolve_id(uteke, id_arg)?;
 
-    match uteke.pin(id) {
+    match uteke.pin(&id) {
         Ok(true) => Ok(ToolResult {
             content: vec![McpContent::Text {
                 r#type: "text".to_string(),
@@ -1897,9 +2044,10 @@ fn exec_pin(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
 }
 
 fn exec_unpin(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
-    let id = args["id"].as_str().ok_or("Missing 'id'")?;
+    let id_arg = args["id"].as_str().ok_or("Missing 'id'")?;
+    let id = resolve_id(uteke, id_arg)?;
 
-    match uteke.unpin(id) {
+    match uteke.unpin(&id) {
         Ok(true) => Ok(ToolResult {
             content: vec![McpContent::Text {
                 r#type: "text".to_string(),
@@ -1915,5 +2063,151 @@ fn exec_unpin(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
             is_error: true,
         }),
         Err(e) => Err(format!("Failed: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod id_resolution_tests {
+    use super::*;
+    use uteke_core::Uteke;
+    use uteke_core::memory::types::Memory;
+
+    fn scratch() -> (Uteke, std::path::PathBuf) {
+        // Unique per call (tests run in parallel threads; shared names hit
+        // "database busy" on WAL setup).
+        let dir = std::env::temp_dir().join(format!(
+            "mcp-id-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+        (uteke, dir)
+    }
+
+    fn seed(uteke: &Uteke) -> String {
+        // Direct store insert (remember_precomputed is pub(crate)); the MCP
+        // executor under test only reads/resolves/updates, which is the
+        // behavior under test here.
+        let id = uuid::Uuid::new_v4().to_string();
+        let m = Memory {
+            id: id.clone(),
+            content: "id resolution probe content".to_string(),
+            embedding: vec![0.21; 768],
+            tags: vec!["probe".to_string()],
+            metadata: serde_json::json!({}),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            namespace: "mcp-id-ns".to_string(),
+            access_count: 0,
+            last_accessed: None,
+            deprecated: false,
+            valid_from: None,
+            valid_until: None,
+            memory_type: "fact".to_string(),
+            importance: 0.5,
+            pinned: false,
+            content_type: "text".to_string(),
+            slug: None,
+            source: None,
+            source_type: "user".to_string(),
+        };
+        uteke.store().insert(&m).unwrap();
+        id
+    }
+
+    #[test]
+    fn resolve_id_accepts_prefix_and_full() {
+        let (uteke, dir) = scratch();
+        let id = seed(&uteke);
+        let short: String = id.chars().take(8).collect();
+
+        assert_eq!(resolve_id(&uteke, &id).unwrap(), id);
+        assert_eq!(resolve_id(&uteke, &short).unwrap(), id);
+        assert!(
+            resolve_id(&uteke, "00000000").is_err(),
+            "unknown prefix errors"
+        );
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn exec_get_returns_full_record() {
+        let (uteke, dir) = scratch();
+        let id = seed(&uteke);
+        let short: String = id.chars().take(8).collect();
+
+        let result = exec_get(&uteke, &serde_json::json!({"id": short})).unwrap();
+        assert!(!result.is_error);
+        let text = match &result.content[0] {
+            McpContent::Text { text, .. } => text.clone(),
+        };
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["id"].as_str().unwrap(), id);
+        assert_eq!(
+            v["content"].as_str().unwrap(),
+            "id resolution probe content"
+        );
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn exec_pin_accepts_short_id() {
+        let (uteke, dir) = scratch();
+        let id = seed(&uteke);
+        let short: String = id.chars().take(8).collect();
+
+        let result = exec_pin(&uteke, &serde_json::json!({"id": short})).unwrap();
+        assert!(!result.is_error, "short id must pin");
+        let m = uteke.get_by_id(&id).unwrap().unwrap();
+        assert!(m.pinned);
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn exec_forget_short_id_no_longer_silent_noop() {
+        let (uteke, dir) = scratch();
+        let id = seed(&uteke);
+        let short: String = id.chars().take(8).collect();
+
+        // Happy path: short id resolves and forgets.
+        let result = exec_forget(&uteke, &serde_json::json!({"id": short})).unwrap();
+        assert!(!result.is_error);
+
+        // Bogus prefix must now ERROR (was: silent "not found" no-op pre-fix).
+        let err = exec_forget(&uteke, &serde_json::json!({"id": "ffffffff"}));
+        assert!(err.is_err(), "unknown prefix must error loudly");
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn exec_update_partial_fields() {
+        let (uteke, dir) = scratch();
+        let id = seed(&uteke);
+        let short: String = id.chars().take(8).collect();
+
+        // metadata-only update: content unchanged
+        let result = exec_update(
+            &uteke,
+            &serde_json::json!({"id": short, "importance": 0.9, "pinned": true}),
+        )
+        .unwrap();
+        assert!(!result.is_error);
+        let m = uteke.get_by_id(&id).unwrap().unwrap();
+        assert!((m.importance - 0.9).abs() < 1e-9);
+        assert!(m.pinned);
+        assert_eq!(
+            m.content, "id resolution probe content",
+            "content untouched"
+        );
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
