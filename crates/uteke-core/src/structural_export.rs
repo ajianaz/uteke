@@ -248,7 +248,7 @@ impl crate::Uteke {
         {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, document_id, chunk_index, heading, content, char_start, char_end, tags \
+                    "SELECT id, document_id, chunk_index, heading, content, char_start, char_end, tags, created_at \
                      FROM document_chunks",
                 )
                 .map_err(|e| Error::db("dump chunks prepare", e))?;
@@ -266,6 +266,7 @@ impl crate::Uteke {
                         "tags": serde_json::from_str::<Vec<String>>(
                             row.get::<_, String>(7).unwrap_or_default().as_str()
                         ).unwrap_or_default(),
+                        "created_at": row.get::<_, String>(8)?,
                     }))
                 })
                 .map_err(|e| Error::db("dump chunks query", e))?;
@@ -718,6 +719,16 @@ mod tests {
             .query_row("SELECT slug FROM documents WHERE id='d1'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(doc, "rt-doc");
+        // chunk created_at must survive the round-trip (code-scanning alert:
+        // a missing column in the dump SELECT silently restored empty strings)
+        let chunk_ts: String = dconn
+            .query_row(
+                "SELECT created_at FROM document_chunks WHERE id='c1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(chunk_ts, now, "chunk created_at round-trips verbatim");
 
         // Idempotent: re-import inserts nothing (OR IGNORE).
         let again = dst.import_full(&exported).unwrap();
