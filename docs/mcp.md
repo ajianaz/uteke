@@ -143,7 +143,7 @@ Both transports expose the same 35 tools (MCP protocol version `2025-06-18`):
 | `uteke_forget` | Delete a memory |
 | `uteke_stats` | Memory store statistics |
 | `uteke_context` | AI-optimized context output for prompts |
-| `uteke_dream` | One-command maintenance pipeline (lint → backlinks → dedup → orphans) |
+| `uteke_dream` | Maintenance pipeline (lint → backlinks → dedup → orphans → compact → verify). **Dry-run by default** — pass `dry_run: false` to apply; scope `namespace` or `confirm_large` for whole-store / >100-change runs |
 | `uteke_doc_create` | Create a document (wiki/knowledge base entry) |
 | `uteke_doc_get` | Retrieve a document by ID |
 | `uteke_doc_list` | List all documents |
