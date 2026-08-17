@@ -1,7 +1,7 @@
 //! Core CRUD operations — insert, get, delete, update, list, search, count.
 
 use crate::Error;
-use crate::memory::types::{DEFAULT_NAMESPACE, Memory};
+use crate::memory::types::Memory;
 use rusqlite::{OptionalExtension, params};
 
 use super::store::{row_to_memory, serialize_embedding};
@@ -532,13 +532,18 @@ impl super::Store {
     }
 
     /// Search memories by content using LIKE (simple full-text for v2).
+    /// Search memories by content using LIKE (simple full-text for v2).
+    ///
+    /// `namespace=None` searches ACROSS all namespaces (matches list(None)
+    /// semantics, #526) — previously it coerced None to the default namespace,
+    /// hiding results from other namespaces from cross-namespace callers
+    /// such as MCP `uteke_search` invoked without a namespace argument (#1051).
     pub fn search_content(
         &self,
         query: &str,
         namespace: Option<&str>,
         limit: usize,
     ) -> Result<Vec<Memory>, Error> {
-        let ns = namespace.unwrap_or(DEFAULT_NAMESPACE);
         // Escape SQL LIKE wildcards so user input is treated as literal text
         // Using '!' as escape character — unambiguous on all platforms
         let escaped = query
@@ -546,18 +551,31 @@ impl super::Store {
             .replace('%', "!%")
             .replace('_', "!_");
         let pattern = format!("%{escaped}%");
-        let mut stmt = self
-            .conn
-            .prepare(
+        let sql = match namespace {
+            Some(_) => {
                 "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug
                  FROM memories WHERE namespace = ?1 AND deprecated = 0 AND content LIKE ?2 ESCAPE '!'
-                 ORDER BY created_at DESC LIMIT ?3",
-            )
+                 ORDER BY created_at DESC LIMIT ?3"
+            }
+            None => {
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug
+                 FROM memories WHERE deprecated = 0 AND content LIKE ?1 ESCAPE '!'
+                 ORDER BY created_at DESC LIMIT ?2"
+            }
+        };
+        let mut stmt = self
+            .conn
+            .prepare(sql)
             .map_err(|e| Error::db("database operation", e))?;
 
-        let rows = stmt
-            .query_map(params![ns, pattern, limit as i64], row_to_memory)
-            .map_err(|e| Error::db("database operation", e))?;
+        let rows = match namespace {
+            Some(ns) => stmt
+                .query_map(params![ns, pattern, limit as i64], row_to_memory)
+                .map_err(|e| Error::db("database operation", e))?,
+            None => stmt
+                .query_map(params![pattern, limit as i64], row_to_memory)
+                .map_err(|e| Error::db("database operation", e))?,
+        };
 
         let mut memories = Vec::new();
         for row in rows {
