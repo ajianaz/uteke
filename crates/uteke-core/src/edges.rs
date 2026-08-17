@@ -2001,6 +2001,19 @@ impl crate::Uteke {
             let tx = conn
                 .unchecked_transaction()
                 .map_err(|e| Error::db("begin supersede tx", e))?;
+            // Re-supersession: drop this memory's PREVIOUS supersession pair
+            // first (code-scanning #687) — otherwise stacked superseded_by
+            // edges accumulate and supersession_of() becomes ambiguous.
+            tx.execute(
+                "DELETE FROM memory_edges WHERE source_id = ?1 AND edge_type = ?2",
+                params![old.id, EDGE_SUPERSEDED_BY],
+            )
+            .map_err(|e| Error::db("clear prior superseded_by edge", e))?;
+            tx.execute(
+                "DELETE FROM memory_edges WHERE target_id = ?1 AND edge_type = ?2",
+                params![old.id, EDGE_SUPERSEDES],
+            )
+            .map_err(|e| Error::db("clear prior supersedes edge", e))?;
             tx.execute(
                 "INSERT OR IGNORE INTO memory_edges (source_id, target_id, edge_type, created_at) VALUES (?1,?2,?3,?4)",
                 params![old.id, new.id, EDGE_SUPERSEDED_BY, now],
@@ -2046,11 +2059,14 @@ impl crate::Uteke {
 
     /// Look up the supersession target for a memory, if any (#1053).
     /// Returns `Some(new_id)` when an outgoing `superseded_by` edge exists.
+    /// Deterministic: latest by created_at, then id (code-scanning #687 —
+    /// bare LIMIT 1 with no ORDER BY could return any row).
     pub fn supersession_of(&self, memory_id: &str) -> Result<Option<String>, Error> {
         let conn = self.graph_store();
         let target: Option<String> = conn
             .query_row(
-                "SELECT target_id FROM memory_edges WHERE source_id = ?1 AND edge_type = ?2 LIMIT 1",
+                "SELECT target_id FROM memory_edges WHERE source_id = ?1 AND edge_type = ?2 \
+                 ORDER BY created_at DESC, target_id ASC LIMIT 1",
                 params![memory_id, EDGE_SUPERSEDED_BY],
                 |r| r.get(0),
             )
@@ -2150,6 +2166,34 @@ mod supersession_tests {
             )
             .unwrap();
         assert_eq!((fwd, inv), (1, 1));
+
+        // Re-supersession replaces the pair (code-scanning #687): a second
+        // target must not stack a second superseded_by edge.
+        let third = uteke
+            .remember_precomputed(
+                "third decision: final word",
+                &[],
+                None,
+                Some("ss-ns"),
+                "decision",
+                "text",
+                &embedding,
+            )
+            .unwrap();
+        uteke.supersede(&old, &third, None).unwrap();
+        assert_eq!(
+            uteke.supersession_of(&old).unwrap().as_deref(),
+            Some(third.as_str()),
+            "latest supersession wins"
+        );
+        let stacked: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_edges WHERE source_id=?1 AND edge_type='superseded_by'",
+                params![old],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stacked, 1, "no stacked superseded_by edges");
 
         drop(uteke);
         std::fs::remove_dir_all(&dir).ok();
