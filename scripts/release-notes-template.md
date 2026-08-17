@@ -26,7 +26,7 @@ Each archive contains three binaries + ONNX Runtime shared library:
 curl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh | sh
 
 # Pin a specific version
-UTEKE_VERSION=__VER__ curl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh | sh
+UTEKE_VERSION=v__VER__ curl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh | sh
 
 # Store a memory
 uteke remember "Important context" --tags project
