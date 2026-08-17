@@ -142,6 +142,7 @@ Both transports expose the same 35 tools (MCP protocol version `2025-06-18`):
 | `uteke_list` | List memories (supports pagination via offset) |
 | `uteke_get` | Fetch a single memory's full record by id — no truncation (accepts UUID or unambiguous prefix) |
 | `uteke_update` | Partial update — only provided fields change; content changes re-embed |
+| `uteke_supersede` | Mark a memory superseded by a newer one — wires the edge pair, soft-deprecates the old row; recall flags stale results (⚠ superseded by …) |
 | `uteke_forget` | Delete a memory (accepts UUID or unambiguous prefix) |
 | `uteke_stats` | Memory store statistics |
 | `uteke_context` | AI-optimized context output for prompts |
