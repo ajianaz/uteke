@@ -325,13 +325,13 @@ jobs:
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Download standard Linux x64 artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: uteke-x86_64-unknown-linux-gnu-${{ steps.version.outputs.VERSION }}
           path: standard-artifact
 
       - name: Download legacy ORT artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ort-legacy-linux-x64
           path: ort-legacy
@@ -375,7 +375,7 @@ jobs:
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-artifacts
           pattern: uteke-*
@@ -480,7 +480,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Download Linux binaries from build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: uteke-*-${{ github.ref_name }}
           path: release-artifacts
