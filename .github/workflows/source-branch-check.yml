@@ -1,0 +1,29 @@
+name: Source Branch Check
+
+# Enforces contribution flow: PRs into `main` must come from `develop`
+# (release chore branches). PRs targeting any other branch are unaffected.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  source-branch-check:
+    name: Source Branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify PR source branch
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          echo "PR: $HEAD_REF -> $BASE_REF"
+          if [ "$BASE_REF" = "main" ] && [ "$HEAD_REF" != "develop" ]; then
+            echo "::error::PRs into 'main' are only accepted from 'develop' (release flow)."
+            echo "::error::Please change the base branch of this PR to 'develop' and open a new PR from there."
+            exit 1
+          fi
+          echo "OK: source branch allowed."
