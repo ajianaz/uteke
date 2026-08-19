@@ -245,6 +245,10 @@ pub enum Commands {
         /// Output file path (use - for stdout)
         #[arg(default_value = "-")]
         output: String,
+        /// Full structural export: rooms, graph, edges, documents, chunks,
+        /// timeline (manifest + tagged NDJSON) — round-trips the whole store (#1057)
+        #[arg(long)]
+        full: bool,
     },
     /// Import memories from JSONL, Markdown, or text files (re-embeds content)
     Import {

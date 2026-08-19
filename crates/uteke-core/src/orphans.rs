@@ -165,7 +165,7 @@ mod tests {
 
     fn mem(content: &str, importance: f64) -> Memory {
         Memory {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: uuid::Uuid::now_v7().to_string(),
             content: content.to_string(),
             embedding: vec![],
             tags: vec![],

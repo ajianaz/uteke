@@ -7,13 +7,13 @@
 **Uteke** is a local-first semantic memory engine for AI agents. Single Rust binary, fully offline, ~30ms recall. No API key, Docker, or cloud service needed.
 
 - **Repo:** `codecoradev/uteke` (remote GitHub), local clone
-- **Version:** 0.10.0
+- **Version:** 0.14.3
 - **License:** Apache 2.0
 - **Main branches:** `develop` (default branch, all PRs go here), `main` (release mirror)
 
 ## Architecture
 
-### Workspace Crates (4 crates)
+### Workspace Crates (5 crates)
 
 | Crate | Path | Purpose |
 |-------|------|---------|
@@ -21,6 +21,7 @@
 | `uteke-cli` | `crates/uteke-cli/` | CLI binary — clap commands, JSON output, server proxy |
 | `uteke-server` | `crates/uteke-server/` | HTTP server — persistent daemon for fast agent access |
 | `uteke-mcp` | `crates/uteke-mcp/` | MCP server — JSON-RPC for AI tool integration |
+| `docgen` | `crates/docgen/` | Dev tool — regenerates `docs/api-reference.md` from server routes (CI enforces freshness) |
 
 ### Module Structure
 
@@ -318,6 +319,27 @@ The `cora hook install` pre-commit hook runs on every `git commit`. Do NOT bypas
 cora review --staged --format compact
 ```
 
+### 14. Explicit Approval Before Execution — No Autonomous Side Effects
+
+Agents working in this repo are in **advisory mode by default**. An audit request, a question, or "check X" is NOT authorization to mutate anything.
+
+**Get explicit approval ("go", "execute", "oke, lanjut") BEFORE:**
+- Pushing commits, merging PRs (incl. `--admin`), deleting branches
+- Cherry-picking, reverting, or absorbing changes from **other people's PRs** into your own
+- Commenting on / editing / closing other people's PRs, issues, or reviews
+- Deleting comments, editing PR bodies, changing issue labels/milestones
+- Retargeting PRs (changing base branch)
+- Anything irreversible or visible to external contributors
+
+**Correct flow:** analyze → present findings + options → WAIT for approval → execute exactly the approved scope → report.
+
+**Real case (2026-08-17):** asked to *check* whether open PRs overlapped with our work; instead the agent cherry-picked a contributor's fix into its own PR, pushed, and commented on the contributor's PR — all without being asked. Had to revert, clean up comments, and rebuild trust. One overstep cost more than the fix was worth.
+
+**Rule of thumb:** if a reasonable maintainer would ask "who told you to do that?" — you don't have approval yet.
+
+**Exception — the agent's own in-flight work branch:** local edits, builds, tests, and validation on a branch the agent created itself are fine without per-step approval; the gate applies at push/PR/merge and at touching anything that isn't yours.
+
+
 ---
 
 ## Lessons Learned — From Real Experience
@@ -383,7 +405,7 @@ Entity, category, and meta are stored as JSON in the `metadata` column. This mea
 
 ### Unit Tests Are Not Enough — Manual Stress Testing Is Required
 
-Unit tests (108) don't cover:
+Unit tests (550+) don't cover:
 - Bulk insert of 100+ memories (performance regression?)
 - Concurrent access via server mode
 - Unicode / special characters in content
@@ -497,7 +519,7 @@ docs: update CLI reference for metadata flags
 # Build
 cargo build --workspace
 
-# Test (295 unit tests)
+# Test (530+ tests)
 cargo test --workspace
 
 # Format + Lint
