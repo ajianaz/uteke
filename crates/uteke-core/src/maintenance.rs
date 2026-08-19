@@ -273,6 +273,23 @@ impl crate::Uteke {
         })
     }
 
+    /// Count PINNED (never-decay) memories, optionally per namespace (#1052).
+    /// Surfaced for MCP stats triage output.
+    pub fn count_pinned(&self, namespace: Option<&str>) -> Result<usize, Error> {
+        self.store.count_pinned(namespace)
+    }
+
+    /// Count DEPRECATED (soft-deleted) memories, optionally per namespace.
+    /// Audit/triage counter — hidden from recall but restorable (#1052).
+    pub fn count_deprecated(&self, namespace: Option<&str>) -> Result<usize, Error> {
+        self.store.count_deprecated(namespace)
+    }
+
+    /// Per-namespace memory counts for stats breakdown (#1052).
+    pub fn namespace_counts(&self) -> Result<Vec<(String, usize)>, Error> {
+        self.store.list_namespaces_with_counts()
+    }
+
     /// Get aging status — breakdown of memories by access tier.
     pub fn aging_status(&self, namespace: Option<&str>) -> Result<AgingStatus, Error> {
         let total = self.store.count(namespace)?;

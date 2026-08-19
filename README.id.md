@@ -299,7 +299,7 @@ Bisa. Uteke punya MCP server yang langsung pakai dengan Claude Code, Cursor, dan
 <details>
 <summary><strong>Sudah production-ready?</strong></summary>
 
-Uteke sekarang v0.12.0 dengan 432 test, CI/CD di setiap commit, dan benchmark harness. Dipakai production oleh tim CodeCora dan early adopter lain. Masih di versi 0.x — mungkin ada rough edges, tapi core-nya udah stabil.
+Uteke sekarang v0.14.3 dengan 530+ test, CI/CD di setiap commit, dan benchmark harness. Dipakai production oleh tim CodeCora dan early adopter lain. Masih di versi 0.x — mungkin ada rough edges, tapi core-nya udah stabil.
 </details>
 
 ---
@@ -308,7 +308,7 @@ Uteke sekarang v0.12.0 dengan 432 test, CI/CD di setiap commit, dan benchmark ha
 
 ```bash
 cargo build --workspace        # Build
-cargo test --workspace         # Test (431 test)
+cargo test --workspace         # Test (530+ test)
 cargo clippy -- -D warnings    # Lint
 cargo fmt                      # Format
 ```

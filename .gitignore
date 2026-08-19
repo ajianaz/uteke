@@ -1,30 +1,30 @@
-# Build artifacts
 /target/
-crates/*/target/
-
-# IDE
+*.swp
+*.swo
+*~
+.DS_Store
 .idea/
 .vscode/
-
-# Internal planning docs (never publish)
-internal/
-.cora/
-
-# Local index artifacts (not source)
-uteke_index.*
-scripts/demo-record.sh
+*.pdb
+__pycache__/
 milestone*.md
+
+# Runtime index files
+uteke_index.keys
+uteke_index.usearch
+.fusion/
 progress.md
+.cora/
+scripts/demo-record.sh
+
+# Internal docs — never commit to public repo
+internal/
 
 # Benchmark results (large, ephemeral — commit RESULTS.md summaries, not raw data)
 benchmarks/longmemeval/results_*/
-benchmarks/longmemeval/runs/
-benchmarks/longmemeval/work/
 
-# Mutation testing artifacts (local runs, not CI)
 # cargo-mutants output (local only — run before release)
 mutants*.out/
 mutants*.out.old/
 
 # VitePress build artifacts (keep config.ts, not lock files)
-docs/package-lock.json

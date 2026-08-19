@@ -1121,6 +1121,42 @@ mod tests {
         assert_eq!(lower.len(), 2);
     }
 
+    /// #1051: search_content(None) must search ACROSS namespaces — it used to
+    /// coerce None to the default namespace, hiding hits from other namespaces
+    /// (e.g. MCP uteke_search without a namespace argument). Also pins
+    /// hyphenated-identifier matching on the LIKE path.
+    #[test]
+    fn test_search_content_cross_namespace_and_hyphen() {
+        let store = Store::open(":memory:").unwrap();
+
+        let mut m = make_test_memory("x1", "uteke-cloud-dev is the private repo", &[]);
+        m.namespace = "repo-uteke".to_string();
+        store.insert(&m).unwrap();
+
+        let mut m2 = make_test_memory("x2", "unrelated note", &[]);
+        m2.namespace = "default".to_string();
+        store.insert(&m2).unwrap();
+
+        // Cross-namespace: None must find the non-default-namespace hit
+        let across = store.search_content("uteke-cloud-dev", None, 10).unwrap();
+        assert_eq!(across.len(), 1, "None must search across namespaces");
+        assert_eq!(across[0].id, "x1");
+
+        // Scoped search still works
+        let scoped = store
+            .search_content("uteke-cloud-dev", Some("repo-uteke"), 10)
+            .unwrap();
+        assert_eq!(scoped.len(), 1);
+
+        // Hyphenated identifier matches as literal substring
+        let hyphen = store.search_content("uteke-cloud-dev", None, 10).unwrap();
+        assert!(!hyphen.is_empty());
+
+        // Partial hyphen prefix also matches (substring semantics)
+        let partial = store.search_content("uteke-cloud", None, 10).unwrap();
+        assert_eq!(partial.len(), 1);
+    }
+
     #[test]
     fn test_search_content_namespace_scoped() {
         let store = Store::open(":memory:").unwrap();

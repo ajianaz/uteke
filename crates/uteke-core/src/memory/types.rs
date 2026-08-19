@@ -285,6 +285,13 @@ pub struct ExportEntry {
     /// Optional source provenance (#348).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// Namespace the memory belonged to (#1036).
+    ///
+    /// Serializes on every row so multi-namespace stores round-trip with
+    /// attribution intact. Missing on rows from OLD export files — import
+    /// falls back to the caller-provided namespace for those.
+    #[serde(default = "default_namespace")]
+    pub namespace: String,
 }
 
 fn default_metadata() -> serde_json::Value {

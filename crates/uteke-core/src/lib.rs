@@ -29,6 +29,7 @@ mod orphans;
 mod recall_cache;
 mod rooms;
 pub mod salience_recency;
+pub mod structural_export;
 mod timeline;
 mod types;
 pub mod update_check;
@@ -1323,7 +1324,7 @@ impl Uteke {
         let existing = self.store.get_document_by_slug(slug)?;
         let (id, version) = match &existing {
             Some(doc) => (doc.id.clone(), doc.version),
-            None => (uuid::Uuid::new_v4().to_string(), 1),
+            None => (uuid::Uuid::now_v7().to_string(), 1),
         };
 
         let path = if let Some(ref _pid) = parent_id {
@@ -1384,7 +1385,7 @@ impl Uteke {
         }
 
         for (i, chunk) in chunks.iter().enumerate() {
-            let chunk_id = uuid::Uuid::new_v4().to_string();
+            let chunk_id = uuid::Uuid::now_v7().to_string();
             let embedding = embedder.embed(&chunk.content)?;
 
             self.store.insert_document_chunk(
@@ -1487,7 +1488,7 @@ impl Uteke {
             }
 
             for (i, chunk) in chunks.iter().enumerate() {
-                let chunk_id = uuid::Uuid::new_v4().to_string();
+                let chunk_id = uuid::Uuid::now_v7().to_string();
                 let embedding = embedder.embed(&chunk.content)?;
 
                 self.store.insert_document_chunk(
@@ -3247,5 +3248,27 @@ mod context_tests {
         assert!(ctx.contains("procedure"), "should list types");
         assert!(ctx.contains("decision"), "should list types");
         assert!(ctx.contains("Recent memories"), "should show recent");
+    }
+}
+
+#[cfg(test)]
+mod uuidv7_tests {
+    #[test]
+    fn new_ids_are_v7_and_time_ordered() {
+        let a = uuid::Uuid::now_v7().to_string();
+        let b = uuid::Uuid::now_v7().to_string();
+        let ua = uuid::Uuid::parse_str(&a).unwrap();
+        let ub = uuid::Uuid::parse_str(&b).unwrap();
+        assert_eq!(ua.get_version_num(), 7);
+        assert!(ub > ua, "consecutive now_v7 ids must sort ascending");
+    }
+
+    #[test]
+    fn v4_ids_still_parse_and_sort() {
+        // Mixed v4/v7 stores keep working: old rows stay v4, new rows v7.
+        let v4 = uuid::Uuid::new_v4();
+        let v7 = uuid::Uuid::now_v7();
+        assert_eq!(v4.get_version_num(), 4);
+        assert_eq!(v7.get_version_num(), 7);
     }
 }

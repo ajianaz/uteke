@@ -396,7 +396,7 @@ mod tests {
         let tmp = std::env::temp_dir();
         let dir = tmp.join("test_ort_exact");
         std::fs::create_dir_all(&dir).unwrap();
-        let lib = dir.join("libonnxruntime.so");
+        let lib = dir.join(ORT_LIB_NAME);
         std::fs::write(&lib, b"fake").unwrap();
 
         let result = find_ort_in_dir(&dir);

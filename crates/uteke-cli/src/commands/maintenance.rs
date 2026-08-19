@@ -183,7 +183,30 @@ pub(crate) fn run_export(
     uteke: &Uteke,
     ns: Option<&str>,
     output: &str,
+    full: bool,
 ) -> Result<(), String> {
+    if full {
+        tracing::info!("Exporting FULL store structure to {output}");
+        let ndjson = uteke
+            .export_full()
+            .map_err(|e| format!("Failed to export: {e}"))?;
+        if output == "-" {
+            println!("{ndjson}");
+        } else {
+            std::fs::write(output, &ndjson)
+                .map_err(|e| format!("Failed to write export file: {e}"))?;
+            let count = ndjson.lines().filter(|l| !l.trim().is_empty()).count() - 1; // minus manifest
+            if cli.json {
+                output::print_json(
+                    &serde_json::json!({"exported": count, "format": "structural-v1"}),
+                );
+            } else {
+                println!("\u{2713} Exported {count} structural rows (manifest + sections)");
+            }
+        }
+        return Ok(());
+    }
+
     tracing::info!("Exporting memories to {output}");
     let jsonl = uteke
         .export(ns)
@@ -240,6 +263,35 @@ pub(crate) fn run_import(
     } else {
         std::fs::read_to_string(input).map_err(|e| format!("Failed to read file: {e}"))?
     };
+
+    // Structural export detection (#1057): a manifest first line routes to
+    // the full-store restore; plain JSONL falls through to the legacy path.
+    let first_line = content.lines().find(|l| !l.trim().is_empty());
+    if let Some(fl) = first_line {
+        if fl.contains("\"uteke_export\"") {
+            tracing::info!("Detected structural export manifest — full-store import");
+            let result = uteke
+                .import_full(&content)
+                .map_err(|e| format!("Structural import failed: {e}"))?;
+            if cli.json {
+                output::print_json(&result);
+            } else {
+                println!("\u{2713} Structural import complete");
+                if let Some(imported) = result.get("imported").and_then(|v| v.as_object()) {
+                    for (section, count) in imported {
+                        println!("  {section}: {count}");
+                    }
+                }
+                if result["needs_reembed"].as_i64().unwrap_or(0) > 0 {
+                    println!(
+                        "\u{26a0}\u{fe0f}  {} memories need re-embedding — run `uteke repair --reembed`",
+                        result["needs_reembed"]
+                    );
+                }
+            }
+            return Ok(());
+        }
+    }
 
     // LLM extraction path (opt-in). Distill the raw input into atomic facts,
     // then store each fact as its own memory. Bypasses format detection because

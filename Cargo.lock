@@ -214,8 +214,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
+ "js-sys",
  "num-traits",
  "serde",
+ "wasm-bindgen",
  "windows-link",
 ]
 
@@ -2764,7 +2766,7 @@ dependencies = [
 
 [[package]]
 name = "uteke-cli"
-version = "0.14.3"
+version = "0.15.0"
 dependencies = [
  "chrono",
  "clap",
@@ -2790,7 +2792,7 @@ dependencies = [
 
 [[package]]
 name = "uteke-core"
-version = "0.14.3"
+version = "0.15.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -2813,17 +2815,19 @@ dependencies = [
 
 [[package]]
 name = "uteke-mcp"
-version = "0.14.3"
+version = "0.15.0"
 dependencies = [
+ "chrono",
  "dirs",
  "serde",
  "serde_json",
  "uteke-core",
+ "uuid",
 ]
 
 [[package]]
 name = "uteke-server"
-version = "0.14.3"
+version = "0.15.0"
 dependencies = [
  "chrono",
  "ctrlc",
