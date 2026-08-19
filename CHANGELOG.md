@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.15.0] — 2026-08-19
+
+Minor release. The theme: memory you can trust across surfaces, and a store you can move.
+
+New memories now get UUIDv7 IDs — time-ordered at the front, so indexes and timelines sort naturally instead of jumping around. Existing v4 IDs keep working untouched.
+
+### Added
+
+- **Supersession workflow (#1069)** — mark a stale decision as superseded by a newer one. Recall flags superseded entries so agents stop acting on outdated decisions.
+- **Structural export (#1068)** — full-store round-trip: rooms, graph, edges, documents, and timeline export to a single file and import back without loss.
+- **MCP `uteke_get` + `uteke_update` (#1067)** — read and edit a single memory by ID, with short-ID resolution on every ID-taking tool.
+- **Richer MCP outputs (#1066)** — `uteke_stats` includes tier and namespace breakdowns, `uteke_doc_search` returns scores, room results carry room IDs.
+
+### Fixed
+
+- **`uteke_dream` no longer destructive by default (#1065)** — runs as dry-run first; destructive passes require explicit scope or confirmation.
+- **`/export` keeps namespace attribution (#1064)** — exported rows no longer lose which namespace they came from, and the deprecated-row delta is documented.
+- **Recall cache score parity (#1063)** — a cache hit used to skip salience and recency boosts, so the same query scored differently cold vs warm. Both paths now score identically.
+- **`search_content(None)` no longer collapses to the default namespace (#1062)** — keyword search without an explicit namespace now searches across namespaces as expected.
+- **Soft-forgotten memories stay hidden (#1061)** — they were leaking into list, search, and doctor counts.
+
+### Changed
+
+- **UUIDv4 → UUIDv7 for new IDs (#1060)** — time-sortable IDs. Existing v4 IDs are fully compatible; nothing migrates, nothing breaks.
+
 ## [0.14.3] — 2026-08-15
 
 Patch release: recall `strategy` now behaves the same everywhere. The CLI got the fix in #900; the HTTP API and MCP server never got the wiring, so the same request quietly returned different results depending on which surface you asked.
