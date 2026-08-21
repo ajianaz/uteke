@@ -211,6 +211,13 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                                 error!("Failed to set source for {id}: {e}");
                             }
                         }
+                        // Set author type after storage (#1083). Validate before
+                        // writing so invalid values fail loudly (400, not silent).
+                        if let Some(at) = req_data.author_type.as_deref() {
+                            if let Err(e) = uteke.set_author_type(&id, at) {
+                                return ctx.error_response_for(req, 400, e.to_string());
+                            }
+                        }
                         ctx.ok_response_for(req, &serde_json::json!({"id": id}))
                     }
                     Err(e) => {
