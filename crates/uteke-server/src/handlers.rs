@@ -12,6 +12,7 @@ use tiny_http::{Header, Method, Request, Response, StatusCode};
 use tracing::{error, warn};
 
 use uteke_core::Uteke;
+use uteke_core::memory::types::validate_author_type;
 
 use crate::context::{self, ApiRole, AuthResult, ReqCtx};
 use crate::types::*;
@@ -180,6 +181,15 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                 } else {
                     Some(serde_json::Value::Object(meta))
                 };
+
+                // Validate author_type BEFORE any write (#1083, cora finding):
+                // invalid values must reject the whole request — inserting then
+                // failing would leave a persisted memory the client believes failed.
+                if let Some(at) = req_data.author_type.as_deref() {
+                    if let Err(e) = validate_author_type(at) {
+                        return ctx.error_response_for(req, 400, e.to_string());
+                    }
+                }
 
                 let result = if req_data.detect_contradiction {
                     uteke
