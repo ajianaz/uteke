@@ -340,6 +340,10 @@ pub struct RoomRecallRequest {
     pub author: Option<String>,
     #[serde(default)]
     pub min_score: Option<f32>,
+    /// Time-travel: recall room state as of this RFC3339 timestamp (#1082).
+    /// Memories created after `at` (or invalidated before it) are excluded.
+    #[serde(default)]
+    pub at: Option<String>,
 }
 
 pub fn default_limit_search() -> usize {

@@ -672,6 +672,8 @@ Accepts an object (e.g. {"project": "uteke"}). |
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `at` | any | No | Time-travel: recall room state as of this RFC3339 timestamp (#1082).
+Memories created after `at` (or invalidated before it) are excluded. |
 | `author` | any | No |  |
 | `limit` | `integer` | No |  |
 | `min_score` | any | No |  |
