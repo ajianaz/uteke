@@ -118,10 +118,16 @@ impl crate::Uteke {
         }
 
         // Load and sort chronologically (stable: insertion order breaks ties).
+        // Errors propagate — silently dropping memories would skew boundaries.
         let mut memories: Vec<Memory> = ids
             .into_iter()
-            .filter_map(|id| self.store.get_by_id(&id).ok().flatten())
-            .collect();
+            .map(|id| {
+                self.store
+                    .get_by_id(&id)
+                    .map_err(|e| Error::db("room_segments: load memory", e))?
+                    .ok_or_else(|| Error::db_msg(format!("room_segments: memory {id} vanished")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         memories.sort_by_key(|a| a.created_at);
 
         // Adjacent similarities.
