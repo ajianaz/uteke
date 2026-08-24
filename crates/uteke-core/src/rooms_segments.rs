@@ -396,10 +396,12 @@ mod tests {
         // With min_size=3, both B and C must merge into A (3 segments -> 2).
         let uteke = crate::Uteke::open(":memory:").unwrap();
         uteke.store.create_room("r3", None, "default").unwrap();
-        let a = v(0.1);
-        let b = v(0.9);
-        let c = v(0.5);
-        let embs = [a.clone(), a.clone(), b, c, a.clone(), a.clone()];
+        // Orthogonal unit vectors -> pairwise cosine ≈ 0 (all < threshold).
+        let a = vec![1.0, 0.0, 0.0, 0.0];
+        let b = vec![0.0, 1.0, 0.0, 0.0];
+        let c = vec![0.0, 0.0, 1.0, 0.0];
+        let d = vec![0.0, 0.0, 0.0, 1.0];
+        let embs = [a.clone(), a.clone(), b, c, d.clone(), d.clone()];
         for (i, e) in embs.into_iter().enumerate() {
             let id = format!("m{i}");
             let m = make_memory(&id, &id, e);
@@ -411,9 +413,9 @@ mod tests {
         }
         let res = uteke.room_segments("r3", 0.45, 12, 3).unwrap();
         let sizes: Vec<usize> = res.segments.iter().map(|s| s.memory_ids.len()).collect();
-        // m2 (b) and m3 (c) both merge into the leading A run: [4, 2].
-        assert_eq!(sizes, vec![4, 2], "sizes: {sizes:?}");
-        // No segment smaller than min_size except possibly the first.
+        // B, C, D runs all merge progressively into the leading A run: [6].
+        assert_eq!(sizes, vec![6], "sizes: {sizes:?}");
+        // No tail segment below min_size may survive.
         assert!(
             sizes.iter().skip(1).all(|&s| s >= 3),
             "tail segments below min_size: {sizes:?}"
