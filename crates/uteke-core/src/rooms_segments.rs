@@ -106,8 +106,9 @@ impl crate::Uteke {
         max_size: usize,
         min_size: usize,
     ) -> Result<SegmentationResult, Error> {
-        let ids = self.store.get_room_memory_ids(room_id, None)?;
-        if ids.is_empty() {
+        // Bulk-fetch room memories in one query, chronological order.
+        let mut memories: Vec<Memory> = self.store.recall_room(room_id, None, 0)?;
+        if memories.is_empty() {
             return Ok(SegmentationResult {
                 room_id: room_id.to_string(),
                 total_memories: 0,
@@ -117,17 +118,6 @@ impl crate::Uteke {
             });
         }
 
-        // Load and sort chronologically (stable: insertion order breaks ties).
-        // Errors propagate — silently dropping memories would skew boundaries.
-        let mut memories: Vec<Memory> = ids
-            .into_iter()
-            .map(|id| {
-                self.store
-                    .get_by_id(&id)
-                    .map_err(|e| Error::db("room_segments: load memory", e))?
-                    .ok_or_else(|| Error::db_msg(format!("room_segments: memory {id} vanished")))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
         memories.sort_by_key(|a| a.created_at);
 
         // Adjacent similarities.
