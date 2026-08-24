@@ -28,6 +28,7 @@ mod operations;
 mod orphans;
 mod recall_cache;
 mod rooms;
+pub mod rooms_segments;
 pub mod salience_recency;
 pub mod structural_export;
 mod timeline;
