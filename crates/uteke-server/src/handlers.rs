@@ -1282,16 +1282,27 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                 let query = req_data.query.as_deref().unwrap_or("").trim();
                 if query.is_empty() {
                     // No query provided — fall back to chronological recall (#785)
+                    // Over-fetch when time-traveling: the SQL LIMIT applies
+                    // before the temporal post-filter, so fetch extra rows
+                    // and truncate after filtering (cora MAJOR on #1085).
+                    let fetch_limit = if point_in_time.is_some() && req_data.limit > 0 {
+                        req_data.limit.saturating_mul(3).max(req_data.limit + 10)
+                    } else {
+                        req_data.limit
+                    };
                     match uteke.recall_room(
                         &req_data.room_id,
                         req_data.author.as_deref(),
-                        req_data.limit,
+                        fetch_limit,
                     ) {
                         Ok(memories) => {
-                            let memories = match point_in_time {
+                            let mut memories = match point_in_time {
                                 Some(pit) => filter_room_memories_at_time(memories, pit),
                                 None => memories,
                             };
+                            if point_in_time.is_some() && req_data.limit > 0 {
+                                memories.truncate(req_data.limit);
+                            }
                             ctx.ok_response_for(req, &memories)
                         }
                         Err(e) => {
