@@ -1261,15 +1261,50 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         // ── Room Recall (semantic with optional fallback to chronological) ──
         (Method::Post, "/room/recall") => match read_body::<RoomRecallRequest>(req.as_reader()) {
             Ok(req_data) => {
+                // Time-travel: parse & validate `at` before any query so an
+                // invalid timestamp fails loudly (400) instead of being
+                // silently ignored (#1082).
+                let point_in_time = match req_data.at.as_deref() {
+                    Some(at_str) => match chrono::DateTime::parse_from_rfc3339(at_str) {
+                        Ok(dt) => Some(dt.with_timezone(&chrono::Utc)),
+                        Err(_) => {
+                            return ctx.error_response_for(
+                                req,
+                                400,
+                                format!(
+                                    "Invalid 'at' timestamp: {at_str}. Use RFC3339 format (e.g. 2026-06-01T12:00:00Z)"
+                                ),
+                            );
+                        }
+                    },
+                    None => None,
+                };
                 let query = req_data.query.as_deref().unwrap_or("").trim();
                 if query.is_empty() {
                     // No query provided — fall back to chronological recall (#785)
+                    // Over-fetch when time-traveling: the SQL LIMIT applies
+                    // before the temporal post-filter, so fetch extra rows
+                    // and truncate after filtering (cora MAJOR on #1085).
+                    let fetch_limit = if point_in_time.is_some() && req_data.limit > 0 {
+                        req_data.limit.saturating_mul(3).max(req_data.limit + 10)
+                    } else {
+                        req_data.limit
+                    };
                     match uteke.recall_room(
                         &req_data.room_id,
                         req_data.author.as_deref(),
-                        req_data.limit,
+                        fetch_limit,
                     ) {
-                        Ok(memories) => ctx.ok_response_for(req, &memories),
+                        Ok(memories) => {
+                            let mut memories = match point_in_time {
+                                Some(pit) => filter_room_memories_at_time(memories, pit),
+                                None => memories,
+                            };
+                            if point_in_time.is_some() && req_data.limit > 0 {
+                                memories.truncate(req_data.limit);
+                            }
+                            ctx.ok_response_for(req, &memories)
+                        }
                         Err(e) => {
                             error!("Internal error: {e}");
                             ctx.error_response_for(req, 500, "Internal server error")
@@ -1290,7 +1325,20 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                         req_data.author.as_deref(),
                         min_score,
                     ) {
-                        Ok(results) => ctx.ok_response_for(req, &results),
+                        Ok(results) => {
+                            let results = match point_in_time {
+                                Some(pit) => {
+                                    let mut kept: Vec<_> = results
+                                        .into_iter()
+                                        .filter(|sr| memory_exists_at(&sr.memory, pit))
+                                        .collect();
+                                    kept.truncate(req_data.limit.max(1));
+                                    kept
+                                }
+                                None => results,
+                            };
+                            ctx.ok_response_for(req, &results)
+                        }
                         Err(e) => {
                             error!("Internal error: {e}");
                             ctx.error_response_for(req, 500, "Internal server error")
@@ -2255,5 +2303,133 @@ fn resolve_extraction_config(
         base_url: base.base_url,
         endpoint_path: base.endpoint_path,
         max_facts: req_max_facts.unwrap_or(base.max_facts),
+    }
+}
+
+/// Point-in-time predicate for room time-travel (#1082).
+/// Mirrors the core `recall_at_time` temporal rules: memory must have been
+/// created at or before `pit`, not yet invalidated (valid_until), not
+/// deprecated, and valid_from must not be in the future relative to `pit`.
+fn memory_exists_at(
+    memory: &uteke_core::memory::types::Memory,
+    pit: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if memory.created_at > pit {
+        return false;
+    }
+    if let Some(valid_until) = memory.valid_until {
+        if valid_until <= pit {
+            return false;
+        }
+    }
+    if memory.deprecated {
+        return false;
+    }
+    if let Some(valid_from) = memory.valid_from {
+        if valid_from > pit {
+            return false;
+        }
+    }
+    true
+}
+
+/// Apply the time-travel predicate to chronological room recall results
+/// (no-query path), preserving chronological order (#1082).
+fn filter_room_memories_at_time(
+    memories: Vec<uteke_core::memory::types::Memory>,
+    pit: chrono::DateTime<chrono::Utc>,
+) -> Vec<uteke_core::memory::types::Memory> {
+    memories
+        .into_iter()
+        .filter(|m| memory_exists_at(m, pit))
+        .collect()
+}
+
+#[cfg(test)]
+mod room_recall_at_tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn mem(created_offset_secs: i64) -> uteke_core::memory::types::Memory {
+        uteke_core::memory::types::Memory {
+            id: uuid::Uuid::new_v4().to_string(),
+            content: format!("m{created_offset_secs}"),
+            embedding: Vec::new(),
+            tags: Vec::new(),
+            metadata: serde_json::Value::Object(serde_json::Map::new()),
+            created_at: Utc::now() + chrono::Duration::seconds(created_offset_secs),
+            updated_at: Utc::now(),
+            namespace: "default".into(),
+            access_count: 0,
+            last_accessed: None,
+            deprecated: false,
+            valid_from: None,
+            valid_until: None,
+            memory_type: "fact".into(),
+            importance: 0.5,
+            pinned: false,
+            content_type: "text".into(),
+            slug: None,
+            source: None,
+            source_type: "user".into(),
+            author_type: "agent".into(),
+        }
+    }
+
+    #[test]
+    fn at_time_excludes_future_and_invalidated() {
+        let now = Utc::now();
+        let old = mem(-3600); // created an hour ago — existed at `now`
+        let future = mem(3600); // created an hour from now — must be excluded
+        let mut invalidated = mem(-7200);
+        invalidated.valid_until = Some(now - chrono::Duration::seconds(60)); // expired before `now`
+        let mut not_yet_valid = mem(-7200);
+        not_yet_valid.valid_from = Some(now + chrono::Duration::seconds(60));
+
+        assert!(memory_exists_at(&old, now));
+        assert!(!memory_exists_at(&future, now));
+        assert!(!memory_exists_at(&invalidated, now));
+        assert!(!memory_exists_at(&not_yet_valid, now));
+    }
+
+    #[test]
+    fn at_time_excludes_deprecated() {
+        let now = Utc::now();
+        let mut dep = mem(-60);
+        dep.deprecated = true;
+        assert!(!memory_exists_at(&dep, now));
+    }
+
+    #[test]
+    fn at_time_boundary_inclusive_created_at() {
+        let exact = mem(0);
+        // created_at == pit: memory existed at that instant (inclusive, matches core recall_at_time rule `> pit → reject`)
+        assert!(memory_exists_at(&exact, exact.created_at));
+    }
+
+    #[test]
+    fn filter_room_memories_preserves_order() {
+        let now = Utc::now();
+        let older = mem(-100);
+        let newer = mem(-50);
+        let future = mem(100);
+        let out = filter_room_memories_at_time(vec![older, newer, future], now);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].content, "m-100");
+        assert_eq!(out[1].content, "m-50");
+    }
+
+    #[test]
+    fn room_recall_request_deserializes_at() {
+        // Regression for #1082: `at` must be a recognized field, not silently dropped.
+        let req: RoomRecallRequest =
+            serde_json::from_str(r#"{"room_id":"r1","limit":3,"at":"2020-01-01T00:00:00Z"}"#)
+                .expect("at field must deserialize");
+        assert_eq!(req.at.as_deref(), Some("2020-01-01T00:00:00Z"));
+        assert_eq!(req.room_id, "r1");
+        // Omitted → None (backwards compatible)
+        let req: RoomRecallRequest =
+            serde_json::from_str(r#"{"room_id":"r1"}"#).expect("no-at body must parse");
+        assert!(req.at.is_none());
     }
 }
