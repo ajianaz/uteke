@@ -2310,6 +2310,10 @@ fn resolve_extraction_config(
 /// Mirrors the core `recall_at_time` temporal rules: memory must have been
 /// created at or before `pit`, not yet invalidated (valid_until), not
 /// deprecated, and valid_from must not be in the future relative to `pit`.
+///
+/// Known limitation (#1086): the schema stores no deprecation timestamp,
+/// so a memory deprecated *after* `pit` is also excluded here — time-travel
+/// treats `deprecated` as "never existed". Same rule as core `recall_at_time`.
 fn memory_exists_at(
     memory: &uteke_core::memory::types::Memory,
     pit: chrono::DateTime<chrono::Utc>,
