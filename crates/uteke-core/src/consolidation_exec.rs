@@ -154,15 +154,40 @@ pub fn execute_plan<U: ConsolidationStore>(
             continue;
         }
 
-        uteke.insert_memory(&mut record)?;
+        // Embed before write so the record is vector-searchable. Embedding
+        // failure aborts only this batch (sources stay untouched).
+        record.embedding = match uteke.embed_content(&record.content) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("consolidation embedding failed: {e}");
+                result.batch_errors.push(format!("embedding: {e}"));
+                continue;
+            }
+        };
+
+        // Store failures after this point also abort only this batch. The
+        // write/deprecate pair is not transactional across the two calls,
+        // so a deprecate failure after a successful insert leaves the new
+        // record active alongside its sources — recorded here rather than
+        // silently killing the run (duplicate content is recoverable by a
+        // later dedup pass; lost batches are not).
+        if let Err(e) = uteke.insert_memory(&mut record) {
+            tracing::warn!("consolidation insert failed: {e}");
+            result.batch_errors.push(format!("insert: {e}"));
+            continue;
+        }
         result.records_written += 1;
         for id in &batch.memory_ids {
             let reason = format!(
                 "consolidated into {} (room {room_id} segment batching)",
                 record.id
             );
-            uteke.deprecate_memory(id, &reason)?;
-            result.sources_deprecated += 1;
+            if let Err(e) = uteke.deprecate_memory(id, &reason) {
+                tracing::warn!("consolidation deprecate failed for {id}: {e}");
+                result.batch_errors.push(format!("deprecate {id}: {e}"));
+            } else {
+                result.sources_deprecated += 1;
+            }
         }
     }
     Ok(result)
@@ -173,6 +198,9 @@ pub trait ConsolidationStore {
     fn room_memories(&self, room_id: &str) -> Result<Vec<Memory>, Error>;
     fn insert_memory(&self, memory: &mut Memory) -> Result<(), Error>;
     fn deprecate_memory(&self, id: &str, reason: &str) -> Result<(), Error>;
+    /// Compute the embedding vector for a record before it is written, so
+    /// consolidated records stay visible to vector/semantic recall.
+    fn embed_content(&self, content: &str) -> Result<Vec<f32>, Error>;
 }
 
 fn consolidation_endpoint(config: &ExtractionConfig) -> String {
