@@ -107,7 +107,21 @@ impl crate::Uteke {
         min_size: usize,
     ) -> Result<SegmentationResult, Error> {
         // Bulk-fetch room memories in one query, chronological order.
-        let mut memories: Vec<Memory> = self.store.recall_room(room_id, None, 0)?;
+        let memories = self.store.recall_room(room_id, None, 0)?;
+        self.room_segments_inner(room_id, &memories, threshold, max_size, min_size)
+    }
+
+    /// Segmentation over caller-supplied memories (already fetched — avoids
+    /// a second query when the caller already holds the room's memories).
+    pub fn room_segments_inner(
+        &self,
+        room_id: &str,
+        memories: &[Memory],
+        threshold: f32,
+        max_size: usize,
+        min_size: usize,
+    ) -> Result<SegmentationResult, Error> {
+        let mut memories: Vec<Memory> = memories.to_vec();
         if memories.is_empty() {
             return Ok(SegmentationResult {
                 room_id: room_id.to_string(),
@@ -420,5 +434,46 @@ mod tests {
             sizes.iter().skip(1).all(|&s| s >= 3),
             "tail segments below min_size: {sizes:?}"
         );
+    }
+
+    #[test]
+    fn room_summary_includes_segments_when_embeddings_exist() {
+        let uteke = crate::Uteke::open(":memory:").unwrap();
+        uteke.store.create_room("r4", None, "default").unwrap();
+        let a = vec![1.0, 0.0, 0.0, 0.0];
+        let b = vec![0.0, 1.0, 0.0, 0.0];
+        let embs = [
+            a.clone(),
+            a.clone(),
+            a.clone(),
+            b.clone(),
+            b.clone(),
+            b.clone(),
+        ];
+        for (i, e) in embs.into_iter().enumerate() {
+            let id = format!("m{i}");
+            let m = make_memory(&id, &id, e);
+            uteke.store.insert(&m).unwrap();
+            uteke
+                .store
+                .link_memory_to_room("r4", &id, "tester", "participant")
+                .unwrap();
+        }
+        let summary = uteke.room_summary("r4").unwrap().expect("summary exists");
+        let segs = summary.segments.expect("segments present");
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].memory_ids.len(), 3);
+        assert_eq!(segs[1].memory_ids.len(), 3);
+
+        // No embeddings -> segments stay None.
+        uteke.store.create_room("r5", None, "default").unwrap();
+        let m = make_memory("plain", "plain", vec![]);
+        uteke.store.insert(&m).unwrap();
+        uteke
+            .store
+            .link_memory_to_room("r5", "plain", "tester", "participant")
+            .unwrap();
+        let s5 = uteke.room_summary("r5").unwrap().expect("summary exists");
+        assert!(s5.segments.is_none());
     }
 }

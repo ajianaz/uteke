@@ -41,6 +41,10 @@ pub struct RoomSummary {
     /// Document slugs linked to this room via the room_documents junction table.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub referenced_documents: Option<Vec<String>>,
+    /// Semantic segments (embedding-distance boundaries, #1088).
+    /// Computed on demand; absent when the room has no embeddings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segments: Option<Vec<crate::rooms_segments::Segment>>,
 }
 
 /// Time range of memories in a room.
@@ -490,6 +494,7 @@ impl super::Store {
                 recent_decisions: vec![],
                 pinned_highlights: vec![],
                 referenced_documents: None,
+                segments: None,
             }));
         }
 
@@ -734,6 +739,7 @@ impl super::Store {
             recent_decisions,
             pinned_highlights: pinned,
             referenced_documents: None,
+            segments: None,
         }))
     }
 
