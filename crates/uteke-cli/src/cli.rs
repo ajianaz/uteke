@@ -776,6 +776,21 @@ pub enum RoomCommands {
         /// Document slug
         doc_slug: String,
     },
+    /// Consolidate a room's memories into fewer, denser records (#1088).
+    ///
+    /// Dry-run by default: shows the batching plan and estimated LLM calls
+    /// without contacting any API. Pass --apply to execute (requires
+    /// extraction LLM config in uteke.toml or UTEKE_* env vars).
+    Consolidate {
+        /// Room ID
+        room_id: String,
+        /// Execute the plan (LLM calls + store writes). Omit for dry-run.
+        #[arg(long)]
+        apply: bool,
+        /// Max LLM requests for this run (default 10, failed calls count too)
+        #[arg(long, default_value_t = 10)]
+        max_calls: usize,
+    },
 }
 
 /// Subcommands for memory aging operations.

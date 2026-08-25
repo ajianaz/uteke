@@ -994,6 +994,69 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
             }
         }
 
+        // ── Room Consolidation (#1088) ───────────────────────────────────
+        // Dry-run by default; `apply: true` executes with a hard budget cap.
+        // Blocked for read-only tokens (not in read_only_post_paths).
+        (Method::Post, "/room/consolidate") => {
+            #[derive(Deserialize)]
+            struct RoomConsolidateRequest {
+                room_id: String,
+                /// Execute the plan (LLM calls + writes). Default false = dry-run.
+                #[serde(default)]
+                apply: bool,
+                /// Max LLM requests for this run. Default 10, hard cap 100.
+                #[serde(default = "default_max_calls")]
+                max_calls: usize,
+            }
+            fn default_max_calls() -> usize {
+                10
+            }
+            match read_body::<RoomConsolidateRequest>(req.as_reader()) {
+                Ok(req_data) => {
+                    let max_calls = req_data.max_calls.min(100);
+                    let result = if req_data.apply {
+                        let ext = resolve_extraction_config(ctx, None, None, None);
+                        if ext.api_key.is_empty() {
+                            return ctx.error_response_for(
+                                req,
+                                503,
+                                "Consolidation apply requires server-side extraction LLM config",
+                            );
+                        }
+                        match uteke_core::consolidation_api::consolidate_room(
+                            &uteke,
+                            &req_data.room_id,
+                            &ext,
+                            max_calls,
+                        ) {
+                            Ok(exec) => serde_json::to_value(&exec).unwrap_or_default(),
+                            Err(e) => {
+                                error!("Internal error: {e}");
+                                return ctx.error_response_for(req, 500, "Internal server error");
+                            }
+                        }
+                    } else {
+                        match uteke_core::consolidation_api::plan_room(&uteke, &req_data.room_id) {
+                            Ok(dry) => serde_json::json!({
+                                "room_id": req_data.room_id,
+                                "dry_run": true,
+                                "total_memories": dry.plan.total_memories,
+                                "batches": dry.plan.batches.len(),
+                                "estimated_llm_calls": dry.plan.batches.len().min(max_calls),
+                                "plan": dry.plan,
+                            }),
+                            Err(e) => {
+                                error!("Internal error: {e}");
+                                return ctx.error_response_for(req, 500, "Internal server error");
+                            }
+                        }
+                    };
+                    ctx.ok_response_for(req, &result)
+                }
+                Err(e) => ctx.error_response_for(req, 400, e),
+            }
+        }
+
         // ── DEPRECATED: POST /room/document → /room/summary-document (#735)
         (Method::Post, "/room/document") => {
             warn!(
