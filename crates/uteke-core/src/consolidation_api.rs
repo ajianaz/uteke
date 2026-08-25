@@ -35,21 +35,31 @@ impl ConsolidationStore for Uteke {
         // Persist (transactional insert, mirrors crud flow).
         self.store().insert(memory)?;
 
-        // Insert into the vector index so recall finds it.
+        // Insert into the vector index so recall finds it; roll back the row
+        // if indexing fails so we never leave an un-searchable memory behind.
         if !memory.embedding.is_empty() {
             let key = memory.id.clone();
             let embedding = memory.embedding.clone();
-            self.add_to_index(&key, &embedding)?;
+            if let Err(e) = self.add_to_index(&key, &embedding) {
+                let _ = self.store().delete(&memory.id);
+                return Err(e);
+            }
         }
 
-        // Keep the record linked to its room so recall_room returns it.
+        // Keep the record linked to its room so recall_room returns it;
+        // roll back the row + index entry on failure (no room links to a
+        // memory the room cannot see).
         if let Some(room_id) = room_id {
-            self.store().link_memory_to_room(
+            if let Err(e) = self.store().link_memory_to_room(
                 &room_id,
                 &memory.id,
                 CONSOLIDATOR_AUTHOR,
                 "consolidated",
-            )?;
+            ) {
+                self.remove_from_index(&memory.id);
+                let _ = self.store().delete(&memory.id);
+                return Err(e);
+            }
         }
         Ok(())
     }

@@ -621,6 +621,20 @@ impl Uteke {
         Ok(())
     }
 
+    /// Remove an entry from the vector index (compensating action for a
+    /// failed consolidation insert). Persistence failure is logged, not
+    /// fatal — the caller is already unwinding an error.
+    pub(crate) fn remove_from_index(&self, id: &str) {
+        let Ok(mut index) = self.index.write() else {
+            return;
+        };
+        if index.remove(id) {
+            if let Err(e) = index.save() {
+                tracing::warn!("failed to persist vector index after remove id={id}: {e}");
+            }
+        }
+    }
+
     /// Open or create a Uteke memory store.
     ///
     /// `path` can be a directory path (will create `uteke.db` inside)
