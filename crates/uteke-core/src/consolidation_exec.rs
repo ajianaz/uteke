@@ -81,8 +81,11 @@ pub fn execute_plan<U: ConsolidationStore>(
         .map(|m| (m.id.clone(), m.clone()))
         .collect::<std::collections::HashMap<_, _>>();
 
+    // Budget counts LLM requests made, not successful ones: a failed call
+    // still consumed an API request against the run's quota.
+    let mut llm_calls_made: usize = 0;
     for batch in &plan.batches {
-        if result.batches_processed >= max_llm_calls {
+        if llm_calls_made >= max_llm_calls {
             result.budget_skipped += 1;
             continue;
         }
@@ -96,6 +99,7 @@ pub fn execute_plan<U: ConsolidationStore>(
             continue;
         }
         let payload = batch.payload.clone();
+        llm_calls_made += 1;
         let output_text = match call_llm(&client, &endpoint, config, &payload) {
             Ok(t) => t,
             Err(e) => {
@@ -172,8 +176,8 @@ pub fn execute_plan<U: ConsolidationStore>(
         // silently killing the run (duplicate content is recoverable by a
         // later dedup pass; lost batches are not).
         if let Err(e) = uteke.insert_memory(&mut record) {
-            tracing::warn!("consolidation insert failed: {e}");
-            result.batch_errors.push(format!("insert: {e}"));
+            tracing::warn!("consolidation write failed: {e}");
+            result.batch_errors.push(format!("store write: {e}"));
             continue;
         }
         result.records_written += 1;
