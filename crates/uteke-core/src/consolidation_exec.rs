@@ -19,6 +19,9 @@ use crate::memory::types::Memory;
 use crate::provenance::ProvenancePolicy;
 use serde::{Deserialize, Serialize};
 
+/// Per-request timeout for consolidation LLM calls.
+const LLM_TIMEOUT_SECS: u64 = 120;
+
 const CONSOLIDATE_SYSTEM_PROMPT: &str = "\
 You consolidate a batch of related memory records from one discussion into a \
 single dense record. Rules:\n\
@@ -63,7 +66,12 @@ pub fn execute_plan<U: ConsolidationStore>(
     config: &ExtractionConfig,
     max_llm_calls: usize,
 ) -> Result<ConsolidationExecution, Error> {
-    let client = reqwest::blocking::Client::new();
+    // No default timeout on reqwest clients — set one so a slow endpoint
+    // cannot hang the consolidation run indefinitely (cf. update_check).
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(LLM_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| Error::Generic(format!("http client build failed: {e}")))?;
     let endpoint = consolidation_endpoint(config);
     let mut result = ConsolidationExecution {
         batches_processed: 0,
@@ -142,7 +150,7 @@ pub fn execute_plan<U: ConsolidationStore>(
             deprecated: false,
             valid_from: None,
             valid_until: None,
-            memory_type: fact.fact_type.unwrap_or_else(|| "fact".to_string()),
+            memory_type: sanitize_memory_type(fact.fact_type.as_deref()),
             importance: sources.iter().map(|s| s.importance).fold(0.0_f64, f64::max),
             pinned: false,
             content_type: "text".to_string(),
@@ -205,6 +213,16 @@ pub trait ConsolidationStore {
     /// Compute the embedding vector for a record before it is written, so
     /// consolidated records stay visible to vector/semantic recall.
     fn embed_content(&self, content: &str) -> Result<Vec<f32>, Error>;
+}
+
+/// Whitelist for LLM-provided memory types — anything else falls back to
+/// "fact" so arbitrary LLM output can never set an unknown memory_type.
+fn sanitize_memory_type(raw: Option<&str>) -> String {
+    const ALLOWED: [&str; 5] = ["fact", "decision", "preference", "procedure", "context"];
+    match raw {
+        Some(t) if ALLOWED.contains(&t) => t.to_string(),
+        _ => "fact".to_string(),
+    }
 }
 
 fn consolidation_endpoint(config: &ExtractionConfig) -> String {
