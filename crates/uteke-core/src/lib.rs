@@ -27,6 +27,7 @@ pub mod memory;
 pub mod offline_extraction;
 mod operations;
 mod orphans;
+pub mod provenance;
 mod recall_cache;
 mod rooms;
 pub mod rooms_segments;
