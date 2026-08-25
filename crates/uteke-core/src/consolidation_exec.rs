@@ -44,6 +44,9 @@ pub struct ConsolidationExecution {
     pub sources_deprecated: usize,
     /// LLM calls skipped because the budget was exhausted.
     pub budget_skipped: usize,
+    /// Batches that failed (network/HTTP/parse error) and were skipped so
+    /// the rest of the run could proceed. Their sources are left untouched.
+    pub batch_errors: Vec<String>,
 }
 
 /// Execute a consolidation plan with the shared extraction LLM setup.
@@ -68,6 +71,7 @@ pub fn execute_plan<U: ConsolidationStore>(
         rejected_by_policy: 0,
         sources_deprecated: 0,
         budget_skipped: 0,
+        batch_errors: Vec::new(),
     };
 
     // Fetch room memories once for provenance checks.
@@ -92,7 +96,18 @@ pub fn execute_plan<U: ConsolidationStore>(
             continue;
         }
         let payload = batch.payload.clone();
-        let output_text = call_llm(&client, &endpoint, config, &payload)?;
+        let output_text = match call_llm(&client, &endpoint, config, &payload) {
+            Ok(t) => t,
+            Err(e) => {
+                // A failed batch must not abort the run: earlier batches
+                // have already been written, and remaining ones are still
+                // worth processing. Record and continue (sources of this
+                // batch stay untouched).
+                tracing::warn!("consolidation batch failed: {e}");
+                result.batch_errors.push(e.to_string());
+                continue;
+            }
+        };
         result.batches_processed += 1;
 
         let parsed = parse_output(&output_text);
