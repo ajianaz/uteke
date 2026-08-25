@@ -11,6 +11,7 @@
 
 pub mod chunker;
 mod consolidate;
+pub mod consolidation_exec;
 pub mod consolidation_plan;
 pub mod dream;
 mod edges;
