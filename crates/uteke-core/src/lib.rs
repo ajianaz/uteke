@@ -11,6 +11,7 @@
 
 pub mod chunker;
 mod consolidate;
+pub mod consolidation_api;
 pub mod consolidation_exec;
 pub mod consolidation_plan;
 pub mod dream;
@@ -591,6 +592,47 @@ impl Uteke {
     /// Borrow lifecycle configuration (read-only).
     pub fn get_lifecycle_config(&self) -> &LifecycleConfig {
         &self.lifecycle_config
+    }
+
+    /// Embed an arbitrary text with the configured backend (lazy init).
+    /// Used by the consolidation executor to embed consolidated records
+    /// before writing them so they stay vector-searchable.
+    pub fn embed_text(&self, text: &str) -> Result<Vec<f32>, Error> {
+        self.ensure_embedder()?;
+        self.embedder
+            .lock()
+            .map_err(|_| Error::lock("embedder lock during embed_text"))?
+            .as_ref()
+            .expect("embedder ensured above")
+            .embed(text)
+    }
+
+    /// Add an already-persisted memory's embedding to the vector index.
+    /// Used by the consolidation write path so new records are searchable.
+    pub(crate) fn add_to_index(&self, id: &str, embedding: &[f32]) -> Result<(), Error> {
+        let mut index = self
+            .index
+            .write()
+            .map_err(|_| Error::lock("index write lock during consolidation insert"))?;
+        index.insert(id, embedding)?;
+        if let Err(e) = index.save() {
+            tracing::warn!("failed to persist vector index after insert id={id}: {e}");
+        }
+        Ok(())
+    }
+
+    /// Remove an entry from the vector index (compensating action for a
+    /// failed consolidation insert). Persistence failure is logged, not
+    /// fatal — the caller is already unwinding an error.
+    pub(crate) fn remove_from_index(&self, id: &str) {
+        let Ok(mut index) = self.index.write() else {
+            return;
+        };
+        if index.remove(id) {
+            if let Err(e) = index.save() {
+                tracing::warn!("failed to persist vector index after remove id={id}: {e}");
+            }
+        }
     }
 
     /// Open or create a Uteke memory store.

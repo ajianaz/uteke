@@ -331,6 +331,17 @@ Get room summary focused on document-type memories.
 
 **Request body**: JSON object (see handler source for fields)
 
+#### 🟡 `POST` `/room/consolidate`
+
+Plan or execute segment-level LLM consolidation of room memories (#1088).
+
+- Dry-run by default (`{"room_id": "..."}`) — returns plan + estimated LLM calls, zero API calls.
+- `{"room_id": "...", "apply": true, "max_calls": 20}` executes with a hard budget cap (default 10, hard cap 100; failed calls count).
+- Apply requires server-side extraction LLM config, otherwise **503**.
+- Write operation — blocked for read-only tokens.
+
+**Request body**: `{"room_id": string, "apply"?: boolean, "max_calls"?: number}`
+
 #### 🟢 `GET` `/room/list`
 
 List all rooms.
