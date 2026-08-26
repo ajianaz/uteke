@@ -140,6 +140,14 @@ Merge similar/duplicate memories automatically.
 
 **Request body**: [`ConsolidateRequest`](#consolidaterequest)
 
+#### 🟡 `POST` `/consolidate/pair`
+
+Consolidate a single caller-chosen duplicate pair: keep id_keep, deprecate (or hard-delete) id_remove.
+
+**Request body**: [`ConsolidatePairRequest`](#consolidatepairrequest)
+
+*Related: `1076`*
+
 #### 🟡 `POST` `/aging`
 
 Run aging cleanup — deprioritize or remove old/stale memories.

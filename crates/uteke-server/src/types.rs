@@ -635,6 +635,18 @@ fn default_consolidate_threshold() -> f32 {
     0.9
 }
 
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
+#[derive(Deserialize)]
+pub struct ConsolidatePairRequest {
+    /// Memory to keep untouched.
+    pub id_keep: String,
+    /// Memory to deprecate (or hard-delete when `hard` is true).
+    pub id_remove: String,
+    /// Hard-delete instead of soft-delete (deprecate). Default false.
+    #[serde(default)]
+    pub hard: bool,
+}
+
 /// Deserialize an `f32` from either a number or a JSON string.
 /// Some MCP layers (e.g. Hermes) serialize all parameters as strings,
 /// so accepting `"0.95"` in addition to `0.95` avoids 400 errors

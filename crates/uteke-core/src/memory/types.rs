@@ -716,6 +716,18 @@ pub struct ConsolidationResult {
     pub kept_ids: Vec<String>,
 }
 
+/// Result of a per-pair consolidation (#1076): the caller chose which
+/// duplicate survives instead of the keep-newer rule.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PairConsolidationResult {
+    /// ID of the surviving memory (untouched).
+    pub kept: String,
+    /// ID of the deprecated/deleted memory.
+    pub removed: String,
+    /// True when the loser was hard-deleted rather than deprecated.
+    pub hard: bool,
+}
+
 /// A pair of similar memories (potential duplicate).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimilarPair {

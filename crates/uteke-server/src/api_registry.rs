@@ -526,6 +526,15 @@ pub const ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         method: "POST",
+        path: "/consolidate/pair",
+        description: "Consolidate a single caller-chosen duplicate pair: keep id_keep, deprecate (or hard-delete) id_remove.",
+        request_type: Some("ConsolidatePairRequest"),
+        response_type: None,
+        excludes_deprecated: false,
+        issues: &["1076"],
+    },
+    Endpoint {
+        method: "POST",
         path: "/aging",
         description: "Run aging cleanup — deprioritize or remove old/stale memories.",
         request_type: Some("AgingRequest"),

@@ -2257,6 +2257,31 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
             Err(e) => ctx.error_response_for(req, 400, e),
         },
 
+        // Per-pair dedup control (#1076): caller picks the survivor.
+        (Method::Post, "/consolidate/pair") => {
+            match read_body::<ConsolidatePairRequest>(req.as_reader()) {
+                Ok(req_data) => {
+                    let result = uteke.consolidate_pair(
+                        &req_data.id_keep,
+                        &req_data.id_remove,
+                        req_data.hard,
+                    );
+                    match result {
+                        Ok(r) => ctx.ok_response_for(req, &r),
+                        Err(e) => {
+                            let status = if matches!(e, uteke_core::Error::Validation(_)) {
+                                400
+                            } else {
+                                500
+                            };
+                            ctx.error_response_for(req, status, e.to_string())
+                        }
+                    }
+                }
+                Err(e) => ctx.error_response_for(req, 400, e),
+            }
+        }
+
         // ── Aging (maintenance) ─────────────────────────────────────────
         (Method::Post, "/aging") => match read_body::<AgingRequest>(req.as_reader()) {
             Ok(req_data) => {
@@ -2521,5 +2546,24 @@ mod room_recall_at_tests {
         let req: RoomRecallRequest =
             serde_json::from_str(r#"{"room_id":"r1"}"#).expect("no-at body must parse");
         assert!(req.at.is_none());
+    }
+
+    /// #1076: ConsolidatePairRequest deserialization — happy path + defaults.
+    #[test]
+    fn consolidate_pair_request_parses() {
+        let req: ConsolidatePairRequest =
+            serde_json::from_str(r#"{"id_keep":"abc","id_remove":"def","hard":true}"#)
+                .expect("pair body must parse");
+        assert_eq!(req.id_keep, "abc");
+        assert_eq!(req.id_remove, "def");
+        assert!(req.hard);
+
+        // hard defaults to false
+        let req: ConsolidatePairRequest =
+            serde_json::from_str(r#"{"id_keep":"abc","id_remove":"def"}"#).unwrap();
+        assert!(!req.hard);
+
+        // missing id_remove → 400 at deserialize
+        assert!(serde_json::from_str::<ConsolidatePairRequest>(r#"{"id_keep":"abc"}"#).is_err());
     }
 }
