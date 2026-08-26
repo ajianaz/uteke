@@ -374,7 +374,13 @@ impl VectorIndex {
         }
 
         let key = self.next_key;
-        self.next_key = self.next_key.saturating_add(1);
+        #[cfg(feature = "vecq")]
+        // vecq rows are append-only and never removed — the physical row count
+        // is the authoritative next key. Deriving the key from `next_key`
+        // (key-mapping sidecar) instead would diverge from the physical rows
+        // if the sidecar were stale relative to the index file after a crash.
+        let key = self.index.len() as u64;
+        self.next_key = key.saturating_add(1);
 
         self.key_to_id.insert(key, id.to_string());
         self.id_to_key.insert(id.to_string(), key);
@@ -405,7 +411,8 @@ impl VectorIndex {
                     self.index.dim()
                 )));
             }
-            // vecq assigns rows sequentially; row == key by construction.
+            // vecq assigns rows sequentially; row == key by construction
+            // (key was derived from `index.len()` above).
             self.index.add(embedding);
         }
 
@@ -463,12 +470,13 @@ impl VectorIndex {
         // (1 - sim) so downstream scoring matches the usearch backend.
         #[cfg(feature = "vecq")]
         {
+            // Tombstoned rows (physically present in the index but absent
+            // from the key map) are filtered out below — over-fetch by the
+            // exact dead-row count so we still return up to `k` live results.
+            let dead = self.index.len().saturating_sub(self.key_to_id.len());
             let mut results: Vec<(String, f32)> = self
                 .index
-                .search(
-                    query,
-                    count + self.next_key.saturating_sub(self.key_to_id.len() as u64) as usize,
-                )
+                .search(query, count + dead)
                 .into_iter()
                 .filter_map(|(row, sim)| {
                     self.key_to_id
