@@ -2476,7 +2476,18 @@ mod room_recall_at_tests {
         let now = Utc::now();
         let mut dep = mem(-60);
         dep.deprecated = true;
+        dep.deprecated_at = Some(now - chrono::Duration::seconds(30)); // deprecated before pit
         assert!(!memory_exists_at(&dep, now));
+    }
+
+    #[test]
+    fn at_time_includes_deprecated_after_pit() {
+        // #1086: deprecated AFTER the pit — the memory existed then.
+        let now = Utc::now();
+        let mut dep = mem(-60);
+        dep.deprecated = true;
+        dep.deprecated_at = Some(now + chrono::Duration::seconds(30)); // deprecated after pit
+        assert!(memory_exists_at(&dep, now));
     }
 
     #[test]
