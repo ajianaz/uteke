@@ -2391,11 +2391,13 @@ fn memory_exists_at(
     }
     if memory.deprecated {
         // Deprecated before the point-in-time → did not exist then;
-        // deprecated after it → existed (#1086). NULL timestamps (legacy
-        // rows predating v17 backfill) are treated as deprecated-at-insert.
+        // deprecated after it → existed (#1086). Matches core semantics:
+        // NULL deprecated_at is treated as "deprecated after the pit"
+        // (the v17 migration backfills a timestamp onto every deprecated
+        // row, so NULL + deprecated should not occur in practice).
         let gone_by_then = match memory.deprecated_at {
             Some(dep_at) => dep_at <= pit,
-            None => true,
+            None => false,
         };
         if gone_by_then {
             return false;
