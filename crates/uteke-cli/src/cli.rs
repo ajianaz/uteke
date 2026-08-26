@@ -63,6 +63,10 @@ pub enum Commands {
         /// Entity identifier for structured metadata
         #[arg(long)]
         entity: Option<String>,
+        /// Who authored the memory: human or agent (#1084). Default: agent
+        /// (matches the schema default, #1083).
+        #[arg(long)]
+        author_type: Option<String>,
         /// Category classification
         #[arg(long)]
         category: Option<String>,

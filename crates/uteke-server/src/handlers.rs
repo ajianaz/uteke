@@ -228,7 +228,17 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                                 return ctx.error_response_for(req, 400, e.to_string());
                             }
                         }
-                        ctx.ok_response_for(req, &serde_json::json!({"id": id}))
+                        // Echo author_type so clients can confirm what was
+                        // recorded (#1106) — data was already stored correctly,
+                        // the response just omitted the field. Default mirrors
+                        // the schema default (author_type DEFAULT 'agent', #1083).
+                        ctx.ok_response_for(
+                            req,
+                            &serde_json::json!({
+                                "id": id,
+                                "author_type": req_data.author_type.clone().unwrap_or_else(|| "agent".to_string()),
+                            }),
+                        )
                     }
                     Err(e) => {
                         error!("Internal error: {e}");
