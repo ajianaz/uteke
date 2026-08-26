@@ -34,14 +34,18 @@ jobs:
           # exactly `<artifact>-v<semver>.<ext>` — no missing `v`, no double `v`.
           set -euo pipefail
           grep -oE 'uteke-[a-z0-9_-]+-__VER__\.(tar\.gz|zip)' scripts/release-notes-template.md \
-            | sed 's/__VER__/v0.0.0/' > rendered.txt
-          expected="uteke-aarch64-apple-darwin-v0.0.0.tar.gz
-          uteke-aarch64-unknown-linux-gnu-v0.0.0.tar.gz
-          uteke-x86_64-pc-windows-msvc-v0.0.0.zip
-          uteke-x86_64-unknown-linux-gnu-legacy-v0.0.0.tar.gz
-          uteke-x86_64-unknown-linux-gnu-v0.0.0.tar.gz"
-          sort_expected=$(printf '%s\n' "$expected" | sort)
-          if ! diff -u <(sort rendered.txt) <(printf '%s\n' "$sort_expected"); then
+            | sed 's/__VER__/v0.0.0/' | sort > rendered.txt
+          # Expected names mirror the release job's archive step:
+          #   tar czf "${{ matrix.artifact }}-${{ steps.version.outputs.VERSION }}.${{ matrix.ext }}"
+          # where VERSION keeps the tag's `v` (refs/tags/vX.Y.Z).
+          printf '%s\n' \
+            uteke-aarch64-apple-darwin-v0.0.0.tar.gz \
+            uteke-aarch64-unknown-linux-gnu-v0.0.0.tar.gz \
+            uteke-x86_64-pc-windows-msvc-v0.0.0.zip \
+            uteke-x86_64-unknown-linux-gnu-legacy-v0.0.0.tar.gz \
+            uteke-x86_64-unknown-linux-gnu-v0.0.0.tar.gz \
+            | sort > expected.txt
+          if ! diff -u expected.txt rendered.txt; then
             echo "::error::release-notes template renders asset names that do not match the release workflow artifact names (see diff above)"
             exit 1
           fi
