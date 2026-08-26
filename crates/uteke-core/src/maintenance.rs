@@ -123,11 +123,31 @@ impl crate::Uteke {
 
         // Load all from SQLite and rebuild index (NULL embeddings filtered in load_all)
         let all_memories = self.store.load_all(None)?;
-        let items: Vec<(String, Vec<f32>)> = all_memories
+        let mut items: Vec<(String, Vec<f32>)> = all_memories
             .iter()
             .filter(|m| !m.embedding.is_empty())
             .map(|m| (m.id.clone(), m.embedding.clone()))
             .collect();
+
+        // Document chunk vectors live in the index under "chunk:<id>" keys.
+        // load_all returns memories only — without this the rebuild silently
+        // evicts every chunk entry (#1110). Chunk embeddings are persisted in
+        // document_chunks, so no re-embedding is needed.
+        let chunk_count = {
+            let chunks = self.store.load_all_chunk_embeddings()?;
+            let n = chunks.len();
+            items.extend(chunks.into_iter().map(|(id, emb)| {
+                let key = format!("chunk:{id}");
+                (key, emb)
+            }));
+            n
+        };
+        if chunk_count > 0 {
+            tracing::info!(
+                chunks = chunk_count,
+                "including document chunks in index rebuild"
+            );
+        }
 
         {
             let mut index = self
@@ -631,5 +651,50 @@ mod tests {
         let json = serde_json::to_string(&result).unwrap();
         let restored: CleanupResult = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.deleted, 5);
+    }
+
+    #[test]
+    fn test_repair_preserves_doc_chunk_vectors() {
+        // Regression test for #1110: repair() rebuilt the index from
+        // load_all() (memories only), silently evicting every "chunk:<id>"
+        // vector. After repair, semantic doc search must still find chunks.
+        let dir = tempfile::tempdir().unwrap();
+        let uteke = crate::Uteke::open(dir.path().join("uteke.db")).unwrap();
+        let doc_id = uteke
+            .doc_upsert(
+                "repair-chunks-doc",
+                "Repair Chunks Doc",
+                "Chapter one introduces the architecture. Chapter two covers vector quantization theory in depth with mathematical foundations.",
+                &[],
+                None,
+            )
+            .unwrap();
+
+        // Sanity: semantic search finds the doc before repair.
+        let before = uteke
+            .doc_search("quantization theory mathematics", 5, "semantic")
+            .unwrap();
+        assert!(
+            !before.is_empty(),
+            "semantic doc search should find the doc pre-repair"
+        );
+
+        let report = uteke.repair().unwrap();
+        // Index must include memories (0 here) + doc chunks (>= 1).
+        assert!(
+            report.index_after >= 1,
+            "rebuild must include document chunk vectors, got index_after={}",
+            report.index_after
+        );
+
+        // After repair, the chunk vector must still be searchable.
+        let after = uteke
+            .doc_search("quantization theory mathematics", 5, "semantic")
+            .unwrap();
+        assert!(
+            !after.is_empty(),
+            "semantic doc search must still find doc {} after repair",
+            doc_id
+        );
     }
 }
