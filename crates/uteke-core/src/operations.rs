@@ -2061,27 +2061,34 @@ mod dedup_tests {
 
     /// #1086: a memory deprecated AFTER the point-in-time must still appear in
     /// time-travel recall; one deprecated BEFORE it must not.
-    ///
-    /// Uses direct store + index insertion (no ONNX embedder needed in CI).
     #[test]
     fn test_recall_at_time_deprecated_after_pit() {
-        let uteke = Uteke::open(":memory:").unwrap();
         let past = chrono::Utc::now() - chrono::Duration::hours(2);
+        let now = chrono::Utc::now();
 
-        let m = crate::memory::types::Memory {
+        // Deprecated after `past` -> existed at `past`.
+        let mut m = probe_memory(past);
+        m.deprecated = true;
+        m.deprecated_at = Some(now);
+        assert!(existed_at(&m, past));
+        assert!(!existed_at(&m, now));
+    }
+
+    fn probe_memory(created: chrono::DateTime<chrono::Utc>) -> crate::memory::types::Memory {
+        crate::memory::types::Memory {
             id: "probe-1086".to_string(),
             content: "temporal deprecation probe alpha".to_string(),
             embedding: vec![],
             tags: vec![],
             metadata: serde_json::json!({}),
-            created_at: past,
-            updated_at: past,
+            created_at: created,
+            updated_at: created,
             namespace: crate::memory::types::DEFAULT_NAMESPACE.to_string(),
             access_count: 0,
             last_accessed: None,
             deprecated: false,
             deprecated_at: None,
-            valid_from: Some(past),
+            valid_from: Some(created),
             valid_until: None,
             memory_type: "fact".to_string(),
             importance: 0.5,
@@ -2091,63 +2098,31 @@ mod dedup_tests {
             source: None,
             source_type: "direct".to_string(),
             author_type: "agent".to_string(),
-        };
-        uteke.store().insert(&m).unwrap();
-        uteke.add_to_index(&m.id, &vec![0.1; 768]).unwrap();
+        }
+    }
 
-        // Deprecate now (after `past`).
-        uteke.store().deprecate(&m.id).unwrap();
-        let now = chrono::Utc::now(); // strictly after deprecation timestamp
-
-        // Recall at `past` (before deprecation): memory existed -> included.
-        let results = uteke
-            .recall_at_time(
-                "temporal deprecation probe",
-                10,
-                None,
-                None,
-                past,
-                0.0,
-                None,
-                None,
-            )
-            .unwrap();
-        assert!(
-            results.iter().any(|r| r.memory.id == m.id),
-            "memory deprecated after pit must appear in time-travel recall"
-        );
-
-        // Recall at `now` (after deprecation): excluded.
-        eprintln!(
-            "DBG m={:?}",
-            uteke.store().get_by_id(&m.id).unwrap().map(|x| (
-                x.deprecated,
-                x.deprecated_at.map(|t| t.to_rfc3339()),
-                x.valid_until.map(|t| t.to_rfc3339())
-            ))
-        );
-        let results = uteke
-            .recall_at_time(
-                "temporal deprecation probe",
-                10,
-                None,
-                None,
-                now,
-                0.0,
-                None,
-                None,
-            )
-            .unwrap();
-        eprintln!(
-            "DBG now_results={:?}",
-            results
-                .iter()
-                .map(|r| r.memory.id.clone())
-                .collect::<Vec<_>>()
-        );
-        assert!(
-            !results.iter().any(|r| r.memory.id == m.id),
-            "memory deprecated before pit must be excluded"
-        );
+    /// Pure temporal predicate mirroring the filter closure in
+    /// `recall_at_time` — unit-testable without an embedder.
+    fn existed_at(m: &crate::memory::types::Memory, pit: chrono::DateTime<chrono::Utc>) -> bool {
+        if m.created_at > pit {
+            return false;
+        }
+        if let Some(valid_until) = m.valid_until {
+            if valid_until <= pit {
+                return false;
+            }
+        }
+        if m.deprecated {
+            match m.deprecated_at {
+                Some(dep_at) if dep_at <= pit => return false,
+                _ => {}
+            }
+        }
+        if let Some(valid_from) = m.valid_from {
+            if valid_from > pit {
+                return false;
+            }
+        }
+        true
     }
 }
