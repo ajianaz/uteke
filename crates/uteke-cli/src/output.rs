@@ -225,7 +225,10 @@ pub(crate) fn print_verify_human(report: &uteke_core::VerifyReport) {
     println!("Verify Report");
     println!("─────────────");
     println!("  SQLite DB:    {} memories", report.db_count);
-    println!("  usearch index: {} vectors", report.index_count);
+    if report.chunk_count > 0 {
+        println!("  Doc chunks:   {} chunks", report.chunk_count);
+    }
+    println!("  vector index: {} vectors", report.index_count);
     if report.consistent {
         println!("  ✓ Consistent");
     } else {
