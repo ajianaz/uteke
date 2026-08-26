@@ -21,6 +21,36 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-targets
 
+  release-notes-check:
+    name: Release Notes Template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Substituted names must match workflow asset names
+        run: |
+          # The release job archives "${{ matrix.artifact }}-${{ steps.version.outputs.VERSION }}"
+          # where VERSION keeps the tag's `v` (refs/tags/vX.Y.Z). The notes template
+          # substitutes __VER__ with that same value, so rendered names must be
+          # exactly `<artifact>-v<semver>.<ext>` — no missing `v`, no double `v`.
+          set -euo pipefail
+          grep -oE 'uteke-[a-z0-9_-]+-__VER__\.(tar\.gz|zip)' scripts/release-notes-template.md \
+            | sed 's/__VER__/v0.0.0/' > rendered.txt
+          expected="uteke-aarch64-apple-darwin-v0.0.0.tar.gz
+          uteke-aarch64-unknown-linux-gnu-v0.0.0.tar.gz
+          uteke-x86_64-pc-windows-msvc-v0.0.0.zip
+          uteke-x86_64-unknown-linux-gnu-legacy-v0.0.0.tar.gz
+          uteke-x86_64-unknown-linux-gnu-v0.0.0.tar.gz"
+          sort_expected=$(printf '%s\n' "$expected" | sort)
+          if ! diff -u <(sort rendered.txt) <(printf '%s\n' "$sort_expected"); then
+            echo "::error::release-notes template renders asset names that do not match the release workflow artifact names (see diff above)"
+            exit 1
+          fi
+          # Pinned-install line: __VER__ is substituted WITH the `v`-prefixed tag,
+          # so the template must carry the bare placeholder — UTEKE_VERSION=__VER__
+          # renders as UTEKE_VERSION=vX.Y.Z (install.sh builds asset URLs from this).
+          grep -qE 'UTEKE_VERSION=__VER__ ' scripts/release-notes-template.md \
+            || { echo "::error::pinned-install line must use UTEKE_VERSION=__VER__ (the v comes from the tag)"; exit 1; }
+
   fmt:
     name: Format
     runs-on: ubuntu-latest
