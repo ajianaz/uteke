@@ -373,17 +373,38 @@ impl VectorIndex {
             // search via the key map (key_to_id no longer contains old_key).
         }
 
-        let key = self.next_key;
         #[cfg(feature = "vecq")]
-        // vecq rows are append-only and never removed — the physical row count
-        // is the authoritative next key. Deriving the key from `next_key`
-        // (key-mapping sidecar) instead would diverge from the physical rows
-        // if the sidecar were stale relative to the index file after a crash.
-        let key = self.index.len() as u64;
-        self.next_key = key.saturating_add(1);
+        {
+            // vecq rows are append-only: the new entry lands at physical row
+            // `index.len()`, and search maps rows back via key_to_id — so the
+            // key MUST equal that row exactly (no gaps).
+            //
+            // Crash window: save() writes the index file and the `.keys`
+            // sidecar as two separate atomic writes. If the process dies after
+            // the sidecar but before the index, the reloaded sidecar can hold
+            // keys ≥ index.len() ("phantom" keys pointing at rows that were
+            // never written). Overwriting such a phantom key here is correct:
+            // its row never existed, so nothing live can be shadowed.
+            let key = self.index.len() as u64;
+            if let Some(phantom_id) = self.key_to_id.remove(&key) {
+                tracing::warn!(
+                    "overwriting phantom key {key} (id '{phantom_id}' had no row in the vecq index — likely a crash between sidecar and index writes)"
+                );
+                self.id_to_key.remove(&phantom_id);
+            }
+            self.next_key = key.saturating_add(1);
 
-        self.key_to_id.insert(key, id.to_string());
-        self.id_to_key.insert(id.to_string(), key);
+            self.key_to_id.insert(key, id.to_string());
+            self.id_to_key.insert(id.to_string(), key);
+        }
+        #[cfg(feature = "usearch")]
+        {
+            let key = self.next_key;
+            self.next_key = self.next_key.saturating_add(1);
+
+            self.key_to_id.insert(key, id.to_string());
+            self.id_to_key.insert(id.to_string(), key);
+        }
 
         #[cfg(feature = "usearch")]
         {
@@ -398,6 +419,7 @@ impl VectorIndex {
                 })?;
             }
 
+            let key = self.next_key.saturating_sub(1);
             self.index.add(key, embedding).map_err(|e| {
                 Error::embed_msg(format!("Failed to insert into usearch index: {e}"))
             })?;
