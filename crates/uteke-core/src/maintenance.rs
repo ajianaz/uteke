@@ -665,7 +665,7 @@ mod tests {
         assert_eq!(restored.deleted, 5);
     }
 
-    #[ignore = "requires ONNX embedder — validates repair() keeps doc chunk vectors indexed"]
+    #[ignore = "requires ONNX embedder — verify/doctor count chunk vectors alongside memories"]
     #[test]
     fn test_verify_counts_doc_chunks() {
         // Regression test for #1111: verify()/doctor() must count document
@@ -698,6 +698,7 @@ mod tests {
         );
     }
 
+    #[ignore = "requires ONNX embedder — validates repair() keeps doc chunk vectors indexed"]
     #[test]
     fn test_repair_preserves_doc_chunk_vectors() {
         // Regression test for #1110: repair() rebuilt the index from
