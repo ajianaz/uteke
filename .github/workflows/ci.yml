@@ -60,6 +60,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --workspace
 
+  vecq-check:
+    name: Check (vecq backend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Ensure the pure-Rust vecq vector backend (#1098) keeps compiling and
+      # passing its unit tests on every PR.
+      - run: cargo test -p uteke-core --no-default-features --features "onnx,vecq" --lib vector
+
   docs-check:
     name: API Docs Fresh
     runs-on: ubuntu-latest

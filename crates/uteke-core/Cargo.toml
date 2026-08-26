@@ -11,14 +11,22 @@ categories = ["science", "data-structures"]
 readme = "../../README.md"
 
 [features]
-default = ["onnx"]
+default = ["onnx", "usearch"]
 onnx = ["dep:ort", "dep:ndarray", "dep:tokenizers", "dep:sha2"]
+# Default vector search backend (HNSW, C++ FFI).
+usearch = ["dep:usearch"]
+# Alternative pure-Rust vector search backend (training-free 4-bit quantization).
+# Mutually exclusive with `usearch` — enabling both is a compile error
+# (see src/memory/vector.rs). Build with:
+#   cargo build -p uteke-core --no-default-features --features "onnx,vecq"
+vecq = ["dep:vecq-core"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
-usearch = "2"
+usearch = { version = "2", optional = true }
+vecq-core = { version = "0.1", optional = true }
 uuid = { version = "1", features = ["v4", "v7"] }
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 thiserror = "2"
