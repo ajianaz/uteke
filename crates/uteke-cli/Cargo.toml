@@ -13,8 +13,15 @@ categories = ["command-line-utilities", "development-tools"]
 name = "uteke"
 path = "src/main.rs"
 
+[features]
+default = ["usearch"]
+# Vector index backend forwarded to uteke-core. Exactly one must be enabled;
+# default is usearch (HNSW C++ FFI). vecq = pure-Rust 4-bit quantization (#1098).
+usearch = ["uteke-core/usearch"]
+vecq = ["uteke-core/vecq"]
+
 [dependencies]
-uteke-core = { path = "../uteke-core", version = "0.15.0", features = ["onnx"] }
+uteke-core = { path = "../uteke-core", version = "0.15.0", default-features = false, features = ["onnx"] }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
