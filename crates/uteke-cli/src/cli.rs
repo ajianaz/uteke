@@ -209,7 +209,8 @@ pub enum Commands {
         /// Delete ALL memories in namespace (requires --confirm)
         #[arg(long)]
         all: bool,
-        /// Confirm destructive operations
+        /// Confirm destructive operations (the non-interactive equivalent of
+        /// the y/N prompt; scripts and cron jobs must pass this)
         #[arg(long)]
         confirm: bool,
     },
