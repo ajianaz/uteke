@@ -348,13 +348,18 @@ mod tests {
         let _avx2 = has_avx2();
     }
 
+    /// env-var tests share the process-global ORT_LIB_PATH, so they run
+    /// sequentially INSIDE one #[test] — parallel #[test]s mutating the same
+    /// env var race each other (valid path overwritten by the invalid one
+    /// mid-resolve), which flaked CI nondeterministically.
     #[test]
-    fn resolve_ort_lib_prefers_env_var() {
-        // Create a temp file to use as fake ORT lib
+    fn resolve_ort_lib_env_var_override() {
+        // 1) Valid path → Ok, and the resolved path equals the override
         let tmp = std::env::temp_dir().join("test_ort_lib_resolve.so");
         std::fs::write(&tmp, b"fake").unwrap();
 
-        // SAFETY: set_var/remove_var in test code is safe — no concurrent access.
+        // SAFETY: single-threaded test section; no other test touches this var
+        // while we hold it (see note above on why these cases are merged).
         unsafe {
             std::env::set_var("ORT_LIB_PATH", &tmp);
         }
@@ -362,17 +367,13 @@ mod tests {
         unsafe {
             std::env::remove_var("ORT_LIB_PATH");
         }
-
-        // Cleanup
         std::fs::remove_file(&tmp).ok();
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().lib_path, tmp);
-    }
 
-    #[test]
-    fn resolve_ort_lib_errors_on_missing_env_var_path() {
-        // SAFETY: set_var/remove_var in test code is safe — no concurrent access.
+        // 2) Nonexistent path → Err mentioning the missing file
+        // SAFETY: same single-threaded section.
         unsafe {
             std::env::set_var("ORT_LIB_PATH", "/nonexistent/path/libonnxruntime.so");
         }
