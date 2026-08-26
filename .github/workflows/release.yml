@@ -431,7 +431,7 @@ jobs:
               # shell expansion: markdown backticks become command substitutions and
               # get EXECUTED (v0.14.3: installer curl|sh ran on the runner, then
               # uteke-serve blocked forever). Template file = zero expansion.
-              sed "s/__VER__/${VER#v}/g" scripts/release-notes-template.md
+              sed "s/__VER__/${VER}/g" scripts/release-notes-template.md
             } > release-notes.md
           fi
 
