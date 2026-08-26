@@ -404,10 +404,7 @@ impl VectorIndex {
 
             self.key_to_id.insert(key, id.to_string());
             self.id_to_key.insert(id.to_string(), key);
-        }
 
-        #[cfg(feature = "usearch")]
-        {
             // Auto-reserve if at capacity using geometric growth to amortize reallocation cost.
             // Growth strategy: max(current * 2, current + 4096, 1024).
             // Doubling amortizes to O(1) per insertion; +4096 floor avoids tiny allocs at small scale.
@@ -419,7 +416,6 @@ impl VectorIndex {
                 })?;
             }
 
-            let key = self.next_key.saturating_sub(1);
             self.index.add(key, embedding).map_err(|e| {
                 Error::embed_msg(format!("Failed to insert into usearch index: {e}"))
             })?;
