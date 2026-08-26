@@ -1,7 +1,17 @@
-//! Persistent vector index using usearch (HNSW with disk persistence).
+//! Persistent vector index with pluggable backends.
+//!
+//! Two mutually exclusive backends, selected at compile time via cargo features:
+//!
+//! - `usearch` (default): HNSW with disk persistence via C++ FFI.
+//! - `vecq`: training-free 4-bit vector quantization, pure Rust, no C++
+//!   toolchain (for mobile/FFI builds, #1098).
+//!
+//! The public API (`new`, `load_or_create`, `insert`, `remove`, `search`,
+//! `build`, `save`, `len`, `dims`, ...) is identical for both backends —
+//! callers never branch on the backend.
 //!
 //! Cross-process safety (#543): Each VectorIndex acquires an exclusive file
-//! lock (via fs2) on the .usearch file during construction. The lock is held
+//! lock (via fs2) on the index file during construction. The lock is held
 //! until the VectorIndex is dropped, serializing concurrent CLI invocations
 //! that share the same on-disk index. In-process thread safety uses
 //! RwLock<VectorIndex> in lib.rs.
@@ -11,44 +21,73 @@
 //! `fread`, `mmap`) which has Windows-specific issues (MAX_PATH, file lock
 //! conflicts, AV interference). Save serializes to memory then atomic-writes
 //! via Rust std::fs; load reads via Rust std::fs then deserializes from buffer.
+//!
+//! vecq format note: vecq has no incremental delete — removed rows are
+//! tombstoned (tracked via the `dead` bitmap) and filtered out of search
+//! results. Tombstones are derived from the key-mapping sidecar on load, so
+//! no extra on-disk state is needed.
+
+#[cfg(all(feature = "usearch", feature = "vecq"))]
+compile_error!(
+    "features `usearch` and `vecq` are mutually exclusive vector index backends; \
+     enable exactly one (default build uses `usearch`)"
+);
+#[cfg(not(any(feature = "usearch", feature = "vecq")))]
+compile_error!("uteke-core requires a vector index backend; enable `usearch` (default) or `vecq`");
 
 use crate::Error;
 use fs2::FileExt;
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use usearch::{Index, IndexOptions, MetricKind, ScalarKind};
 
-/// Extension for usearch index files.
-const USEARCH_EXT: &str = "usearch";
+#[cfg(feature = "usearch")]
+use usearch::{Index, IndexOptions, MetricKind, ScalarKind};
+#[cfg(feature = "vecq")]
+use vecq_core::VecqIndex;
+
+/// Extension for the on-disk index file.
+#[cfg(feature = "usearch")]
+pub const INDEX_EXT: &str = "usearch";
+/// Extension for the on-disk index file (vecq backend, #1098).
+#[cfg(feature = "vecq")]
+pub const INDEX_EXT: &str = "vecq";
 
 /// Default dimensions for EmbeddingGemma Q4 (768d).
 const DEFAULT_DIMS: usize = 768;
 
-/// Persistent vector index backed by usearch.
+/// Deterministic vecq seed. vecq results are bit-identical across platforms
+/// for a given seed + file; pinning the seed keeps rebuilds reproducible.
+#[cfg(feature = "vecq")]
+const VECQ_SEED: u64 = 0x7574_656b; // "utek"
+
+/// Persistent vector index.
 ///
 /// - **Startup**: loads from disk (~5ms), no rebuild needed
 /// - **Insert**: incremental, no rebuild
 /// - **Delete**: incremental, no rebuild
 /// - **Save**: persists to disk after mutations
 ///
-/// **Cross-process safety (#543):** An exclusive file lock on the `.usearch`
+/// **Cross-process safety (#543):** An exclusive file lock on the index
 /// file serializes concurrent access from separate CLI processes. The lock is
 /// held for the lifetime of the VectorIndex. In-process thread safety uses
 /// `RwLock` in `Uteke`.
 pub struct VectorIndex {
+    #[cfg(feature = "usearch")]
     index: Index,
+    #[cfg(feature = "vecq")]
+    index: VecqIndex,
     /// Maps integer key (u64) → memory UUID string.
     key_to_id: HashMap<u64, String>,
     /// Maps memory UUID → integer key.
     id_to_key: HashMap<String, u64>,
     /// Next available integer key.
     next_key: u64,
-    /// Path to the usearch index file.
+    /// Path to the index file.
     path: Option<PathBuf>,
     /// Whether the index has unsaved changes.
     dirty: bool,
-    /// Cross-process file lock on the .usearch file (#543).
+    /// Cross-process file lock on the index file (#543).
     /// Held until the VectorIndex is dropped.
     _lock_file: Option<File>,
 }
@@ -69,9 +108,9 @@ impl VectorIndex {
     }
 
     /// Load index from disk, or create empty if file doesn't exist.
-    /// `path` is the path to the `.usearch` file.
+    /// `path` is the path to the index file.
     ///
-    /// Acquires an **exclusive file lock** on the `.usearch` file to prevent
+    /// Acquires an **exclusive file lock** on the index file to prevent
     /// cross-process race conditions (e.g., `xargs -P5 uteke remember`).
     /// The lock is held until this `VectorIndex` is dropped (#543).
     ///
@@ -112,16 +151,21 @@ impl VectorIndex {
         use std::io::{Read, Seek, SeekFrom};
 
         file.seek(SeekFrom::Start(0))
-            .map_err(|e| Error::embed("seek usearch file", e))?;
+            .map_err(|e| Error::embed("seek index file", e))?;
 
         let mut buffer = Vec::new();
         file.read_to_end(&mut buffer)
-            .map_err(|e| Error::embed("read usearch file from locked handle", e))?;
+            .map_err(|e| Error::embed("read index file from locked handle", e))?;
 
+        #[cfg(feature = "usearch")]
         let index = Index::restore_from_buffer(&buffer)
             .map_err(|e| Error::embed("load vector index", e))?;
+        #[cfg(feature = "usearch")]
+        let _ = index.size();
 
-        let _size = index.size();
+        #[cfg(feature = "vecq")]
+        let index = VecqIndex::from_bytes(&buffer)
+            .map_err(|e| Error::embed("load vector index (vecq)", e))?;
 
         // Rebuild key mappings from the sidecar file
         let mut key_to_id = HashMap::new();
@@ -165,19 +209,19 @@ impl VectorIndex {
     /// Load an existing index from disk.
     ///
     /// Uses buffer-based deserialization (#684): reads the file into memory via
-    /// Rust's `std::fs::read()`, then deserializes via `restore_from_buffer()`.
-    /// This bypasses usearch's C++ `fopen("rb")` + `mmap()` which causes
-    /// "Permission denied" errors on Windows (#684).
+    /// Rust's `std::fs::read()`, then deserializes via the backend's
+    /// from-buffer API. This bypasses usearch's C++ `fopen("rb")` + `mmap()`
+    /// which causes "Permission denied" errors on Windows (#684).
     pub fn load(path: &Path) -> Result<Self, Error> {
-        let mut file = File::open(path).map_err(|e| Error::embed("open usearch file", e))?;
+        let mut file = File::open(path).map_err(|e| Error::embed("open index file", e))?;
         Self::load_from_file(&mut file, path)
     }
 
     /// Save index and key mappings to disk.
     ///
-    /// Uses buffer-based serialization (#647): serializes the usearch index
-    /// into an in-memory buffer via `save_to_buffer`, then writes the buffer
-    /// to disk using Rust's `std::fs` with atomic write (temp file + rename).
+    /// Uses buffer-based serialization (#647): serializes the index into an
+    /// in-memory buffer, then writes the buffer to disk using Rust's
+    /// `std::fs` with atomic write (temp file + rename).
     ///
     /// This bypasses usearch's C++ `fopen("wb")` file I/O which has known
     /// issues on Windows:
@@ -186,22 +230,27 @@ impl VectorIndex {
     /// - Windows Defender can intercept `fwrite` calls
     ///
     /// The in-memory buffer approach is safe because:
-    /// - The index data is already fully in RAM (usearch always loads fully)
-    /// - Buffer size = `serialized_length()`, same data as file-based save
+    /// - The index data is already fully in RAM (both backends load fully)
     /// - Atomic write prevents corruption on crash
     pub fn save(&mut self) -> Result<(), Error> {
         if let Some(ref path) = self.path {
             // Serialize index to in-memory buffer, bypassing C++ file I/O (#647)
-            let buf_len = self.index.serialized_length();
-            let mut buffer = vec![0u8; buf_len];
-            self.index
-                .save_to_buffer(&mut buffer)
-                .map_err(|e| Error::embed("save vector index to buffer", e))?;
+            #[cfg(feature = "usearch")]
+            let buffer: Vec<u8> = {
+                let buf_len = self.index.serialized_length();
+                let mut buffer = vec![0u8; buf_len];
+                self.index
+                    .save_to_buffer(&mut buffer)
+                    .map_err(|e| Error::embed("save vector index to buffer", e))?;
+                buffer
+            };
+            #[cfg(feature = "vecq")]
+            let buffer: Vec<u8> = self.index.to_bytes();
 
             // Write buffer to disk via atomic write (temp file + rename)
-            let tmp_path = path.with_extension(format!("{USEARCH_EXT}.tmp"));
+            let tmp_path = path.with_extension(format!("{INDEX_EXT}.tmp"));
             std::fs::write(&tmp_path, &buffer)
-                .map_err(|e| Error::embed("write temp usearch index", e))?;
+                .map_err(|e| Error::embed("write temp index file", e))?;
 
             // On Windows, `std::fs::rename` fails with `ERROR_ACCESS_DENIED` if
             // the destination file is locked by `LockFileEx` via fs2 (#926).
@@ -226,7 +275,7 @@ impl VectorIndex {
                             delay *= 2;
                         }
                         Err(e) => {
-                            return Err(Error::embed("rename temp to final usearch index", e));
+                            return Err(Error::embed("rename temp to final index file", e));
                         }
                     }
                 }
@@ -234,7 +283,7 @@ impl VectorIndex {
             #[cfg(not(windows))]
             {
                 std::fs::rename(&tmp_path, path)
-                    .map_err(|e| Error::embed("rename temp to final usearch index", e))?;
+                    .map_err(|e| Error::embed("rename temp to final index file", e))?;
             }
 
             // On Windows, reopen the file after rename to refresh the lock
@@ -248,11 +297,11 @@ impl VectorIndex {
                         .open(path)
                         .map_err(|e| {
                             Error::embed_msg(format!(
-                                "Failed to reopen usearch file after save rename: {e}"
+                                "Failed to reopen index file after save rename: {e}"
                             ))
                         })?;
                     fs2::FileExt::try_lock_exclusive(&new_file)
-                        .map_err(|e| Error::embed("re-lock usearch file after save", e))?;
+                        .map_err(|e| Error::embed("re-lock index file after save", e))?;
                     *lock_file = new_file;
                 }
             }
@@ -279,17 +328,11 @@ impl VectorIndex {
         } else {
             items[0].1.len()
         };
-        self.index = match Self::create_index(dims) {
-            Ok(idx) => idx,
-            Err(e) => {
-                return Err(e);
-            }
-        };
+        self.index = Self::create_index(dims)?;
         self.key_to_id.clear();
         self.id_to_key.clear();
         self.next_key = 0;
 
-        // Pre-reserve capacity for bulk insert
         if !items.is_empty() {
             // Validate all items have consistent dimensions
             for (id, emb) in items {
@@ -300,6 +343,7 @@ impl VectorIndex {
                     )));
                 }
             }
+            #[cfg(feature = "usearch")]
             if let Err(e) = self.index.reserve(items.len()) {
                 tracing::error!("Failed to reserve usearch capacity: {e}");
             }
@@ -313,39 +357,84 @@ impl VectorIndex {
 
     /// Insert a single item into the index.
     /// If the ID already exists, removes the old entry first to prevent duplicates.
-    /// Returns error if the underlying usearch operation fails.
+    /// Returns error if the underlying index operation fails.
     pub fn insert(&mut self, id: &str, embedding: &[f32]) -> Result<(), Error> {
+        // Validate dimensions up front, before any map mutation, so error
+        // paths leave the key maps consistent with the physical index.
+        #[cfg(feature = "vecq")]
+        if embedding.len() != self.index.dim() {
+            return Err(Error::validation(format!(
+                "embedding dimension mismatch: got {}, expected {}",
+                embedding.len(),
+                self.index.dim()
+            )));
+        }
+
         // Guard: remove old entry if ID already exists (prevents duplicate + stale slot)
         if let Some(old_key) = self.id_to_key.get(id) {
             let old_key = *old_key;
             self.key_to_id.remove(&old_key);
+            #[cfg(feature = "usearch")]
             self.index.remove(old_key).map_err(|e| {
                 Error::embed_msg(format!(
                     "Failed to remove old entry for duplicate ID {id}: {e}"
                 ))
             })?;
+            // vecq has no incremental delete — the dead row is filtered out of
+            // search via the key map (key_to_id no longer contains old_key).
         }
 
-        let key = self.next_key;
-        self.next_key = self.next_key.saturating_add(1);
+        #[cfg(feature = "vecq")]
+        {
+            // vecq rows are append-only: the new entry lands at physical row
+            // `index.len()`, and search maps rows back via key_to_id — so the
+            // key MUST equal that row exactly (no gaps).
+            //
+            // Crash window: save() writes the index file and the `.keys`
+            // sidecar as two separate atomic writes. If the process dies after
+            // the sidecar but before the index, the reloaded sidecar can hold
+            // keys ≥ index.len() ("phantom" keys pointing at rows that were
+            // never written). Overwriting such a phantom key here is correct:
+            // its row never existed, so nothing live can be shadowed.
+            let key = self.index.len() as u64;
+            if let Some(phantom_id) = self.key_to_id.remove(&key) {
+                tracing::warn!(
+                    "overwriting phantom key {key} (id '{phantom_id}' had no row in the vecq index — likely a crash between sidecar and index writes)"
+                );
+                self.id_to_key.remove(&phantom_id);
+            }
+            self.next_key = key.saturating_add(1);
 
-        self.key_to_id.insert(key, id.to_string());
-        self.id_to_key.insert(id.to_string(), key);
+            self.key_to_id.insert(key, id.to_string());
+            self.id_to_key.insert(id.to_string(), key);
+        }
+        #[cfg(feature = "usearch")]
+        {
+            let key = self.next_key;
+            self.next_key = self.next_key.saturating_add(1);
 
-        // Auto-reserve if at capacity using geometric growth to amortize reallocation cost.
-        // Growth strategy: max(current * 2, current + 4096, 1024).
-        // Doubling amortizes to O(1) per insertion; +4096 floor avoids tiny allocs at small scale.
-        if self.index.size() >= self.index.capacity() {
-            let current = self.index.capacity();
-            let new_cap = (current * 2).max(current + 4096).max(1024);
-            self.index.reserve(new_cap).map_err(|e| {
-                Error::embed_msg(format!("Failed to reserve usearch capacity: {e}"))
+            self.key_to_id.insert(key, id.to_string());
+            self.id_to_key.insert(id.to_string(), key);
+
+            // Auto-reserve if at capacity using geometric growth to amortize reallocation cost.
+            // Growth strategy: max(current * 2, current + 4096, 1024).
+            // Doubling amortizes to O(1) per insertion; +4096 floor avoids tiny allocs at small scale.
+            if self.index.size() >= self.index.capacity() {
+                let current = self.index.capacity();
+                let new_cap = (current * 2).max(current + 4096).max(1024);
+                self.index.reserve(new_cap).map_err(|e| {
+                    Error::embed_msg(format!("Failed to reserve usearch capacity: {e}"))
+                })?;
+            }
+
+            self.index.add(key, embedding).map_err(|e| {
+                Error::embed_msg(format!("Failed to insert into usearch index: {e}"))
             })?;
         }
-
-        self.index
-            .add(key, embedding)
-            .map_err(|e| Error::embed_msg(format!("Failed to insert into usearch index: {e}")))?;
+        // vecq assigns rows sequentially; row == key by construction
+        // (key was derived from `index.len()` above; dims validated up front).
+        #[cfg(feature = "vecq")]
+        self.index.add(embedding);
 
         self.dirty = true;
         Ok(())
@@ -355,9 +444,12 @@ impl VectorIndex {
     pub fn remove(&mut self, id: &str) -> bool {
         if let Some(key) = self.id_to_key.remove(id) {
             self.key_to_id.remove(&key);
+            #[cfg(feature = "usearch")]
             if let Err(e) = self.index.remove(key) {
                 tracing::error!("Failed to remove from usearch index: {e}");
             }
+            // vecq: tombstone is implicit — the key vanishes from the map, so
+            // search results referencing that row are filtered out below.
             self.dirty = true;
             true
         } else {
@@ -367,15 +459,16 @@ impl VectorIndex {
 
     /// Search for the k nearest neighbors of the query vector.
     /// Returns (memory_id, distance_f32) pairs, sorted by distance ascending.
-    /// Search for k nearest neighbors.
     /// Note: `ef` parameter is accepted for API compatibility but not passed to
     /// usearch v2.25.3 (Rust bindings don't expose `ef` in `search()`).
     pub fn search(&self, query: &[f32], k: usize, _ef: usize) -> Vec<(String, f32)> {
-        if self.index.size() == 0 {
+        if self.is_empty() {
             return Vec::new();
         }
 
         let count = k.max(1);
+
+        #[cfg(feature = "usearch")]
         let results = match self.index.search(query, count) {
             Ok(r) => r,
             Err(e) => {
@@ -383,25 +476,57 @@ impl VectorIndex {
                 return Vec::new();
             }
         };
-
-        results
+        #[cfg(feature = "usearch")]
+        return results
             .keys
             .iter()
             .zip(results.distances.iter())
             .filter_map(|(key, dist)| self.key_to_id.get(key).map(|id| (id.clone(), *dist)))
-            .collect()
+            .collect();
+
+        // vecq backend (#1098): brute-force top-k over quantized codes,
+        // returns (row, cosine similarity). Rows not present in key_to_id are
+        // tombstoned and filtered out. Convert similarity → cosine distance
+        // (1 - sim) so downstream scoring matches the usearch backend.
+        #[cfg(feature = "vecq")]
+        {
+            // Tombstoned rows (physically present in the index but absent
+            // from the key map) are filtered out below — over-fetch by the
+            // exact dead-row count so we still return up to `k` live results.
+            let dead = self.index.len().saturating_sub(self.key_to_id.len());
+            let mut results: Vec<(String, f32)> = self
+                .index
+                .search(query, count + dead)
+                .into_iter()
+                .filter_map(|(row, sim)| {
+                    self.key_to_id
+                        .get(&(row as u64))
+                        .map(|id| (id.clone(), 1.0 - sim))
+                })
+                .collect();
+            // Tombstones may shrink results below k; over-fetch above mitigates
+            // this. Cap at k and keep ascending-distance order.
+            results.truncate(count);
+            results
+        }
     }
 
-    /// Number of items in the index.
+    /// Number of live (non-tombstoned) items in the index.
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
-        self.index.size()
+        #[cfg(feature = "usearch")]
+        return self.key_to_id.len().max(self.index.size());
+        #[cfg(feature = "vecq")]
+        return self.key_to_id.len();
     }
 
-    /// Capacity of the underlying usearch index (diagnostics).
+    /// Capacity of the underlying index (diagnostics).
     #[allow(dead_code)]
     pub fn capacity(&self) -> usize {
-        self.index.capacity()
+        #[cfg(feature = "usearch")]
+        return self.index.capacity();
+        #[cfg(feature = "vecq")]
+        return self.index.len();
     }
 
     /// Embedding dimensionality of this index.
@@ -409,13 +534,16 @@ impl VectorIndex {
     /// Used by backend dispatch to detect dim mismatch when the user swaps
     /// embedding backends on an existing store (#337).
     pub fn dims(&self) -> usize {
-        self.index.dimensions()
+        #[cfg(feature = "usearch")]
+        return self.index.dimensions();
+        #[cfg(feature = "vecq")]
+        return self.index.dim();
     }
 
     /// Check if the index is empty.
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
-        self.index.size() == 0
+        self.len() == 0
     }
 
     /// Whether the index has unsaved changes.
@@ -423,6 +551,7 @@ impl VectorIndex {
         self.dirty
     }
 
+    #[cfg(feature = "usearch")]
     fn create_index(dims: usize) -> Result<Index, Error> {
         let options = IndexOptions {
             dimensions: dims,
@@ -437,6 +566,11 @@ impl VectorIndex {
             ))
         })
     }
+
+    #[cfg(feature = "vecq")]
+    fn create_index(dims: usize) -> Result<VecqIndex, Error> {
+        Ok(VecqIndex::new(dims, VECQ_SEED))
+    }
 }
 
 impl Default for VectorIndex {
@@ -446,14 +580,14 @@ impl Default for VectorIndex {
 }
 
 /// Convert cosine distance (0..2) to cosine similarity (0..1).
-/// usearch with MetricKind::Cos returns cosine *distance* (1 - similarity).
+/// Both backends return cosine *distance* (1 - similarity) from `search()`.
 pub fn cosine_distance_to_similarity(distance: f32) -> f32 {
-    // usearch cosine distance = 1 - cosine_similarity
+    // cosine distance = 1 - cosine_similarity
     let sim = 1.0 - distance;
     sim.clamp(0.0, 1.0)
 }
 
-/// Acquire an exclusive file lock on the usearch index file (#543).
+/// Acquire an exclusive file lock on the index file (#543).
 ///
 /// Retry loop with timeout: tries `try_lock_exclusive` every 200ms up to 30s,
 /// then fails with a helpful diagnostic. This prevents indefinite blocking
@@ -463,11 +597,11 @@ fn acquire_file_lock(path: &Path) -> Result<File, Error> {
         .read(true)
         .write(true)
         .open(path)
-        .map_err(|e| Error::embed_msg(format!("Failed to open usearch file for locking: {e}")))?;
+        .map_err(|e| Error::embed_msg(format!("Failed to open index file for locking: {e}")))?;
 
     // Fast path: try non-blocking lock first.
     if file.try_lock_exclusive().is_ok() {
-        tracing::debug!("usearch file lock acquired: {}", path.display());
+        tracing::debug!("index file lock acquired: {}", path.display());
         return Ok(file);
     }
 
@@ -477,7 +611,7 @@ fn acquire_file_lock(path: &Path) -> Result<File, Error> {
     // LockFileEx(LOCKFILE_EXCLUSIVE_LOCK) also blocks forever — the retry loop
     // with try_lock_exclusive gives us control over the timeout.
     tracing::debug!(
-        "usearch file lock busy on {}, retrying with timeout...",
+        "index file lock busy on {}, retrying with timeout...",
         path.display()
     );
 
@@ -492,7 +626,7 @@ fn acquire_file_lock(path: &Path) -> Result<File, Error> {
 
         if file.try_lock_exclusive().is_ok() {
             tracing::debug!(
-                "usearch file lock acquired (after {:?}): {}",
+                "index file lock acquired (after {:?}): {}",
                 waited,
                 path.display()
             );
@@ -509,7 +643,7 @@ fn acquire_file_lock(path: &Path) -> Result<File, Error> {
         }
 
         tracing::trace!(
-            "usearch file lock still busy after {:?}: {}",
+            "index file lock still busy after {:?}: {}",
             waited,
             path.display()
         );
@@ -594,7 +728,7 @@ mod tests {
     #[test]
     fn test_save_and_load() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("test.usearch");
+        let path = dir.path().join(format!("test.{INDEX_EXT}"));
 
         // Create and insert
         let mut idx = VectorIndex::new(64).unwrap();
@@ -618,7 +752,7 @@ mod tests {
         // Verify on-disk files are non-empty (#647 regression)
         assert!(
             path.metadata().unwrap().len() > 0,
-            ".usearch file must not be 0 bytes"
+            "index file must not be 0 bytes"
         );
         let keys_path = path.with_extension("keys");
         assert!(
@@ -640,7 +774,7 @@ mod tests {
     fn test_save_buffer_produces_valid_index() {
         // Round-trip test: save via buffer → load via buffer (#647, #684)
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("roundtrip.usearch");
+        let path = dir.path().join(format!("roundtrip.{INDEX_EXT}"));
 
         let mut idx = VectorIndex::new(32).unwrap();
         idx.path = Some(path.clone());
@@ -653,14 +787,26 @@ mod tests {
         idx.insert("round-1", &v).unwrap();
         idx.save().unwrap();
 
-        // Verify the saved file can be loaded by usearch's restore_from_buffer
+        // Verify the saved file is loadable by the backend's buffer API
         let buffer = std::fs::read(&path).unwrap();
-        let raw_index = usearch::Index::restore_from_buffer(&buffer);
-        assert!(
-            raw_index.is_ok(),
-            "Buffer-saved index must be loadable by usearch restore_from_buffer"
-        );
-        assert_eq!(raw_index.unwrap().size(), 1);
+        #[cfg(feature = "usearch")]
+        {
+            let raw_index = usearch::Index::restore_from_buffer(&buffer);
+            assert!(
+                raw_index.is_ok(),
+                "Buffer-saved index must be loadable by usearch restore_from_buffer"
+            );
+            assert_eq!(raw_index.unwrap().size(), 1);
+        }
+        #[cfg(feature = "vecq")]
+        {
+            let raw_index = VecqIndex::from_bytes(&buffer);
+            assert!(
+                raw_index.is_ok(),
+                "Buffer-saved index must be loadable by VecqIndex::from_bytes"
+            );
+            assert_eq!(raw_index.unwrap().len(), 1);
+        }
     }
 
     #[test]
@@ -681,5 +827,23 @@ mod tests {
         let results = idx.search(&query, 3, 50);
         assert!(!results.is_empty());
         assert_eq!(results[0].0, "item-0");
+    }
+
+    #[cfg(feature = "vecq")]
+    #[test]
+    fn test_vecq_tombstones_filter_removed_rows() {
+        // Removed IDs must never appear in search results (vecq has no
+        // incremental delete — rows are tombstoned via the key map, #1098).
+        let mut idx = VectorIndex::new(64).unwrap();
+        let v1 = make_vec(64, 0);
+        let v2 = make_vec(64, 1);
+
+        idx.insert("alive", &v1).unwrap();
+        idx.insert("dead", &v2).unwrap();
+        assert!(idx.remove("dead"));
+
+        let results = idx.search(&v2, 2, 50);
+        assert!(results.iter().all(|(id, _)| id != "dead"));
+        assert!(results.iter().any(|(id, _)| id == "alive"));
     }
 }
