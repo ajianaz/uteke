@@ -1539,33 +1539,7 @@ impl crate::Uteke {
 
             let mut results: Vec<SearchResult> = candidates
                 .into_iter()
-                .filter(|r| {
-                    // Memory must have existed at this time
-                    if r.memory.created_at > point_in_time {
-                        return false;
-                    }
-                    // Memory must not have been invalidated before this time
-                    if let Some(valid_until) = r.memory.valid_until {
-                        if valid_until <= point_in_time {
-                            return false;
-                        }
-                    }
-                    // Memory deprecated before the point-in-time did not exist
-                    // at that moment; one deprecated after it did (#1086).
-                    if r.memory.deprecated {
-                        match r.memory.deprecated_at {
-                            Some(dep_at) if dep_at <= point_in_time => return false,
-                            _ => {}
-                        }
-                    }
-                    // valid_from should be before point_in_time (if set)
-                    if let Some(valid_from) = r.memory.valid_from {
-                        if valid_from > point_in_time {
-                            return false;
-                        }
-                    }
-                    true
-                })
+                .filter(|r| memory_existed_at(&r.memory, point_in_time))
                 .collect();
 
             // Stop if we have enough results or exhausted retry budget.
@@ -1982,7 +1956,35 @@ mod recall_cache_parity_tests {
 
 #[cfg(test)]
 mod dedup_tests {
+    use super::memory_existed_at;
     use crate::Uteke;
+
+    fn probe_memory(created: chrono::DateTime<chrono::Utc>) -> crate::memory::types::Memory {
+        crate::memory::types::Memory {
+            id: "probe-1086".to_string(),
+            content: "temporal deprecation probe alpha".to_string(),
+            embedding: vec![],
+            tags: vec![],
+            metadata: serde_json::json!({}),
+            created_at: created,
+            updated_at: created,
+            namespace: crate::memory::types::DEFAULT_NAMESPACE.to_string(),
+            access_count: 0,
+            last_accessed: None,
+            deprecated: false,
+            deprecated_at: None,
+            valid_from: Some(created),
+            valid_until: None,
+            memory_type: "fact".to_string(),
+            importance: 0.5,
+            pinned: false,
+            content_type: "text".to_string(),
+            slug: None,
+            source: None,
+            source_type: "direct".to_string(),
+            author_type: "agent".to_string(),
+        }
+    }
 
     #[test]
     #[ignore = "requires ONNX embedder (model download) in CI"]
@@ -2070,59 +2072,36 @@ mod dedup_tests {
         let mut m = probe_memory(past);
         m.deprecated = true;
         m.deprecated_at = Some(now);
-        assert!(existed_at(&m, past));
-        assert!(!existed_at(&m, now));
+        assert!(memory_existed_at(&m, past));
+        assert!(!memory_existed_at(&m, now));
     }
+}
 
-    fn probe_memory(created: chrono::DateTime<chrono::Utc>) -> crate::memory::types::Memory {
-        crate::memory::types::Memory {
-            id: "probe-1086".to_string(),
-            content: "temporal deprecation probe alpha".to_string(),
-            embedding: vec![],
-            tags: vec![],
-            metadata: serde_json::json!({}),
-            created_at: created,
-            updated_at: created,
-            namespace: crate::memory::types::DEFAULT_NAMESPACE.to_string(),
-            access_count: 0,
-            last_accessed: None,
-            deprecated: false,
-            deprecated_at: None,
-            valid_from: Some(created),
-            valid_until: None,
-            memory_type: "fact".to_string(),
-            importance: 0.5,
-            pinned: false,
-            content_type: "text".to_string(),
-            slug: None,
-            source: None,
-            source_type: "direct".to_string(),
-            author_type: "agent".to_string(),
-        }
+/// Temporal predicate shared by `recall_at_time` (core) and
+/// `memory_exists_at` (server): did this memory exist at `pit`?
+/// Deprecated-before-pit excludes; deprecated-after-pit includes (#1086).
+pub fn memory_existed_at(
+    m: &crate::memory::types::Memory,
+    pit: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if m.created_at > pit {
+        return false;
     }
-
-    /// Pure temporal predicate mirroring the filter closure in
-    /// `recall_at_time` — unit-testable without an embedder.
-    fn existed_at(m: &crate::memory::types::Memory, pit: chrono::DateTime<chrono::Utc>) -> bool {
-        if m.created_at > pit {
+    if let Some(valid_until) = m.valid_until {
+        if valid_until <= pit {
             return false;
         }
-        if let Some(valid_until) = m.valid_until {
-            if valid_until <= pit {
-                return false;
-            }
-        }
-        if m.deprecated {
-            match m.deprecated_at {
-                Some(dep_at) if dep_at <= pit => return false,
-                _ => {}
-            }
-        }
-        if let Some(valid_from) = m.valid_from {
-            if valid_from > pit {
-                return false;
-            }
-        }
-        true
     }
+    if m.deprecated {
+        match m.deprecated_at {
+            Some(dep_at) if dep_at <= pit => return false,
+            _ => {}
+        }
+    }
+    if let Some(valid_from) = m.valid_from {
+        if valid_from > pit {
+            return false;
+        }
+    }
+    true
 }
