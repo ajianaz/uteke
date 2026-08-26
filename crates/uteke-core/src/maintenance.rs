@@ -176,6 +176,7 @@ impl crate::Uteke {
             db_count: before_db,
             index_before: before_index,
             index_after: items.len(),
+            chunk_count,
         })
     }
 

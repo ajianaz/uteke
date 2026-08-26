@@ -51,6 +51,10 @@ pub struct RepairReport {
     pub index_before: usize,
     /// Index count after repair.
     pub index_after: usize,
+    /// Document chunks included in the rebuilt index (#1110).
+    /// Defaults to 0 when deserializing reports from older binaries.
+    #[serde(default)]
+    pub chunk_count: usize,
 }
 
 /// Result of `uteke repair --reembed`.
@@ -110,9 +114,11 @@ mod tests {
             db_count: 10,
             index_before: 5,
             index_after: 10,
+            chunk_count: 2,
         };
         let json = serde_json::to_string(&report).unwrap();
         let restored: RepairReport = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.index_after, 10);
+        assert_eq!(restored.chunk_count, 2);
     }
 }
