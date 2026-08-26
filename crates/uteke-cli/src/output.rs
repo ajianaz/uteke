@@ -243,7 +243,7 @@ pub(crate) fn print_repair_human(report: &uteke_core::RepairReport) {
     println!("  SQLite DB:     {} memories", report.db_count);
     println!("  Index before:  {} vectors", report.index_before);
     println!("  Index after:   {} vectors", report.index_after);
-    if report.index_after == report.db_count {
+    if report.index_after == report.db_count + report.chunk_count {
         println!("  ✓ Index rebuilt successfully");
     } else {
         println!("  ⚠ Index count still differs from DB");
