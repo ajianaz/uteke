@@ -28,3 +28,7 @@ mutants*.out/
 mutants*.out.old/
 
 # VitePress build artifacts (keep config.ts, not lock files)
+
+# embedder cache artifact from local test runs
+crates/uteke-core/embed_cache.db
+embed_cache.db
