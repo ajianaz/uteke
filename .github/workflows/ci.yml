@@ -104,6 +104,9 @@ jobs:
       # Ensure the pure-Rust vecq vector backend (#1098) keeps compiling and
       # passing its unit tests on every PR.
       - run: cargo test -p uteke-core --no-default-features --features "onnx,vecq" --lib vector
+      # …and that it still builds into the shippable binaries (#1109). Testing
+      # only --lib let feature-unification break packaging silently.
+      - run: cargo build -p uteke-cli -p uteke-server -p uteke-mcp --no-default-features --features vecq
 
   docs-check:
     name: API Docs Fresh
