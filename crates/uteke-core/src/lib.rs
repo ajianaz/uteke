@@ -713,10 +713,20 @@ impl Uteke {
         embedding_settings: EmbeddingSettings,
         graph_rerank_config: graph_rerank::GraphRerankConfig,
     ) -> Result<Self, Error> {
-        // Determine index path: same directory as SQLite DB
-        let index_path = store.path().map(|p| {
-            let dir = p.parent().unwrap_or(Path::new("."));
-            dir.join("uteke_index.usearch")
+        // Determine index path: same directory as SQLite DB.
+        // `:memory:` databases get an EPHEMERAL in-memory index instead:
+        // persisting to `./uteke_index.usearch` in the CWD would make every
+        // concurrent in-memory instance (e.g. parallel #[test]s) share and
+        // corrupt one index file (sidecar keys vs usearch keys race →
+        // "Duplicate keys not allowed" flakes).
+        let index_path = store.path().and_then(|p| {
+            // rusqlite reports "" (empty) for in-memory DBs, not ":memory:"
+            if matches!(p.to_str(), Some(":memory:") | Some("")) {
+                None
+            } else {
+                let dir = p.parent().unwrap_or(Path::new("."));
+                Some(dir.join("uteke_index.usearch"))
+            }
         });
 
         // Use dims from the provided embedder if available.
@@ -795,9 +805,15 @@ impl Uteke {
 
         // Resolve embedding cache path: same directory as the main DB.
         // `embed_cache.db` avoids ONNX model load for repeated queries (#896).
-        let embed_cache_path = store.path().map(|p| {
-            let dir = p.parent().unwrap_or(Path::new("."));
-            dir.join("embed_cache.db")
+        let embed_cache_path = store.path().and_then(|p| {
+            // In-memory DBs are ephemeral — no cache file beside them
+            // (prevents a stray ./embed_cache.db in the CWD, see #1101).
+            if matches!(p.to_str(), Some(":memory:") | Some("")) {
+                None
+            } else {
+                let dir = p.parent().unwrap_or(Path::new("."));
+                Some(dir.join("embed_cache.db"))
+            }
         });
 
         Ok(Self {
