@@ -155,7 +155,7 @@ impl super::Store {
         let now = chrono::Utc::now().to_rfc3339();
         self.conn
             .execute(
-                "UPDATE memories SET deprecated = 1, valid_until = ?1, updated_at = ?1 WHERE id = ?2",
+                "UPDATE memories SET deprecated = 1, valid_until = ?1, updated_at = ?1, deprecated_at = ?1 WHERE id = ?2",
                 params![now, id],
             )
             .map_err(|e| Error::db("database operation", e))?;
@@ -171,7 +171,7 @@ impl super::Store {
         let rows = self
             .conn
             .execute(
-                "UPDATE memories SET deprecated = 1, valid_until = ?1, deprecate_reason = ?2, updated_at = ?1 WHERE id = ?3 AND deprecated = 0",
+                "UPDATE memories SET deprecated = 1, valid_until = ?1, deprecate_reason = ?2, updated_at = ?1, deprecated_at = ?1 WHERE id = ?3 AND deprecated = 0",
                 params![now, reason, id],
             )
             .map_err(|e| Error::db("database operation", e))?;
@@ -208,7 +208,7 @@ impl super::Store {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "UPDATE memories SET deprecated = 1, valid_until = ?1, deprecate_reason = ?2, updated_at = ?1 WHERE id IN ({placeholders}) AND deprecated = 0"
+            "UPDATE memories SET deprecated = 1, valid_until = ?1, deprecate_reason = ?2, updated_at = ?1, deprecated_at = ?1 WHERE id IN ({placeholders}) AND deprecated = 0"
         );
         let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
             vec![Box::new(now), Box::new(reason.to_string())];
@@ -233,7 +233,7 @@ impl super::Store {
         let rows = self
             .conn
             .execute(
-                "UPDATE memories SET deprecated = 0, valid_until = NULL, deprecate_reason = NULL, updated_at = ?1 WHERE id = ?2 AND deprecated = 1",
+                "UPDATE memories SET deprecated = 0, valid_until = NULL, deprecate_reason = NULL, deprecated_at = NULL, updated_at = ?1 WHERE id = ?2 AND deprecated = 1",
                 params![now, id],
             )
             .map_err(|e| Error::db("database operation", e))?;

@@ -416,6 +416,8 @@ impl super::Store {
                 15 => self.migrate_v14_to_v15()?,
                 // v16: author_type column (human|agent) (#1083)
                 16 => self.migrate_v15_to_v16()?,
+                // v17: deprecated_at column — time-travel deprecation predicate (#1086)
+                17 => self.migrate_v16_to_v17()?,
                 _ => {
                     // No-op for future versions.
                 }
@@ -1088,6 +1090,43 @@ impl super::Store {
             .map_err(|e| Error::db("create idx_memories_author_type", e))?;
 
         tracing::info!("Migration v15 to v16 complete: author_type column added");
+        Ok(())
+    }
+
+    /// Schema v17 (#1086): add `deprecated_at` so time-travel recall can
+    /// distinguish "deprecated before the point-in-time" from "deprecated
+    /// after it".
+    ///
+    /// - Adds the column (no default; NULL = unknown).
+    /// - Backfills legacy deprecated rows with `updated_at` as the best
+    ///   available estimate of when the deprecation happened.
+    /// - Active rows keep NULL.
+    fn migrate_v16_to_v17(&self) -> Result<(), Error> {
+        tracing::info!("Applying schema migration v16 to v17: deprecated_at column (#1086)");
+
+        if !self.column_exists("deprecated_at") {
+            self.conn
+                .execute_batch("ALTER TABLE memories ADD COLUMN deprecated_at TEXT;")
+                .map_err(|e| Error::db("schema migration v16 to v17", e))?;
+        }
+        // Backfill: legacy deprecated rows have no timestamp; `updated_at` is
+        // the closest estimate (deprecate paths always bump updated_at).
+        let backfilled = self
+            .conn
+            .execute(
+                "UPDATE memories SET deprecated_at = updated_at \
+                 WHERE deprecated = 1 AND deprecated_at IS NULL",
+                [],
+            )
+            .map_err(|e| Error::db("backfill deprecated_at", e))?;
+        if backfilled > 0 {
+            tracing::info!(
+                count = backfilled,
+                "Backfilled deprecated_at from updated_at"
+            );
+        }
+
+        tracing::info!("Migration v16 to v17 complete: deprecated_at column added");
         Ok(())
     }
 }

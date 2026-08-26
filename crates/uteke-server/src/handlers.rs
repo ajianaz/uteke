@@ -2390,7 +2390,16 @@ fn memory_exists_at(
         }
     }
     if memory.deprecated {
-        return false;
+        // Deprecated before the point-in-time → did not exist then;
+        // deprecated after it → existed (#1086). NULL timestamps (legacy
+        // rows predating v17 backfill) are treated as deprecated-at-insert.
+        let gone_by_then = match memory.deprecated_at {
+            Some(dep_at) => dep_at <= pit,
+            None => true,
+        };
+        if gone_by_then {
+            return false;
+        }
     }
     if let Some(valid_from) = memory.valid_from {
         if valid_from > pit {
@@ -2430,6 +2439,7 @@ mod room_recall_at_tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".into(),

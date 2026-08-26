@@ -292,6 +292,7 @@ impl crate::Uteke {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: Some(now),
             valid_until: None,
             memory_type: memory_type.to_string(),
@@ -386,6 +387,32 @@ impl crate::Uteke {
         entity_filter: Option<&str>,
         category_filter: Option<&str>,
     ) -> Result<Vec<SearchResult>, Error> {
+        self.recall_inner(
+            query,
+            limit,
+            tags_filter,
+            namespace,
+            min_score,
+            entity_filter,
+            category_filter,
+            false,
+        )
+    }
+
+    /// Same as `recall` but optionally keeps deprecated memories so temporal
+    /// filters (#1086) can decide their fate based on `deprecated_at`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn recall_inner(
+        &self,
+        query: &str,
+        limit: usize,
+        tags_filter: Option<&[&str]>,
+        namespace: Option<&str>,
+        min_score: f32,
+        entity_filter: Option<&str>,
+        category_filter: Option<&str>,
+        include_deprecated: bool,
+    ) -> Result<Vec<SearchResult>, Error> {
         // Embed query outside any lock — CPU-intensive (~50ms), no shared state needed.
         // Only the embedder Mutex is held here, allowing concurrent index reads.
         // Lazy-load embedder on first use.
@@ -475,8 +502,9 @@ impl crate::Uteke {
                     }
                 }
 
-                // Filter deprecated memories (#748)
-                if memory.deprecated {
+                // Filter deprecated memories (#748) — unless the caller
+                // needs them for point-in-time filtering (#1086).
+                if memory.deprecated && !include_deprecated {
                     continue;
                 }
 
@@ -1497,7 +1525,7 @@ impl crate::Uteke {
 
         loop {
             let fetch_limit = (limit * multiplier).max(50);
-            let candidates = self.recall(
+            let candidates = self.recall_inner(
                 query,
                 fetch_limit,
                 tags_filter,
@@ -1505,6 +1533,7 @@ impl crate::Uteke {
                 min_score,
                 entity_filter,
                 category_filter,
+                true,
             )?;
             let candidates_len = candidates.len();
 
@@ -1521,9 +1550,13 @@ impl crate::Uteke {
                             return false;
                         }
                     }
-                    // Memory should not be deprecated
+                    // Memory deprecated before the point-in-time did not exist
+                    // at that moment; one deprecated after it did (#1086).
                     if r.memory.deprecated {
-                        return false;
+                        match r.memory.deprecated_at {
+                            Some(dep_at) if dep_at <= point_in_time => return false,
+                            _ => {}
+                        }
                     }
                     // valid_from should be before point_in_time (if set)
                     if let Some(valid_from) = r.memory.valid_from {
@@ -2024,5 +2057,97 @@ mod dedup_tests {
             .expect("metadata should be object");
         assert_eq!(obj.get("entity").unwrap(), "test-app");
         assert_eq!(obj.get("category").unwrap(), "integration");
+    }
+
+    /// #1086: a memory deprecated AFTER the point-in-time must still appear in
+    /// time-travel recall; one deprecated BEFORE it must not.
+    ///
+    /// Uses direct store + index insertion (no ONNX embedder needed in CI).
+    #[test]
+    fn test_recall_at_time_deprecated_after_pit() {
+        let uteke = Uteke::open(":memory:").unwrap();
+        let past = chrono::Utc::now() - chrono::Duration::hours(2);
+
+        let m = crate::memory::types::Memory {
+            id: "probe-1086".to_string(),
+            content: "temporal deprecation probe alpha".to_string(),
+            embedding: vec![],
+            tags: vec![],
+            metadata: serde_json::json!({}),
+            created_at: past,
+            updated_at: past,
+            namespace: crate::memory::types::DEFAULT_NAMESPACE.to_string(),
+            access_count: 0,
+            last_accessed: None,
+            deprecated: false,
+            deprecated_at: None,
+            valid_from: Some(past),
+            valid_until: None,
+            memory_type: "fact".to_string(),
+            importance: 0.5,
+            pinned: false,
+            content_type: "text".to_string(),
+            slug: None,
+            source: None,
+            source_type: "direct".to_string(),
+            author_type: "agent".to_string(),
+        };
+        uteke.store().insert(&m).unwrap();
+        uteke.add_to_index(&m.id, &vec![0.1; 768]).unwrap();
+
+        // Deprecate now (after `past`).
+        uteke.store().deprecate(&m.id).unwrap();
+        let now = chrono::Utc::now(); // strictly after deprecation timestamp
+
+        // Recall at `past` (before deprecation): memory existed -> included.
+        let results = uteke
+            .recall_at_time(
+                "temporal deprecation probe",
+                10,
+                None,
+                None,
+                past,
+                0.0,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(
+            results.iter().any(|r| r.memory.id == m.id),
+            "memory deprecated after pit must appear in time-travel recall"
+        );
+
+        // Recall at `now` (after deprecation): excluded.
+        eprintln!(
+            "DBG m={:?}",
+            uteke.store().get_by_id(&m.id).unwrap().map(|x| (
+                x.deprecated,
+                x.deprecated_at.map(|t| t.to_rfc3339()),
+                x.valid_until.map(|t| t.to_rfc3339())
+            ))
+        );
+        let results = uteke
+            .recall_at_time(
+                "temporal deprecation probe",
+                10,
+                None,
+                None,
+                now,
+                0.0,
+                None,
+                None,
+            )
+            .unwrap();
+        eprintln!(
+            "DBG now_results={:?}",
+            results
+                .iter()
+                .map(|r| r.memory.id.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !results.iter().any(|r| r.memory.id == m.id),
+            "memory deprecated before pit must be excluded"
+        );
     }
 }
