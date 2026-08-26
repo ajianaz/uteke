@@ -359,6 +359,17 @@ impl VectorIndex {
     /// If the ID already exists, removes the old entry first to prevent duplicates.
     /// Returns error if the underlying index operation fails.
     pub fn insert(&mut self, id: &str, embedding: &[f32]) -> Result<(), Error> {
+        // Validate dimensions up front, before any map mutation, so error
+        // paths leave the key maps consistent with the physical index.
+        #[cfg(feature = "vecq")]
+        if embedding.len() != self.index.dim() {
+            return Err(Error::validation(format!(
+                "embedding dimension mismatch: got {}, expected {}",
+                embedding.len(),
+                self.index.dim()
+            )));
+        }
+
         // Guard: remove old entry if ID already exists (prevents duplicate + stale slot)
         if let Some(old_key) = self.id_to_key.get(id) {
             let old_key = *old_key;
@@ -420,19 +431,10 @@ impl VectorIndex {
                 Error::embed_msg(format!("Failed to insert into usearch index: {e}"))
             })?;
         }
+        // vecq assigns rows sequentially; row == key by construction
+        // (key was derived from `index.len()` above; dims validated up front).
         #[cfg(feature = "vecq")]
-        {
-            if embedding.len() != self.index.dim() {
-                return Err(Error::validation(format!(
-                    "embedding dimension mismatch: got {}, expected {}",
-                    embedding.len(),
-                    self.index.dim()
-                )));
-            }
-            // vecq assigns rows sequentially; row == key by construction
-            // (key was derived from `index.len()` above).
-            self.index.add(embedding);
-        }
+        self.index.add(embedding);
 
         self.dirty = true;
         Ok(())
