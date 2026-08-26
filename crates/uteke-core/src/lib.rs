@@ -2408,6 +2408,7 @@ fn resolve_db_path(db_path: &Path) -> Result<String, Error> {
 
 #[cfg(test)]
 mod tests {
+    #[ignore = "requires ONNX embedder — index file extension follows active backend"]
     #[test]
     fn index_file_uses_backend_extension() {
         // #1112: the index filename must follow the active backend, so
