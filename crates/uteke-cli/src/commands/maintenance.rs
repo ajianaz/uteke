@@ -42,7 +42,10 @@ pub(crate) fn run_repair(
         // Same resolution order as main (#1105): --store > UTEKE_HOME > config.
         let store_dir = crate::resolve_store_path(cli, config);
 
-        let index_path = std::path::PathBuf::from(&store_dir).join("uteke_index.usearch");
+        let index_path = std::path::PathBuf::from(&store_dir).join(format!(
+            "uteke_index.{}",
+            uteke_core::memory::vector::INDEX_EXT
+        ));
         let keys_path = std::path::PathBuf::from(&store_dir).join("uteke_index.keys");
 
         // Delete both index files so the store opens cleanly.

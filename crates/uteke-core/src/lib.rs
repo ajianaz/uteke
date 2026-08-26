@@ -725,7 +725,11 @@ impl Uteke {
                 None
             } else {
                 let dir = p.parent().unwrap_or(Path::new("."));
-                Some(dir.join("uteke_index.usearch"))
+                // Backend-specific extension (#1112): a vecq build reads/writes
+                // `uteke_index.vecq`, a usearch build `uteke_index.usearch`.
+                // Cross-backend opens no longer parse (and re-save over) the
+                // other format's file.
+                Some(dir.join(format!("uteke_index.{}", crate::memory::vector::INDEX_EXT)))
             }
         });
 
@@ -2404,6 +2408,25 @@ fn resolve_db_path(db_path: &Path) -> Result<String, Error> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn index_file_uses_backend_extension() {
+        // #1112: the index filename must follow the active backend, so
+        // vecq builds write `uteke_index.vecq` and never clobber a
+        // usearch-written `uteke_index.usearch` (and vice versa).
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("uteke.db");
+        let uteke = crate::Uteke::open(&db).unwrap();
+        uteke.remember("backend ext test", &[], None, None).unwrap();
+        uteke.shutdown().unwrap();
+        let expected = dir
+            .path()
+            .join(format!("uteke_index.{}", crate::memory::vector::INDEX_EXT));
+        assert!(
+            expected.exists(),
+            "expected index file {expected:?} to exist after shutdown"
+        );
+    }
+
     use super::*;
     use serial_test::serial;
 

@@ -28,14 +28,14 @@ impl crate::Uteke {
             detail: format!("{} memories, {}", db_count, format_bytes(db_size)),
         });
 
-        // 2. usearch index
+        // 2. vector index (backend-aware label, #1112)
         let index = self
             .index
             .read()
             .map_err(|_| Error::lock("index read lock during doctor"))?;
         let index_count = index.len();
         checks.push(DoctorCheck {
-            name: "usearch index".to_string(),
+            name: format!("{} index", crate::memory::vector::INDEX_EXT),
             status: DoctorStatus::Ok,
             detail: format!("{} vectors", index_count),
         });
