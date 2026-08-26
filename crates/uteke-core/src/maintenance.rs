@@ -653,6 +653,7 @@ mod tests {
         assert_eq!(restored.deleted, 5);
     }
 
+    #[ignore = "requires ONNX embedder — validates repair() keeps doc chunk vectors indexed"]
     #[test]
     fn test_repair_preserves_doc_chunk_vectors() {
         // Regression test for #1110: repair() rebuilt the index from
