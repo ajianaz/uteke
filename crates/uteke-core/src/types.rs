@@ -33,9 +33,12 @@ pub struct DoctorReport {
 pub struct VerifyReport {
     /// Count of memories in SQLite.
     pub db_count: usize,
+    /// Count of document chunks in SQLite (chunk vectors share the index).
+    #[serde(default)]
+    pub chunk_count: usize,
     /// Count of vectors in usearch index.
     pub index_count: usize,
-    /// Whether they match.
+    /// Whether they match (db_count + chunk_count == index_count).
     pub consistent: bool,
 }
 
@@ -92,6 +95,7 @@ mod tests {
     fn test_verify_report_serialization() {
         let report = VerifyReport {
             db_count: 10,
+            chunk_count: 0,
             index_count: 10,
             consistent: true,
         };

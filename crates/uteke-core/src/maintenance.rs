@@ -41,19 +41,27 @@ impl crate::Uteke {
         });
 
         // 3. Index consistency
-        if db_count == index_count {
+        // The vector index holds memories AND document chunk vectors
+        // ("chunk:<id>" keys) — compare index.len() against both counts so
+        // stores with documents don't report a false MISMATCH (#1111).
+        let chunk_count = self.store.load_all_chunk_embeddings()?.len();
+        let expected = db_count + chunk_count;
+        if expected == index_count {
             checks.push(DoctorCheck {
                 name: "Index consistency".to_string(),
                 status: DoctorStatus::Ok,
-                detail: format!("DB={} Index={}", db_count, index_count),
+                detail: format!(
+                    "DB={} (+{} chunks) Index={}",
+                    db_count, chunk_count, index_count
+                ),
             });
         } else {
             checks.push(DoctorCheck {
                 name: "Index consistency".to_string(),
                 status: DoctorStatus::Error,
                 detail: format!(
-                    "MISMATCH: DB={} Index={} — run `uteke repair`",
-                    db_count, index_count
+                    "MISMATCH: DB={} (+{} chunks) Index={} — run `uteke repair`",
+                    db_count, chunk_count, index_count
                 ),
             });
         }
@@ -93,15 +101,19 @@ impl crate::Uteke {
     /// Verify DB and index consistency. Returns mismatch count.
     pub fn verify(&self) -> Result<VerifyReport, Error> {
         let db_count = self.store.count(None)?;
+        // Chunk vectors share the index ("chunk:<id>" keys) — include them on
+        // the DB side so stores with documents don't report false MISMATCH (#1111).
+        let chunk_count = self.store.load_all_chunk_embeddings()?.len();
         let index = self
             .index
             .read()
             .map_err(|_| Error::lock("index read lock during verify"))?;
         let index_count = index.len();
 
-        let consistent = db_count == index_count;
+        let consistent = db_count + chunk_count == index_count;
         Ok(VerifyReport {
             db_count,
+            chunk_count,
             index_count,
             consistent,
         })
@@ -654,6 +666,38 @@ mod tests {
     }
 
     #[ignore = "requires ONNX embedder — validates repair() keeps doc chunk vectors indexed"]
+    #[test]
+    fn test_verify_counts_doc_chunks() {
+        // Regression test for #1111: verify()/doctor() must count document
+        // chunk vectors on the DB side, otherwise any store with documents
+        // reports a memory-only count vs index (which holds memories AND
+        // chunk vectors) and flags a false MISMATCH.
+        let dir = tempfile::tempdir().unwrap();
+        let uteke = crate::Uteke::open(dir.path().join("uteke.db")).unwrap();
+        uteke
+            .doc_upsert(
+                "verify-chunks-doc",
+                "Verify Chunks Doc",
+                "A document about distributed systems and consensus algorithms like raft.",
+                &[],
+                None,
+            )
+            .unwrap();
+
+        let report = uteke.verify().unwrap();
+        assert_eq!(report.db_count, 0, "no memories in this store");
+        assert!(report.chunk_count >= 1, "doc chunks must be counted");
+        assert_eq!(
+            report.index_count,
+            report.db_count + report.chunk_count,
+            "index holds memories + chunk vectors"
+        );
+        assert!(
+            report.consistent,
+            "no false MISMATCH with documents present"
+        );
+    }
+
     #[test]
     fn test_repair_preserves_doc_chunk_vectors() {
         // Regression test for #1110: repair() rebuilt the index from
