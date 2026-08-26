@@ -102,8 +102,8 @@ impl super::Store {
     ) -> Result<(), Error> {
         self.conn
             .execute(
-                "INSERT INTO memories (id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+                "INSERT INTO memories (id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type, deprecated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
                 params![
                     memory.id,
                     memory.content,
@@ -126,6 +126,7 @@ impl super::Store {
                     memory.source,
                     memory.source_type,
                     memory.author_type,
+                    memory.deprecated_at.map(|t| t.to_rfc3339()),
                 ],
             )
             .map_err(|e| Error::db("Failed to insert memory", e))?;
@@ -160,7 +161,7 @@ impl super::Store {
     pub fn get_by_id(&self, id: &str) -> Result<Option<Memory>, Error> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type FROM memories WHERE id = ?1")
+            .prepare("SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type, deprecated_at FROM memories WHERE id = ?1")
             .map_err(|e| Error::db("Failed to prepare statement for get_by_id", e))?;
 
         let result = stmt
@@ -187,7 +188,7 @@ impl super::Store {
         for chunk in ids.chunks(CHUNK_SIZE) {
             let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
             let sql = format!(
-                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type FROM memories WHERE id IN ({placeholders})"
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type, deprecated_at FROM memories WHERE id IN ({placeholders})"
             );
             let mut stmt = self
                 .conn
@@ -249,7 +250,7 @@ impl super::Store {
         let ns = namespace.unwrap_or(crate::memory::types::DEFAULT_NAMESPACE);
         let mut stmt = self
             .conn
-            .prepare("SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type FROM memories WHERE id = ?1 AND namespace = ?2")
+            .prepare("SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type, deprecated_at FROM memories WHERE id = ?1 AND namespace = ?2")
             .map_err(|e| Error::db("Failed to prepare statement for get_by_id_in_namespace", e))?;
 
         let result = stmt
@@ -594,10 +595,10 @@ impl super::Store {
         // recall and must not re-enter the vector index on repair/verify (#1047).
         let sql = match namespace {
             Some(_) => {
-                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type FROM memories WHERE namespace = ?1 AND embedding IS NOT NULL AND deprecated = 0 ORDER BY created_at"
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type, deprecated_at FROM memories WHERE namespace = ?1 AND embedding IS NOT NULL AND deprecated = 0 ORDER BY created_at"
             }
             None => {
-                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type FROM memories WHERE embedding IS NOT NULL AND deprecated = 0 ORDER BY created_at"
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type, deprecated_at FROM memories WHERE embedding IS NOT NULL AND deprecated = 0 ORDER BY created_at"
             }
         };
 
@@ -961,6 +962,7 @@ mod content_type_tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".to_string(),
@@ -994,6 +996,7 @@ mod content_type_tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".to_string(),
@@ -1042,6 +1045,7 @@ mod content_type_tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".to_string(),

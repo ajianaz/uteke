@@ -2390,7 +2390,18 @@ fn memory_exists_at(
         }
     }
     if memory.deprecated {
-        return false;
+        // Deprecated before the point-in-time → did not exist then;
+        // deprecated after it → existed (#1086). Matches core semantics:
+        // NULL deprecated_at is treated as "deprecated after the pit"
+        // (the v17 migration backfills a timestamp onto every deprecated
+        // row, so NULL + deprecated should not occur in practice).
+        let gone_by_then = match memory.deprecated_at {
+            Some(dep_at) => dep_at <= pit,
+            None => false,
+        };
+        if gone_by_then {
+            return false;
+        }
     }
     if let Some(valid_from) = memory.valid_from {
         if valid_from > pit {
@@ -2430,6 +2441,7 @@ mod room_recall_at_tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".into(),
@@ -2464,7 +2476,18 @@ mod room_recall_at_tests {
         let now = Utc::now();
         let mut dep = mem(-60);
         dep.deprecated = true;
+        dep.deprecated_at = Some(now - chrono::Duration::seconds(30)); // deprecated before pit
         assert!(!memory_exists_at(&dep, now));
+    }
+
+    #[test]
+    fn at_time_includes_deprecated_after_pit() {
+        // #1086: deprecated AFTER the pit — the memory existed then.
+        let now = Utc::now();
+        let mut dep = mem(-60);
+        dep.deprecated = true;
+        dep.deprecated_at = Some(now + chrono::Duration::seconds(30)); // deprecated after pit
+        assert!(memory_exists_at(&dep, now));
     }
 
     #[test]

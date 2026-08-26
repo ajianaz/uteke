@@ -119,6 +119,7 @@ impl crate::Uteke {
                 access_count: 0,
                 last_accessed: None,
                 deprecated: false,
+                deprecated_at: None,
                 valid_from: Some(entry.created_at),
                 valid_until: None,
                 memory_type: "fact".to_string(),

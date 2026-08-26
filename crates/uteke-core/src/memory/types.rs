@@ -35,6 +35,11 @@ pub struct Memory {
     /// Whether this memory has been superseded by a newer one.
     #[serde(default)]
     pub deprecated: bool,
+    /// When this memory was deprecated (NULL while active). Used by
+    /// time-travel recall to distinguish deprecated-before vs deprecated-after
+    /// the queried point-in-time (#1086).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deprecated_at: Option<chrono::DateTime<chrono::Utc>>,
     /// When this fact became valid (temporal metadata).
     #[serde(default)]
     pub valid_from: Option<chrono::DateTime<chrono::Utc>>,

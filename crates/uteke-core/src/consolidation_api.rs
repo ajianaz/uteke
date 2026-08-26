@@ -147,6 +147,7 @@ mod tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".to_string(),

@@ -148,6 +148,7 @@ pub fn execute_plan<U: ConsolidationStore>(
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: sanitize_memory_type(fact.fact_type.as_deref()),

@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS memories (
     last_accessed TEXT,
     deprecated INTEGER NOT NULL DEFAULT 0,
     deprecate_reason TEXT,
+    deprecated_at TEXT,
     valid_from TEXT,
     valid_until TEXT,
     memory_type TEXT NOT NULL DEFAULT 'fact',
@@ -175,7 +176,7 @@ pub(super) const SCHEMA_INDEXES: &[&str] = &[
 ];
 
 /// Current schema version. Increment when adding migrations.
-pub(crate) const CURRENT_SCHEMA_VERSION: i32 = 16;
+pub(crate) const CURRENT_SCHEMA_VERSION: i32 = 17;
 
 /// Persistent SQLite store for memories.
 pub struct Store {
@@ -450,6 +451,8 @@ pub(crate) fn row_to_memory(row: &rusqlite::Row<'_>) -> Result<Memory, rusqlite:
         tracing::debug!("Failed to read deprecated field: {e}, defaulting to false");
         false
     });
+    let deprecated_at_str: Option<String> = row.get(21).ok().flatten();
+    let deprecated_at = deprecated_at_str.as_deref().and_then(parse_datetime_opt);
     let valid_from_str: Option<String> = row.get(11).ok().flatten();
     let valid_from = valid_from_str.as_deref().and_then(parse_datetime_opt);
     let valid_until_str: Option<String> = row.get(12).ok().flatten();
@@ -475,6 +478,7 @@ pub(crate) fn row_to_memory(row: &rusqlite::Row<'_>) -> Result<Memory, rusqlite:
         access_count,
         last_accessed,
         deprecated,
+        deprecated_at,
         valid_from,
         valid_until,
         memory_type,
@@ -507,6 +511,7 @@ mod tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".to_string(),
@@ -533,6 +538,7 @@ mod tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".to_string(),
@@ -677,7 +683,7 @@ mod tests {
             .conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 16, "schema should be upgraded to v16");
+        assert_eq!(version, 17, "schema should be upgraded to v17");
 
         // Legacy row backfilled to 'agent'.
         let at: String = store
@@ -1699,6 +1705,7 @@ mod tests {
             access_count: 0,
             last_accessed: None,
             deprecated,
+            deprecated_at: None,
             valid_from,
             valid_until,
             memory_type: "fact".to_string(),
