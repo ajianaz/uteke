@@ -344,6 +344,7 @@ def recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids,
 
     return {
         "session": {**session_recall, **session_ndcg},
+        "_retrieved_session_ids": retrieved_session_ids[:50],
         # Note: turn-level retrieval requires per-turn indexing, which this
         # harness does not do (sessions are inserted as single memories).
         # Turn-level metrics are omitted to avoid misleading copies of
@@ -457,7 +458,12 @@ def main():
                 result_entry = {
                     "question_id": qid,
                     "question_type": entry.get("question_type", "unknown"),
-                    "retrieval_results": {"metrics": metrics},
+                    "retrieval_results": {
+                        "metrics": metrics,
+                        # Post-rerank session order — enables offline replay of
+                        # temporal/MMR experiments without re-burning credits.
+                        "retrieved_session_ids": metrics.pop("_retrieved_session_ids", []),
+                    },
                 }
                 fout.write(json.dumps(result_entry) + "\n")
                 fout.flush()  # Flush for resume safety
