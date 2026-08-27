@@ -26,6 +26,9 @@ from temporal import boost_ranking, parse_question_date, parse_temporal
 
 # Auto-configure embedding backend from EMBED_API_KEY/EMBED_API_BASE/EMBED_MODEL env vars.
 # Falls back to local ONNX if these are not set.
+# MMR diversity rerank (#1120) — harness-side, default OFF.
+sys.path.insert(0, str(Path(__file__).parent))
+from mmr import mmr_rerank
 if os.environ.get("EMBED_API_KEY") and os.environ.get("EMBED_API_BASE"):
     os.environ.setdefault("UTEKE_EMBEDDING_BACKEND", "openai")
     os.environ.setdefault("UTEKE_EMBEDDING_API_KEY", os.environ["EMBED_API_KEY"])
@@ -298,6 +301,21 @@ def recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids,
                 retrieved_session_ids, session_dates, window,
                 boost=getattr(args, "temporal_boost", 0.0022))
 
+    # MMR diversity rerank (#1120): penalise redundant sessions in the top-k.
+    # Zero-model post-processing (TF-IDF cosine over candidate texts) —
+    # default OFF (--mmr-lambda not passed → None → no-op).
+    if getattr(args, "mmr_lambda", None) is not None and retrieved_session_ids:
+        # haystack_sessions[i] (list of turn dicts) aligns with
+        # haystack_session_ids[i] by index — build sid -> text directly.
+        texts_by_sid = {
+            sid: session_to_text(hs)
+            for sid, hs in zip(entry.get("haystack_session_ids", []),
+                               entry.get("haystack_sessions", []))
+        }
+        candidate_texts = [texts_by_sid.get(sid, "") for sid in retrieved_session_ids]
+        retrieved_session_ids = mmr_rerank(
+            retrieved_session_ids, candidate_texts, lam=args.mmr_lambda)
+
     # --- Session-level metrics ---
     # Recall@k: fraction of evidence sessions in top-k
     session_recall = {}
@@ -364,10 +382,15 @@ def main():
                         help="Enable temporal date-window boost (#1119), default OFF")
     parser.add_argument("--temporal-boost", type=float, default=0.0022,
                         help="Additive RRF boost for sessions inside the temporal window (default: 0.0022)")
+    parser.add_argument("--mmr-lambda", type=float, default=None,
+                        help="Enable MMR diversity rerank (#1120) with this lambda "
+                             "(e.g. 0.7). Default: off (None, no rerank).")
     args = parser.parse_args()
 
     if args.temporal:
         print(f"Temporal boost: enabled (boost={args.temporal_boost})")
+    if args.mmr_lambda is not None:
+        print(f"MMR diversity rerank: enabled (lambda={args.mmr_lambda})")
 
     # Load data
     with open(args.data) as f:
