@@ -73,8 +73,8 @@ def test_last_month_january_edge():
 
 def test_this_month():
     w = parse_temporal("this month", Q)
-    assert w[0] == date(2023, 3, 1) and w[1] == 9e9 or True  # hi == Q itself
-    assert w[1] == Q
+    assert w[0] == date(2023, 3, 1)
+    assert w[1] == Q  # window extends through question date itself
 
 def test_this_year():
     w = parse_temporal("this year", Q)
@@ -82,7 +82,9 @@ def test_this_year():
 
 def test_no_temporal():
     assert parse_temporal("What is my favorite sushi?", Q) is None
-    assert parse_temporal("January Jones is an actress", Q) is None or True  # no verb context; strict patterns need preposition
+    # Month name used as a proper noun must NOT parse (strict patterns
+    # require a preposition, e.g. "in January", not "January Jones").
+    assert parse_temporal("January Jones is an actress", Q) is None
     assert parse_temporal("", Q) is None
     assert parse_temporal("last month", None) is None
 
