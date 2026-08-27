@@ -46,9 +46,8 @@ import modal
 REPO_DIR = pathlib.Path(__file__).parent
 UTEKE_VERSION = "v0.15.0"
 DATA_FILE = "longmemeval_fast50.json"
-RERANK = os.environ.get("LMEVAL_RERANK", "0") == "1"
-RERANK_DEPTH = int(os.environ.get("LMEVAL_RERANK_DEPTH", "20"))
-# Local source of the embedding model (must contain onnx/ + tokenizer.json).
+RERANK = False  # removed (#1118 cancelled — single-model direction); kept as False for compat
+RERANK_DEPTH = 20
 MODEL_SOURCE = pathlib.Path("/opt/data/.codecora/uteke/models/embeddinggemma-q4")
 
 app = modal.App("uteke-lmeval-fast")
@@ -74,11 +73,8 @@ image = (
     # Bake the embedding model so containers never download at runtime.
     # (add_local_* must come last — Modal mounts them at container start.)
     .add_local_dir(str(MODEL_SOURCE), "/root/.codecora/uteke/models/embeddinggemma-q4")
-    .add_local_dir("/opt/data/.codecora/uteke/models/ms-marco-minilm-l6",
-                   "/root/.codecora/uteke/models/ms-marco-minilm-l6")
     .add_local_file(str(REPO_DIR / "run_eval.py"), "/root/harness/run_eval.py")
     .add_local_file(str(REPO_DIR / "data" / DATA_FILE), "/root/harness/data.json")
-    .add_local_file(str(REPO_DIR / "reranker.py"), "/root/harness/reranker.py")
     .add_local_file(str(REPO_DIR / "compare_fast50.py"), "/root/harness/compare_fast50.py")
 )
 
@@ -139,7 +135,6 @@ def run_shard(spec: dict) -> dict:
                 "--output", out_dir,
                 "--strategy", strategy,
                 "--namespace", "lmeval",
-                *([] if not RERANK else ["--rerank", "--rerank-model", "/root/.codecora/uteke/models/ms-marco-minilm-l6/model.onnx", "--rerank-depth", str(RERANK_DEPTH)]),
                 *resume_args,
             ],
             capture_output=True, text=True, timeout=14100,  # 14400 - buffer commit

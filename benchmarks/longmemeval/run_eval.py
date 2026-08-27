@@ -215,7 +215,7 @@ def insert_sessions(args, store_path, entry):
     return inserted_sids, answer_turns, mid_to_sid
 
 
-def recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids, mid_to_sid, reranker=None):
+def recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids, mid_to_sid):
     """
     Run uteke recall for the question, then evaluate retrieval accuracy.
 
@@ -275,23 +275,6 @@ def recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids,
         if sid not in seen:
             seen.add(sid)
             retrieved_session_ids.append(sid)
-
-    # Cross-encoder rerank (#1118): reorder session ranking before metrics.
-    # Candidate pool = top rerank-depth unique sessions; passages = session text.
-    if reranker is not None and retrieved_session_ids:
-        sid_to_text = {}
-        hs_ids = entry.get("haystack_session_ids", [])
-        hs_sess = entry.get("haystack_sessions", [])
-        for sid, sess in zip(hs_ids, hs_sess):
-            sid_to_text[sid] = session_to_text(sess)
-        pool = retrieved_session_ids[: args.rerank_depth]
-        passages = [sid_to_text.get(sid, "")[:4000] for sid in pool]
-        scores = reranker.score(question, passages)
-        order = sorted(range(len(pool)), key=lambda i: -scores[i])
-        ranked = [pool[i] for i in order]
-        # sisa (di luar pool) tetap di belakang, urut asli
-        rest = retrieved_session_ids[args.rerank_depth:]
-        retrieved_session_ids = ranked + rest
 
     # --- Session-level metrics ---
     # Recall@k: fraction of evidence sessions in top-k
@@ -355,21 +338,9 @@ def main():
                         help="Chunk long sessions into smaller memories to reduce embedding dilution")
     parser.add_argument("--chunk-size", type=int, default=2000,
                         help="Max chars per chunk when --chunk-sessions is enabled (default: 2000)")
-    parser.add_argument("--rerank", action="store_true",
-                        help="Rerank top-N recall results with cross-encoder ONNX (#1118)")
-    parser.add_argument("--rerank-depth", type=int, default=20,
-                        help="Candidate pool size to rerank (default: 20)")
-    parser.add_argument("--rerank-model", default="",
-                        help="Path to cross-encoder ONNX model (default: bundled ms-marco-minilm-l6)")
     args = parser.parse_args()
 
-    reranker = None
-    if args.rerank:
-        from reranker import CrossEncoderReranker
-        reranker = CrossEncoderReranker(args.rerank_model or None)
-        print(f"Reranker: enabled (depth={args.rerank_depth})")
-
-    # Load data
+    store_path = args.store
     with open(args.data) as f:
         data = json.load(f)
 
@@ -428,7 +399,7 @@ def main():
             inserted_sids, answer_sessions, mid_to_sid = insert_sessions(args, store_path, entry)
 
             # Recall + evaluate
-            metrics = recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids, mid_to_sid, reranker)
+            metrics = recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids, mid_to_sid)
 
             if metrics is not None:
                 result_entry = {
