@@ -122,7 +122,17 @@ def run_shard(spec: dict) -> dict:
     # Volume cache: skip kalau shard SUDAH LENGKAP; resume kalau PARTIAL (dari timeout)
     resume_args = []
     if vol_path.exists():
-        prior = [l for l in vol_path.read_text().splitlines() if l.strip()]
+        prior = []
+        for l in vol_path.read_text().splitlines():
+            if not l.strip():
+                continue
+            try:
+                json.loads(l)
+            except json.JSONDecodeError:
+                # Truncated tail line from a killed container mid-write: drop
+                # it rather than abort the shard (#1130 review finding).
+                continue
+            prior.append(l)
         prior_qids = {json.loads(l).get("question_id") for l in prior}
         expected_qids = {e.get("question_id") for e in shard}
         # Complete = same question set, not just same count (guard #1129 even
