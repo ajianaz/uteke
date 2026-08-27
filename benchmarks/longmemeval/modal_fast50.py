@@ -48,7 +48,6 @@ UTEKE_VERSION = "v0.15.0"
 DATA_FILE = "longmemeval_fast50.json"
 RERANK = False  # removed (#1118 cancelled — single-model direction); kept as False for compat
 RERANK_DEPTH = 20
-TEMPORAL = os.environ.get("LMEVAL_TEMPORAL", "0") == "1"
 # Local source of the embedding model (must contain onnx/ + tokenizer.json).
 MODEL_SOURCE = pathlib.Path("/opt/data/.codecora/uteke/models/embeddinggemma-q4")
 
@@ -96,8 +95,12 @@ def run_shard(spec: dict) -> dict:
     shard_idx = spec["shard_idx"]
     num_shards = spec["num_shards"]
     limit = spec["limit"]
+    temporal = bool(spec.get("temporal", False))
 
-    vol_path = pathlib.Path("/root/vol") / strategy / f"shard_{shard_idx:02d}.jsonl"
+    # Variant-keyed volume path: baseline and temporal shards must never
+    # share cache entries, or resume would silently return stale results.
+    variant = f"{strategy}_temporal" if temporal else strategy
+    vol_path = pathlib.Path("/root/vol") / variant / f"shard_{shard_idx:02d}.jsonl"
     data = _json.loads(pathlib.Path("/root/harness/data.json").read_text())
     if limit and limit > 0:
         data = data[:limit]
@@ -138,7 +141,7 @@ def run_shard(spec: dict) -> dict:
                 "--output", out_dir,
                 "--strategy", strategy,
                 "--namespace", "lmeval",
-                *([] if not TEMPORAL else ["--temporal"]),
+                *(["--temporal"] if temporal else []),
                 *resume_args,
             ],
             capture_output=True, text=True, timeout=14100,  # 14400 - buffer commit
@@ -198,20 +201,22 @@ def main(
     num_shards: int = 2,
     limit: int = 0,
     outdir: str = "",
+    temporal: bool = False,
 ):
     if not MODEL_SOURCE.exists():
         sys.exit(f"Model source not found: {MODEL_SOURCE}")
     if not (REPO_DIR / "data" / DATA_FILE).exists():
         sys.exit(f"Dataset not found: {REPO_DIR / 'data' / DATA_FILE}")
 
-    outdir = outdir or f"results_modal_{strategy}" + (f"_{limit}q" if limit else "")
+    outdir = outdir or f"results_modal_{strategy}" + ("_temporal" if temporal else "") + (f"_{limit}q" if limit else "")
     out_path = pathlib.Path(outdir) / "retrieval_results.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Progress check from the volume (if any shards completed before a prior
     # interruption, they'll be resumed instead of recomputed).
     try:
-        done = list_volume.remote(strategy)
+        variant = f"{strategy}_temporal" if temporal else strategy
+        done = list_volume.remote(variant)
         if done:
             print(f"Volume state: {len(done)} shard(s) already on volume:")
             for d in done:
@@ -224,7 +229,8 @@ def main(
 
     # Strided slicing means shard i covers data[i::num_shards].
     inputs = [
-        {"strategy": strategy, "shard_idx": i, "num_shards": num_shards, "limit": limit}
+        {"strategy": strategy, "shard_idx": i, "num_shards": num_shards, "limit": limit,
+         "temporal": temporal}
         for i in range(num_shards)
     ]
     merged, seen = [], set()
