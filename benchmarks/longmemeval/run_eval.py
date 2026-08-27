@@ -20,6 +20,10 @@ import tempfile
 import time
 from pathlib import Path
 
+# Temporal date-window boost (#1119) — harness-side, default OFF.
+sys.path.insert(0, str(Path(__file__).parent))
+from temporal import boost_ranking, parse_question_date, parse_temporal
+
 # Auto-configure embedding backend from EMBED_API_KEY/EMBED_API_BASE/EMBED_MODEL env vars.
 # Falls back to local ONNX if these are not set.
 if os.environ.get("EMBED_API_KEY") and os.environ.get("EMBED_API_BASE"):
@@ -276,6 +280,24 @@ def recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids,
             seen.add(sid)
             retrieved_session_ids.append(sid)
 
+    # Temporal date-window boost (#1119): soft-boost sessions whose date falls
+    # inside the question's temporal window ("last month", "in February",
+    # "between X and Y", ...). No-op when the question has no temporal
+    # expression or when dates are missing. Default OFF (--temporal).
+    if getattr(args, "temporal", False) and retrieved_session_ids:
+        qdate = parse_question_date(entry.get("question_date", ""))
+        window = parse_temporal(question, qdate)
+        if window:
+            session_dates = {}
+            for sid, dstr in zip(entry.get("haystack_session_ids", []),
+                                 entry.get("haystack_dates", [])):
+                d = parse_question_date(dstr)
+                if d is not None:
+                    session_dates[sid] = d
+            retrieved_session_ids = boost_ranking(
+                retrieved_session_ids, session_dates, window,
+                boost=getattr(args, "temporal_boost", 0.0022))
+
     # --- Session-level metrics ---
     # Recall@k: fraction of evidence sessions in top-k
     session_recall = {}
@@ -338,9 +360,16 @@ def main():
                         help="Chunk long sessions into smaller memories to reduce embedding dilution")
     parser.add_argument("--chunk-size", type=int, default=2000,
                         help="Max chars per chunk when --chunk-sessions is enabled (default: 2000)")
+    parser.add_argument("--temporal", action="store_true",
+                        help="Enable temporal date-window boost (#1119), default OFF")
+    parser.add_argument("--temporal-boost", type=float, default=0.0022,
+                        help="Additive RRF boost for sessions inside the temporal window (default: 0.0022)")
     args = parser.parse_args()
 
-    store_path = args.store
+    if args.temporal:
+        print(f"Temporal boost: enabled (boost={args.temporal_boost})")
+
+    # Load data
     with open(args.data) as f:
         data = json.load(f)
 
