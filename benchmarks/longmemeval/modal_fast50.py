@@ -45,7 +45,7 @@ import modal
 
 REPO_DIR = pathlib.Path(__file__).parent
 UTEKE_VERSION = "v0.15.0"
-DATA_FILE = "longmemeval_fast50.json"
+DATA_FILE = os.environ.get("LMEVAL_DATA", "longmemeval_fast50.json")
 RERANK = False  # removed (#1118 cancelled — single-model direction); kept as False for compat
 RERANK_DEPTH = 20
 # Local source of the embedding model (must contain onnx/ + tokenizer.json).
@@ -103,7 +103,7 @@ def run_shard(spec: dict) -> dict:
     # share cache entries, or resume would silently return stale results.
     variant = f"{strategy}_temporal" if temporal else strategy
     if mmr_lambda is not None:
-        variant = f"{strategy}_mmr{mmr_lambda}"
+        variant += f"_mmr{mmr_lambda}"
     vol_path = pathlib.Path("/root/vol") / variant / f"shard_{shard_idx:02d}.jsonl"
     data = _json.loads(pathlib.Path("/root/harness/data.json").read_text())
     if limit and limit > 0:
@@ -217,7 +217,7 @@ def main(
     lam: float | None = mmr_lambda if mmr_lambda > 0 else None  # 0/omitted = OFF
     variant = f"{strategy}_temporal" if temporal else strategy
     if lam is not None:
-        variant = f"{strategy}_mmr{lam}"
+        variant += f"_mmr{lam}"
     outdir = outdir or "results_modal_" + variant + (f"_{limit}q" if limit else "")
     out_path = pathlib.Path(outdir) / "retrieval_results.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -227,7 +227,7 @@ def main(
     try:
         variant = f"{strategy}_temporal" if temporal else strategy
         if lam is not None:
-            variant = f"{strategy}_mmr{lam}"
+            variant += f"_mmr{lam}"
         done = list_volume.remote(variant)
         if done:
             print(f"Volume state: {len(done)} shard(s) already on volume:")
