@@ -35,6 +35,7 @@ Notes:
 """
 
 import json
+import hashlib
 import pathlib
 import subprocess
 import os
@@ -104,8 +105,13 @@ def run_shard(spec: dict) -> dict:
     variant = f"{strategy}_temporal" if temporal else strategy
     if mmr_lambda is not None:
         variant += f"_mmr{mmr_lambda}"
-    vol_path = pathlib.Path("/root/vol") / variant / f"shard_{shard_idx:02d}.jsonl"
-    data = _json.loads(pathlib.Path("/root/harness/data.json").read_text())
+    # Dataset fingerprint: sha1 of the mounted dataset file. Cross-dataset
+    # stale hits are possible without it (fast50 shard satisfies a 15Q run's
+    # `len(prior) >= expected` check and is returned verbatim) — see #1129.
+    data_bytes = pathlib.Path("/root/harness/data.json").read_bytes()
+    data_tag = hashlib.sha1(data_bytes).hexdigest()[:8]
+    vol_path = pathlib.Path("/root/vol") / variant / data_tag / f"shard_{shard_idx:02d}.jsonl"
+    data = _json.loads(data_bytes)
     if limit and limit > 0:
         data = data[:limit]
     shard = data[shard_idx::num_shards]  # strided → even question-type mix
@@ -116,8 +122,22 @@ def run_shard(spec: dict) -> dict:
     # Volume cache: skip kalau shard SUDAH LENGKAP; resume kalau PARTIAL (dari timeout)
     resume_args = []
     if vol_path.exists():
-        prior = [l for l in vol_path.read_text().splitlines() if l.strip()]
-        if len(prior) >= expected:
+        prior = []
+        for l in vol_path.read_text().splitlines():
+            if not l.strip():
+                continue
+            try:
+                json.loads(l)
+            except json.JSONDecodeError:
+                # Truncated tail line from a killed container mid-write: drop
+                # it rather than abort the shard (#1130 review finding).
+                continue
+            prior.append(l)
+        prior_qids = {json.loads(l).get("question_id") for l in prior}
+        expected_qids = {e.get("question_id") for e in shard}
+        # Complete = same question set, not just same count (guard #1129 even
+        # if two datasets share a prefix and length by coincidence).
+        if len(prior) >= expected and prior_qids == expected_qids:
             return {
                 "shard_idx": shard_idx,
                 "n": len(prior),
@@ -190,13 +210,17 @@ def run_shard(spec: dict) -> dict:
 
 @app.function(image=image, timeout=600, cpu=1, volumes={"/root/vol": vol})
 def list_volume(strategy: str) -> list:
-    """List completed shards for a strategy on the volume (progress check)."""
+    """List completed shards for a strategy on the volume (progress check).
+
+    Glob is dataset-tag-agnostic (shard_*.jsonl under any tag dir) so the
+    progress view still works after #1129 introduced per-dataset subdirs.
+    """
     base = pathlib.Path("/root/vol") / strategy
     out = []
     if base.exists():
-        for f in sorted(base.glob("shard_*.jsonl")):
+        for f in sorted(base.glob("*/shard_*.jsonl")):
             n = sum(1 for l in f.read_text().splitlines() if l.strip())
-            out.append({"shard": f.name, "questions": n})
+            out.append({"shard": f"{f.parent.name}/{f.name}", "questions": n})
     return out
 
 
