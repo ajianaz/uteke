@@ -48,6 +48,8 @@ UTEKE_VERSION = "v0.15.0"
 DATA_FILE = "longmemeval_fast50.json"
 RERANK = False  # removed (#1118 cancelled — single-model direction); kept as False for compat
 RERANK_DEPTH = 20
+TEMPORAL = os.environ.get("LMEVAL_TEMPORAL", "0") == "1"
+# Local source of the embedding model (must contain onnx/ + tokenizer.json).
 MODEL_SOURCE = pathlib.Path("/opt/data/.codecora/uteke/models/embeddinggemma-q4")
 
 app = modal.App("uteke-lmeval-fast")
@@ -75,6 +77,7 @@ image = (
     .add_local_dir(str(MODEL_SOURCE), "/root/.codecora/uteke/models/embeddinggemma-q4")
     .add_local_file(str(REPO_DIR / "run_eval.py"), "/root/harness/run_eval.py")
     .add_local_file(str(REPO_DIR / "data" / DATA_FILE), "/root/harness/data.json")
+    .add_local_file(str(REPO_DIR / "temporal.py"), "/root/harness/temporal.py")
     .add_local_file(str(REPO_DIR / "compare_fast50.py"), "/root/harness/compare_fast50.py")
 )
 
@@ -135,6 +138,7 @@ def run_shard(spec: dict) -> dict:
                 "--output", out_dir,
                 "--strategy", strategy,
                 "--namespace", "lmeval",
+                *([] if not TEMPORAL else ["--temporal"]),
                 *resume_args,
             ],
             capture_output=True, text=True, timeout=14100,  # 14400 - buffer commit
