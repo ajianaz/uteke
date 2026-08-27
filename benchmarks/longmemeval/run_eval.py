@@ -101,7 +101,14 @@ def run_uteke(args, store_path, subcommand, extra_args=None):
     repo_root = Path(__file__).resolve().parent.parent.parent
     uteke_bin = str(repo_root / "target" / "release" / "uteke")
     if not Path(uteke_bin).exists():
-        uteke_bin = shutil.which("uteke") or "uteke"
+        # Prefer the known-good local install over ambiguous PATH hits
+        # (/opt/data/.cargo/bin/uteke is x86_64-dynamic and broken on this host)
+        for cand in ("/opt/data/.local/bin/uteke",):
+            if Path(cand).exists():
+                uteke_bin = cand
+                break
+        else:
+            uteke_bin = shutil.which("uteke") or "uteke"
 
     # Linux-only: throttle CPU so benchmarks don't starve the server.
     if sys.platform == "linux":
@@ -333,7 +340,7 @@ def main():
                         help="Max chars per chunk when --chunk-sessions is enabled (default: 2000)")
     args = parser.parse_args()
 
-    # Load data
+    store_path = args.store
     with open(args.data) as f:
         data = json.load(f)
 
