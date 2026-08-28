@@ -72,6 +72,10 @@ image = (
     # (add_local_* must come last — Modal mounts them at container start.)
     .add_local_dir(str(MODEL_SOURCE), "/root/.codecora/uteke/models/embeddinggemma-q4")
     .add_local_file(str(REPO_DIR / "run_eval.py"), "/root/harness/run_eval.py")
+    # run_eval.py imports temporal/mmr experiment modules at import time —
+    # they must be baked into the image or every shard dies on ModuleNotFoundError.
+    .add_local_file(str(REPO_DIR / "temporal.py"), "/root/harness/temporal.py")
+    .add_local_file(str(REPO_DIR / "mmr.py"), "/root/harness/mmr.py")
     .add_local_file(str(REPO_DIR / "data" / DATA_FILE), "/root/harness/data.json")
 )
 

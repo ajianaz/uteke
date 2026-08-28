@@ -79,3 +79,21 @@ python run_eval.py --data data/longmemeval_s_cleaned.json --output results_vecto
 # Hybrid (50Q sample)
 python run_eval.py --data data/longmemeval_s_cleaned.json --output results_hybrid --limit 50 --strategy hybrid
 ```
+
+### 3-way RRF (vec + hyb + fts5-only) — NO-GO (2026-08-29)
+
+Simulation over saved rankings; fts5-only rankings collected on Modal x86
+(500Q, ~4.5h, resume-safe via volume). Cross-check: sim fts5-only R@5=0.8211
+vs harness-reported 0.820 — parsing validated.
+
+- 2-way shipped fusion (1.7/1.0) R@5 = 0.9800 (fast50)
+- best 3-way (2.0/1.0/0.1) R@5 = 0.9800 — delta +0.0000, **0 flipped questions**
+- adding fts5 as third arm changes nothing at any grid weight tried
+- fts5-only fails: temporal-reasoning (63) + multi-session (55) dominate —
+  same classes already covered (partially) by hybrid's own FTS5 component
+
+Conclusion: ranking-side optimization via more RRF arms is exhausted.
+Remaining headroom is insert-side granularity (3 partial-recall fails) —
+separate project, uncertain payoff.
+
+Artifacts: sim3way_final.py, preview_scores.py, results_modal_fts5_partial/
