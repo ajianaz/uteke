@@ -360,12 +360,14 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                                 req,
                                 400,
                                 format!(
-                                    "Invalid strategy: '{name}'. Use 'vector', 'fts5', 'hybrid', or 'graph'."
+                                    "Invalid strategy: '{name}'. Use 'vector', 'fts5', 'hybrid', 'graph', or 'fusion'."
                                 ),
                             );
                         }
                     },
-                    None => uteke_core::RecallStrategy::Hybrid,
+                    // Implicit default since 0.16.0 (#1123): fusion.
+                    // Matches the core enum default and CLI default_strategy.
+                    None => uteke_core::RecallStrategy::Fusion,
                 };
 
                 // Unified search path (#531): when search_type is specified,
