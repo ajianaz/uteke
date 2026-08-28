@@ -418,8 +418,10 @@ def main():
     parser.add_argument("--reset-every", type=int, default=20,
                         help="Wipe and recreate the store every N questions to prevent memory buildup (default: 20)")
     parser.add_argument("--strategy", default="vector",
-                        choices=["vector", "fts5", "hybrid", "graph"],
-                        help="Recall strategy (default: vector)")
+                        choices=["vector", "fts5", "hybrid", "graph", "fusion"],
+                        help="Recall strategy (default: vector). 'fusion' runs "
+                             "the IN-CORE weighted RRF (vector×1.7+hybrid×1) — "
+                             "distinct from the harness-level --fusion flag (#1123)")
     parser.add_argument("--fusion", action="store_true",
                         help="RRF-fuse two recall rankings: primary strategy ×1.7 + "
                              "complementary (vector↔hybrid) ×1, k=60 (#1123)")
