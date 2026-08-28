@@ -757,6 +757,11 @@ pub enum RecallStrategy {
     /// Graph-augmented: hybrid RRF + graph-signal reranking (#378).
     /// Well-connected memories get a subtle log-scaled score boost.
     Graph,
+    /// Fusion (#1123): vector ranking (×1.7) RRF-fused with hybrid ranking
+    /// (×1). Vector and hybrid fail on disjoint question sets; fusing both
+    /// captures each other's wins. LongMemEval fast50 evidence: R@5
+    /// 0.9267 (hybrid) → 0.98 (fusion), R@10 1.0.
+    Fusion,
 }
 
 impl RecallStrategy {
@@ -767,6 +772,7 @@ impl RecallStrategy {
             "fts5" => Some(Self::Fts5),
             "hybrid" => Some(Self::Hybrid),
             "graph" => Some(Self::Graph),
+            "fusion" => Some(Self::Fusion),
             _ => None,
         }
     }
@@ -777,6 +783,7 @@ impl RecallStrategy {
             Self::Fts5 => "fts5",
             Self::Hybrid => "hybrid",
             Self::Graph => "graph",
+            Self::Fusion => "fusion",
         }
     }
 }
@@ -784,6 +791,26 @@ impl RecallStrategy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recall_strategy_fusion_roundtrip() {
+        assert_eq!(
+            RecallStrategy::from_str_opt("fusion"),
+            Some(RecallStrategy::Fusion)
+        );
+        assert_eq!(RecallStrategy::Fusion.as_str(), "fusion");
+        // Exact-match parsing like every other variant (uppercase rejected).
+        assert_eq!(RecallStrategy::from_str_opt("FUSION"), None);
+        assert_eq!(RecallStrategy::from_str_opt("fusio"), None);
+    }
+
+    #[test]
+    fn recall_strategy_serde_kebab() {
+        let s = serde_json::to_string(&RecallStrategy::Fusion).unwrap();
+        assert_eq!(s, "\"fusion\"");
+        let back: RecallStrategy = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, RecallStrategy::Fusion);
+    }
 
     #[test]
     fn memory_type_roundtrip() {
