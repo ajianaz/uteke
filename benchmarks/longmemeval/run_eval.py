@@ -233,7 +233,12 @@ def recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids,
     # from insert failures).
     evidence_session_ids = set(entry.get("answer_session_ids", [])) & inserted_sids
 
-    # Run recall — fetch top-50 for Recall@5/10/50
+    # Run recall — fetch top-50 for Recall@5/10/50.
+    # --fusion mode (#1123): RRF-fuse two uteke rankings (vector + hybrid).
+    # Vector and hybrid fail on DISJOINT question sets (fast50 evidence:
+    # 7 questions vector-only wins, 5 hybrid wins) — RRF captures both.
+    # Weights vec×1.5 : hybrid×1 sit mid-plateau [1.3, 1.6] of R@5=0.97.
+    fusion_mode = getattr(args, "fusion", False)
     recall_cmd = [
         "recall", question,
         "--limit", "50",
@@ -241,47 +246,87 @@ def recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids,
         "--strategy", args.strategy,
         "--min", "0.0",  # Disable threshold — evaluate raw retrieval ranking (#995)
     ]
+    if fusion_mode:
+        # Base ranking from primary strategy, then fuse with the other.
+        # Build the complementary command by REPLACING the --strategy value
+        # (appending would duplicate the flag → clap error).
+        other = "vector" if args.strategy == "hybrid" else "hybrid"
+        alt_cmd = [
+            "recall", question,
+            "--limit", "50",
+            "--tags", "longmemeval",
+            "--strategy", other,
+            "--min", "0.0",
+        ]
+        fusion_cmds = [recall_cmd, alt_cmd]
+    else:
+        fusion_cmds = [recall_cmd]
     try:
-        output = run_uteke(args, store_path, recall_cmd)
+        outputs = [run_uteke(args, store_path, cmd) for cmd in fusion_cmds]
     except RuntimeError as e:
         print(f"  Warning: recall failed: {e}", file=sys.stderr)
         return None
 
     # Parse results
     try:
-        results = json.loads(output)
+        parsed = [json.loads(o) for o in outputs]
+        results = parsed if fusion_mode else (parsed[0] if isinstance(parsed[0], list) else [parsed[0]])
     except json.JSONDecodeError:
         print(f"  Warning: could not parse recall output", file=sys.stderr)
         return None
-
-    if not isinstance(results, list):
-        results = [results]
-
-    # Extract session_ids via memory_id -> session_id mapping.
-    # Recall JSON in uteke 0.7+ returns memory_id, not metadata fields.
-    # We built mid_to_sid during insert to bridge this.
-    raw_session_ids = []
-    for r in results:
-        mid = r.get("memory_id") or r.get("id")
-        if mid and mid in mid_to_sid:
-            raw_session_ids.append(mid_to_sid[mid])
-        else:
-            # Fallback: try metadata (older uteke versions)
-            meta = r.get("metadata", {})
-            sid = meta.get("session_id")
-            if sid:
-                raw_session_ids.append(sid)
 
     # Deduplicate session_ids preserving rank order (first occurrence = highest rank).
     # When --chunk-sessions is enabled, multiple chunks from the same session
     # can appear in results. We keep only the first (best-ranked) occurrence
     # so that session-level Recall@k measures unique sessions, not chunks.
-    seen = set()
-    retrieved_session_ids = []
-    for sid in raw_session_ids:
-        if sid not in seen:
-            seen.add(sid)
-            retrieved_session_ids.append(sid)
+    def _dedup_ranking(raw_sids):
+        seen = set()
+        out = []
+        for sid in raw_sids:
+            if sid not in seen:
+                seen.add(sid)
+                out.append(sid)
+        return out
+
+    if fusion_mode:
+        # results = [ranking_primary, ranking_secondary] (lists of recall dicts)
+        per_ranking_sids = []
+        for res in results:
+            raw = []
+            for r in res:
+                mid = r.get("memory_id") or r.get("id")
+                if mid and mid in mid_to_sid:
+                    raw.append(mid_to_sid[mid])
+                else:
+                    meta = r.get("metadata", {})
+                    sid = meta.get("session_id")
+                    if sid:
+                        raw.append(sid)
+            per_ranking_sids.append(_dedup_ranking(raw))
+
+        # RRF fuse: primary (vector) ×1.5 + secondary (hybrid) ×1, k=60.
+        # Mirrors offline simulation exactly (plateau [1.3, 1.6] → 0.97).
+        scores = {}
+        primary_w = getattr(args, "fusion_primary_weight", 1.5)
+        k = 60
+        for i, sid in enumerate(per_ranking_sids[0]):
+            scores[sid] = scores.get(sid, 0.0) + primary_w / (k + i + 1)
+        for i, sid in enumerate(per_ranking_sids[1]):
+            scores[sid] = scores.get(sid, 0.0) + 1.0 / (k + i + 1)
+        retrieved_session_ids = sorted(scores, key=lambda s: -scores[s])
+    else:
+        raw_session_ids = []
+        for r in results:
+            mid = r.get("memory_id") or r.get("id")
+            if mid and mid in mid_to_sid:
+                raw_session_ids.append(mid_to_sid[mid])
+            else:
+                # Fallback: try metadata (older uteke versions)
+                meta = r.get("metadata", {})
+                sid = meta.get("session_id")
+                if sid:
+                    raw_session_ids.append(sid)
+        retrieved_session_ids = _dedup_ranking(raw_session_ids)
 
     # Temporal date-window boost (#1119): soft-boost sessions whose date falls
     # inside the question's temporal window ("last month", "in February",
@@ -375,6 +420,11 @@ def main():
     parser.add_argument("--strategy", default="vector",
                         choices=["vector", "fts5", "hybrid", "graph"],
                         help="Recall strategy (default: vector)")
+    parser.add_argument("--fusion", action="store_true",
+                        help="RRF-fuse two recall rankings: primary strategy ×1.5 + "
+                             "complementary (vector↔hybrid) ×1, k=60 (#1123)")
+    parser.add_argument("--fusion-primary-weight", type=float, default=1.5,
+                        help="RRF weight for the primary strategy ranking (default: 1.5)")
     parser.add_argument("--chunk-sessions", action="store_true",
                         help="Chunk long sessions into smaller memories to reduce embedding dilution")
     parser.add_argument("--chunk-size", type=int, default=2000,
@@ -404,6 +454,9 @@ def main():
     print(f"  Questions: {len(data)}")
     print(f"  Namespace: {args.namespace}")
     print(f"  Strategy: {args.strategy}")
+    if getattr(args, "fusion", False):
+        other = "vector" if args.strategy == "hybrid" else "hybrid"
+        print(f"  Fusion: enabled (RRF {args.strategy}×{args.fusion_primary_weight} + {other}×1, k=60)")
     if args.chunk_sessions:
         print(f"  Chunking: enabled (max {args.chunk_size} chars/session)")
     else:
