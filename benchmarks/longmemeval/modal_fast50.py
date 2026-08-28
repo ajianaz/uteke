@@ -99,12 +99,15 @@ def run_shard(spec: dict) -> dict:
     limit = spec["limit"]
     temporal = bool(spec.get("temporal", False))
     mmr_lambda = spec.get("mmr_lambda")  # None = OFF (default)
+    fusion = bool(spec.get("fusion", False))
 
     # Variant-keyed volume path: baseline and temporal shards must never
     # share cache entries, or resume would silently return stale results.
     variant = f"{strategy}_temporal" if temporal else strategy
     if mmr_lambda is not None:
         variant += f"_mmr{mmr_lambda}"
+    if fusion:
+        variant += "_fusion"
     # Dataset fingerprint: sha1 of the mounted dataset file. Cross-dataset
     # stale hits are possible without it (fast50 shard satisfies a 15Q run's
     # `len(prior) >= expected` check and is returned verbatim) — see #1129.
@@ -167,6 +170,7 @@ def run_shard(spec: dict) -> dict:
                 "--namespace", "lmeval",
                 *(["--temporal"] if temporal else []),
                 *(["--mmr-lambda", f"{mmr_lambda}"] if mmr_lambda is not None else []),
+                *(["--fusion"] if fusion else []),
                 *resume_args,
             ],
             capture_output=True, text=True, timeout=14100,  # 14400 - buffer commit
@@ -232,6 +236,7 @@ def main(
     outdir: str = "",
     temporal: bool = False,
     mmr_lambda: float = 0.0,
+    fusion: bool = False,
 ) -> None:
     if not MODEL_SOURCE.exists():
         sys.exit(f"Model source not found: {MODEL_SOURCE}")
@@ -242,6 +247,8 @@ def main(
     variant = f"{strategy}_temporal" if temporal else strategy
     if lam is not None:
         variant += f"_mmr{lam}"
+    if fusion:
+        variant += "_fusion"
     outdir = outdir or "results_modal_" + variant + (f"_{limit}q" if limit else "")
     out_path = pathlib.Path(outdir) / "retrieval_results.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -266,7 +273,7 @@ def main(
     # Strided slicing means shard i covers data[i::num_shards].
     inputs = [
         {"strategy": strategy, "shard_idx": i, "num_shards": num_shards, "limit": limit,
-         "temporal": temporal, "mmr_lambda": lam}
+         "temporal": temporal, "mmr_lambda": lam, "fusion": fusion}
         for i in range(num_shards)
     ]
     merged, seen = [], set()

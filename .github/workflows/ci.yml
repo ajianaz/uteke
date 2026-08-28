@@ -107,6 +107,9 @@ jobs:
       # …and that it still builds into the shippable binaries (#1109). Testing
       # only --lib let feature-unification break packaging silently.
       - run: cargo build -p uteke-cli -p uteke-server -p uteke-mcp --no-default-features --features vecq
+      # #1131: the embedder-less profile (cloud/OpenAI embedders only, no
+      # onnx) must keep compiling — the embedding cache is backend-agnostic.
+      - run: cargo check -p uteke-core --no-default-features --features vecq
 
   docs-check:
     name: API Docs Fresh
