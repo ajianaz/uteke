@@ -631,6 +631,13 @@ impl crate::Uteke {
                     rrf
                 }
             }
+            // Fusion (#1123): wired in a follow-up commit; parse/serde first.
+            // Loud error (never a silent fallback to another strategy).
+            RecallStrategy::Fusion => {
+                return Err(Error::Validation(
+                    "fusion strategy is not wired yet (#1123)".to_string(),
+                ));
+            }
         };
 
         // Cache results for future queries (without min_score filtering,
