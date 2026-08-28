@@ -602,43 +602,14 @@ impl crate::Uteke {
         // min_score is passed as 0.0 to the underlying paths: thresholding
         // happens AFTER boosts (on both cache-miss and cache-hit reads) so
         // cold and warm calls filter identical boosted score sets.
-        let results = match strategy {
-            RecallStrategy::Vector => {
-                self.recall(query, boost_window, tags_filter, namespace, 0.0, None, None)?
-            }
-            RecallStrategy::Fts5 => {
-                self.recall_fts5_only(query, boost_window, tags_filter, namespace, 0.0)?
-            }
-            // Hybrid (RRF): min_score is passed but not used for filtering.
-            // RRF scores are rank-based, not cosine similarity. Applying a
-            // cosine threshold to RRF scores would incorrectly filter results.
-            RecallStrategy::Hybrid => {
-                self.recall_rrf(query, boost_window, tags_filter, namespace, min_score)?
-            }
-            // Graph (#378): hybrid RRF, then fuse graph-signal boosts.
-            // The boost is additive + log-scaled, so isolated memories are
-            // untouched and well-connected memories drift upward. Reranking
-            // happens *before* caching so cache entries store the final scores.
-            RecallStrategy::Graph => {
-                let rrf =
-                    self.recall_rrf(query, boost_window, tags_filter, namespace, min_score)?;
-                if self.graph_rerank_config.enabled && !rrf.is_empty() {
-                    let ids: Vec<String> = rrf.iter().map(|r| r.memory.id.clone()).collect();
-                    let signals =
-                        crate::graph_rerank::compute_graph_signals(&self.store.conn, &ids)?;
-                    crate::graph_rerank::rerank_with_graph(rrf, &signals, &self.graph_rerank_config)
-                } else {
-                    rrf
-                }
-            }
-            // Fusion (#1123): wired in a follow-up commit; parse/serde first.
-            // Loud error (never a silent fallback to another strategy).
-            RecallStrategy::Fusion => {
-                return Err(Error::Validation(
-                    "fusion strategy is not wired yet (#1123)".to_string(),
-                ));
-            }
-        };
+        let results = self.compute_recall(
+            strategy,
+            query,
+            boost_window,
+            tags_filter,
+            namespace,
+            min_score,
+        )?;
 
         // Cache results for future queries (without min_score filtering,
         // so cached results are reusable for any threshold). The cached set
@@ -661,6 +632,62 @@ impl crate::Uteke {
         }
         results.truncate(limit);
         Ok(results)
+    }
+
+    /// Raw strategy computation below the cache layer. Shared by the
+    /// dispatch path (cache-miss) and by Fusion, which runs two
+    /// sub-strategies and fuses their rankings (#1123).
+    ///
+    /// Callers must NOT cache inside this method — the dispatcher owns the
+    /// cache put and applies salience/recency boosts exactly once.
+    fn compute_recall(
+        &self,
+        strategy: RecallStrategy,
+        query: &str,
+        boost_window: usize,
+        tags_filter: Option<&[&str]>,
+        namespace: Option<&str>,
+        min_score: f32,
+    ) -> Result<Vec<SearchResult>, Error> {
+        match strategy {
+            RecallStrategy::Vector => {
+                self.recall(query, boost_window, tags_filter, namespace, 0.0, None, None)
+            }
+            RecallStrategy::Fts5 => {
+                self.recall_fts5_only(query, boost_window, tags_filter, namespace, 0.0)
+            }
+            // Hybrid (RRF): min_score is passed but not used for filtering.
+            // RRF scores are rank-based, not cosine similarity. Applying a
+            // cosine threshold to RRF scores would incorrectly filter results.
+            RecallStrategy::Hybrid => {
+                self.recall_rrf(query, boost_window, tags_filter, namespace, min_score)
+            }
+            // Graph (#378): hybrid RRF, then fuse graph-signal boosts.
+            // The boost is additive + log-scaled, so isolated memories are
+            // untouched and well-connected memories drift upward. Reranking
+            // happens *before* caching so cache entries store the final scores.
+            RecallStrategy::Graph => {
+                let rrf =
+                    self.recall_rrf(query, boost_window, tags_filter, namespace, min_score)?;
+                if self.graph_rerank_config.enabled && !rrf.is_empty() {
+                    let ids: Vec<String> = rrf.iter().map(|r| r.memory.id.clone()).collect();
+                    let signals =
+                        crate::graph_rerank::compute_graph_signals(&self.store.conn, &ids)?;
+                    Ok(crate::graph_rerank::rerank_with_graph(
+                        rrf,
+                        &signals,
+                        &self.graph_rerank_config,
+                    ))
+                } else {
+                    Ok(rrf)
+                }
+            }
+            // Fusion (#1123): wired in a follow-up commit; parse/serde first.
+            // Loud error (never a silent fallback to another strategy).
+            RecallStrategy::Fusion => Err(Error::Validation(
+                "fusion strategy is not wired yet (#1123)".to_string(),
+            )),
+        }
     }
 
     /// Apply salience/recency boosts in place, then re-sort and truncate.
