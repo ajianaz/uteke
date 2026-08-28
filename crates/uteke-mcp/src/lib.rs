@@ -275,7 +275,7 @@ fn tool_recall() -> Value {
                 "tags": { "type": "array", "items": { "type": "string" }, "description": "Filter by tags (optional)" },
                 "min_score": { "type": "number", "description": "Minimum similarity score 0..1 (default: 0.0)" },
                 "type": { "type": "string", "enum": ["all", "memory", "doc"], "description": "Search type: 'all' (default, unified), 'memory', or 'doc'" },
-                "strategy": { "type": "string", "enum": ["hybrid", "vector", "fts5", "graph"], "description": "Recall strategy: 'hybrid' (default, vector+FTS5 via RRF), 'vector' (similarity only), 'fts5' (keyword only), or 'graph' (hybrid + graph-signal reranking)", "default": "hybrid" }
+                "strategy": { "type": "string", "enum": ["fusion", "hybrid", "vector", "fts5", "graph"], "description": "Recall strategy: 'fusion' (default since 0.16.0, weighted RRF of vector×1.7 + hybrid×1, #1123), 'hybrid' (vector+FTS5 via RRF), 'vector' (similarity only), 'fts5' (keyword only), or 'graph' (hybrid + graph-signal reranking)", "default": "fusion" }
             },
             "required": ["query"]
         }
@@ -885,19 +885,19 @@ fn exec_recall(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
         }
     };
 
-    // Parse optional recall strategy (#1035): default hybrid, matching the
-    // CLI and HTTP defaults. Unknown values are a loud error (JSON-RPC -32603),
-    // never a silent fallback.
+    // Parse optional recall strategy (#1035): default fusion since 0.16.0
+    // (#1123), matching the CLI and HTTP defaults. Unknown values are a loud
+    // error (JSON-RPC -32603), never a silent fallback.
     let strategy = match args["strategy"].as_str() {
         Some(name) => match uteke_core::RecallStrategy::from_str_opt(name) {
             Some(s) => s,
             None => {
                 return Err(format!(
-                    "Invalid strategy: '{name}'. Use 'vector', 'fts5', 'hybrid', or 'graph'."
+                    "Invalid strategy: '{name}'. Use 'vector', 'fts5', 'hybrid', 'graph', or 'fusion'."
                 ));
             }
         },
-        None => uteke_core::RecallStrategy::Hybrid,
+        None => uteke_core::RecallStrategy::Fusion,
     };
 
     // Use unified search when type is specified or default (all).
