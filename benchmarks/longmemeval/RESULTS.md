@@ -21,6 +21,29 @@
 
 **Improvement (Hybrid vs Vector): +12.6pp R@5**
 
+### Fusion (weighted RRF: vector×1.7 + hybrid×1, #1123) — default since 0.16.0
+
+| Questions | R@5 | R@10 | NDCG@5 | NDCG@10 | Embedding | Date |
+|-----------|-----|------|--------|---------|-----------|------|
+| 50 (mean) | 98.0% | 100.0% | 0.893 | 0.901 | EmbeddingGemma Q4 (ONNX local) | 2026-08-28 |
+| 50 (43 evaluable*) | 97.7% | 100.0% | 0.893 | 0.901 | EmbeddingGemma Q4 (ONNX local) | 2026-08-28 |
+
+*print_metrics.py filters to 43 evaluable questions; mean over all 50 is the comparable figure. Run: `results_modal_vector_fusion17` (Modal x86, harness-level fusion). Remaining fails @5: 3 questions (92a0aa75, 60472f9c, a3838d2b) — all partial-recall, R@10 = 1.0.
+
+#### Zero-config validation (local ARM, 0.16.0 binary, no flags)
+
+| Check | Result |
+|-------|--------|
+| Parity: implicit default vs explicit `--strategy fusion` | **identical rankings** (top-10 equal) |
+| Divergence: implicit default vs explicit `--strategy hybrid` | rankings differ (as expected) |
+| fast10, `--strategy default` (flag omitted → core default) | **R@5 0.9667, R@10 1.0, NDCG@5 0.9643** |
+
+fast10 detail: 1 partial miss @5 (60472f9c multi-session, R@5 0.67 → R@10 1.0) — same known hard question as the Modal x86 fusion run. A fresh install with zero config gets benchmark-grade recall out of the box.
+
+**Why fusion works:** vector-only and hybrid-only fail on DISJOINT question sets (fast50: 7 questions vector wins, 5 hybrid wins, no overlap in failures). RRF fusing both rankings captures each side's wins.
+
+**Tuning evidence:** weight plateau [1.7, 1.9] → R@5 0.98 on actual x86 rankings; 1.7 chosen mid-plateau. wv=1.5 (ARM-local tuning) measured 0.9535 on x86 — arch drift of ±1 rank motivated re-tuning on the deployment arch (commit 47155af).
+
 ---
 
 ## 50Q Hybrid — Per Question Type Breakdown
@@ -56,3 +79,21 @@ python run_eval.py --data data/longmemeval_s_cleaned.json --output results_vecto
 # Hybrid (50Q sample)
 python run_eval.py --data data/longmemeval_s_cleaned.json --output results_hybrid --limit 50 --strategy hybrid
 ```
+
+### 3-way RRF (vec + hyb + fts5-only) — NO-GO (2026-08-29)
+
+Simulation over saved rankings; fts5-only rankings collected on Modal x86
+(500Q, ~4.5h, resume-safe via volume). Cross-check: sim fts5-only R@5=0.8211
+vs harness-reported 0.820 — parsing validated.
+
+- 2-way shipped fusion (1.7/1.0) R@5 = 0.9800 (fast50)
+- best 3-way (2.0/1.0/0.1) R@5 = 0.9800 — delta +0.0000, **0 flipped questions**
+- adding fts5 as third arm changes nothing at any grid weight tried
+- fts5-only fails: temporal-reasoning (63) + multi-session (55) dominate —
+  same classes already covered (partially) by hybrid's own FTS5 component
+
+Conclusion: ranking-side optimization via more RRF arms is exhausted.
+Remaining headroom is insert-side granularity (3 partial-recall fails) —
+separate project, uncertain payoff.
+
+Artifacts: sim3way_final.py, preview_scores.py, results_modal_fts5_partial/

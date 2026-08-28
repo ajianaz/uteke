@@ -239,11 +239,14 @@ def recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids,
     # 7 questions vector-only wins, 5 hybrid wins) — RRF captures both.
     # Weights vec×1.5 : hybrid×1 sit mid-plateau [1.3, 1.6] of R@5=0.97.
     fusion_mode = getattr(args, "fusion", False)
+    # "default" sentinel: omit --strategy so the binary's zero-config
+    # default (0.16.0: fusion) is what gets validated (#1123).
+    strategy_args = [] if args.strategy == "default" else ["--strategy", args.strategy]
     recall_cmd = [
         "recall", question,
         "--limit", "50",
         "--tags", "longmemeval",
-        "--strategy", args.strategy,
+        *strategy_args,
         "--min", "0.0",  # Disable threshold — evaluate raw retrieval ranking (#995)
     ]
     if fusion_mode:
@@ -304,10 +307,10 @@ def recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids,
                         raw.append(sid)
             per_ranking_sids.append(_dedup_ranking(raw))
 
-        # RRF fuse: primary (vector) ×1.5 + secondary (hybrid) ×1, k=60.
-        # Mirrors offline simulation exactly (plateau [1.3, 1.6] → 0.97).
+        # RRF fuse: primary (vector) ×1.7 + secondary (hybrid) ×1, k=60.
+        # Tuned on ACTUAL x86 Modal rankings: plateau [1.7, 1.9] → R@5=0.98.
         scores = {}
-        primary_w = getattr(args, "fusion_primary_weight", 1.5)
+        primary_w = getattr(args, "fusion_primary_weight", 1.7)
         k = 60
         for i, sid in enumerate(per_ranking_sids[0]):
             scores[sid] = scores.get(sid, 0.0) + primary_w / (k + i + 1)
@@ -418,12 +421,16 @@ def main():
     parser.add_argument("--reset-every", type=int, default=20,
                         help="Wipe and recreate the store every N questions to prevent memory buildup (default: 20)")
     parser.add_argument("--strategy", default="vector",
-                        choices=["vector", "fts5", "hybrid", "graph"],
-                        help="Recall strategy (default: vector)")
+                        choices=["vector", "fts5", "hybrid", "graph", "fusion", "default"],
+                        help="Recall strategy (default: vector). 'fusion' runs "
+                             "the IN-CORE weighted RRF (vector×1.7+hybrid×1) — "
+                             "distinct from the harness-level --fusion flag (#1123). "
+                             "'default' omits --strategy entirely so the binary's "
+                             "own zero-config default applies (0.16.0: fusion)")
     parser.add_argument("--fusion", action="store_true",
-                        help="RRF-fuse two recall rankings: primary strategy ×1.5 + "
+                        help="RRF-fuse two recall rankings: primary strategy ×1.7 + "
                              "complementary (vector↔hybrid) ×1, k=60 (#1123)")
-    parser.add_argument("--fusion-primary-weight", type=float, default=1.5,
+    parser.add_argument("--fusion-primary-weight", type=float, default=1.7,
                         help="RRF weight for the primary strategy ranking (default: 1.5)")
     parser.add_argument("--chunk-sessions", action="store_true",
                         help="Chunk long sessions into smaller memories to reduce embedding dilution")

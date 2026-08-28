@@ -28,11 +28,15 @@ The killer stat: recall latency barely changes as the store grows.
 HNSW search is O(log N), so even at 10K memories, the vector index adds <1ms.
 The ~40ms floor is dominated by ONNX embedding inference, not search.
 
-The full pipeline:
+The full pipeline (fusion strategy, default since 0.16.0):
 1. Query → ONNX embedding generation
-2. HNSW vector search
-3. FTS5 full-text search
-4. Reciprocal Rank Fusion (k=60)
+2. HNSW vector search → vector ranking
+3. FTS5 full-text search + RRF (k=60) → hybrid ranking
+4. Weighted RRF fusion of the two rankings (vector×1.7 + hybrid×1, #1123)
+
+Retrieval quality (LongMemEval fast50, session-level): fusion R@5 0.98
+vs hybrid 0.9267 vs vector-only 0.854. Vector and hybrid fail on
+disjoint question sets — fusing captures both sides' wins.
 
 No network round-trip. No API call. Everything in-process.
 

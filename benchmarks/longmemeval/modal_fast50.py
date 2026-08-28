@@ -100,6 +100,7 @@ def run_shard(spec: dict) -> dict:
     temporal = bool(spec.get("temporal", False))
     mmr_lambda = spec.get("mmr_lambda")  # None = OFF (default)
     fusion = bool(spec.get("fusion", False))
+    fusion_w = spec.get("fusion_weight")  # primary weight, None = default
 
     # Variant-keyed volume path: baseline and temporal shards must never
     # share cache entries, or resume would silently return stale results.
@@ -107,7 +108,7 @@ def run_shard(spec: dict) -> dict:
     if mmr_lambda is not None:
         variant += f"_mmr{mmr_lambda}"
     if fusion:
-        variant += "_fusion"
+        variant += f"_fusion{fusion_w}"
     # Dataset fingerprint: sha1 of the mounted dataset file. Cross-dataset
     # stale hits are possible without it (fast50 shard satisfies a 15Q run's
     # `len(prior) >= expected` check and is returned verbatim) — see #1129.
@@ -170,7 +171,7 @@ def run_shard(spec: dict) -> dict:
                 "--namespace", "lmeval",
                 *(["--temporal"] if temporal else []),
                 *(["--mmr-lambda", f"{mmr_lambda}"] if mmr_lambda is not None else []),
-                *(["--fusion"] if fusion else []),
+                *(["--fusion", "--fusion-primary-weight", f"{fusion_w}"] if fusion and fusion_w is not None else (["--fusion"] if fusion else [])),
                 *resume_args,
             ],
             capture_output=True, text=True, timeout=14100,  # 14400 - buffer commit
@@ -237,6 +238,7 @@ def main(
     temporal: bool = False,
     mmr_lambda: float = 0.0,
     fusion: bool = False,
+    fusion_weight: float = 0.0,
 ) -> None:
     if not MODEL_SOURCE.exists():
         sys.exit(f"Model source not found: {MODEL_SOURCE}")
@@ -244,11 +246,12 @@ def main(
         sys.exit(f"Dataset not found: {REPO_DIR / 'data' / DATA_FILE}")
 
     lam: float | None = mmr_lambda if mmr_lambda > 0 else None  # 0/omitted = OFF
+    fw: float | None = fusion_weight if fusion_weight > 0 else None  # None = harness default
     variant = f"{strategy}_temporal" if temporal else strategy
     if lam is not None:
         variant += f"_mmr{lam}"
     if fusion:
-        variant += "_fusion"
+        variant += f"_fusion{fw}"
     outdir = outdir or "results_modal_" + variant + (f"_{limit}q" if limit else "")
     out_path = pathlib.Path(outdir) / "retrieval_results.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -273,7 +276,7 @@ def main(
     # Strided slicing means shard i covers data[i::num_shards].
     inputs = [
         {"strategy": strategy, "shard_idx": i, "num_shards": num_shards, "limit": limit,
-         "temporal": temporal, "mmr_lambda": lam, "fusion": fusion}
+         "temporal": temporal, "mmr_lambda": lam, "fusion": fusion, "fusion_weight": fw}
         for i in range(num_shards)
     ]
     merged, seen = [], set()
