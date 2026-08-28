@@ -21,6 +21,19 @@
 
 **Improvement (Hybrid vs Vector): +12.6pp R@5**
 
+### Fusion (weighted RRF: vector×1.7 + hybrid×1, #1123) — default since 0.16.0
+
+| Questions | R@5 | R@10 | NDCG@5 | NDCG@10 | Embedding | Date |
+|-----------|-----|------|--------|---------|-----------|------|
+| 50 (mean) | 98.0% | 100.0% | 0.893 | 0.901 | EmbeddingGemma Q4 (ONNX local) | 2026-08-28 |
+| 50 (43 evaluable*) | 97.7% | 100.0% | 0.893 | 0.901 | EmbeddingGemma Q4 (ONNX local) | 2026-08-28 |
+
+*print_metrics.py filters to 43 evaluable questions; mean over all 50 is the comparable figure. Run: `results_modal_vector_fusion17` (Modal x86, harness-level fusion). Remaining fails @5: 3 questions (92a0aa75, 60472f9c, a3838d2b) — all partial-recall, R@10 = 1.0.
+
+**Why fusion works:** vector-only and hybrid-only fail on DISJOINT question sets (fast50: 7 questions vector wins, 5 hybrid wins, no overlap in failures). RRF fusing both rankings captures each side's wins.
+
+**Tuning evidence:** weight plateau [1.7, 1.9] → R@5 0.98 on actual x86 rankings; 1.7 chosen mid-plateau. wv=1.5 (ARM-local tuning) measured 0.9535 on x86 — arch drift of ±1 rank motivated re-tuning on the deployment arch (commit 47155af).
+
 ---
 
 ## 50Q Hybrid — Per Question Type Breakdown
