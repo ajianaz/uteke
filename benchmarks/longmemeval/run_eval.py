@@ -304,10 +304,10 @@ def recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids,
                         raw.append(sid)
             per_ranking_sids.append(_dedup_ranking(raw))
 
-        # RRF fuse: primary (vector) ×1.5 + secondary (hybrid) ×1, k=60.
-        # Mirrors offline simulation exactly (plateau [1.3, 1.6] → 0.97).
+        # RRF fuse: primary (vector) ×1.7 + secondary (hybrid) ×1, k=60.
+        # Tuned on ACTUAL x86 Modal rankings: plateau [1.7, 1.9] → R@5=0.98.
         scores = {}
-        primary_w = getattr(args, "fusion_primary_weight", 1.5)
+        primary_w = getattr(args, "fusion_primary_weight", 1.7)
         k = 60
         for i, sid in enumerate(per_ranking_sids[0]):
             scores[sid] = scores.get(sid, 0.0) + primary_w / (k + i + 1)
@@ -421,9 +421,9 @@ def main():
                         choices=["vector", "fts5", "hybrid", "graph"],
                         help="Recall strategy (default: vector)")
     parser.add_argument("--fusion", action="store_true",
-                        help="RRF-fuse two recall rankings: primary strategy ×1.5 + "
+                        help="RRF-fuse two recall rankings: primary strategy ×1.7 + "
                              "complementary (vector↔hybrid) ×1, k=60 (#1123)")
-    parser.add_argument("--fusion-primary-weight", type=float, default=1.5,
+    parser.add_argument("--fusion-primary-weight", type=float, default=1.7,
                         help="RRF weight for the primary strategy ranking (default: 1.5)")
     parser.add_argument("--chunk-sessions", action="store_true",
                         help="Chunk long sessions into smaller memories to reduce embedding dilution")
