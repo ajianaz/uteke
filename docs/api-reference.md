@@ -656,9 +656,10 @@ Default: 0.0 (no filtering). Use `strict=true` for 0.5 default (#995). |
 | `namespace` | any | No |  |
 | `query` | `string` | Yes |  |
 | `search_type` | any | No | Search type filter: "all" (default, unified), "memory", or "doc" (#531). |
-| `strategy` | any | No | Recall strategy: "hybrid" (default), "vector", "fts5", or "graph" (#900, #1034).
+| `strategy` | any | No | Recall strategy: "fusion" (default since 0.16.0), "vector", "fts5",
+"hybrid", or "graph" (#900, #1034, #1123).
 When absent, the server falls back to `[recall] default_strategy` from
-uteke.toml, then to "hybrid" — matching the CLI default.
+uteke.toml, then to "fusion" — matching the CLI default.
 Invalid values return HTTP 400. |
 | `strict` | `boolean` | No | Use strict threshold (defaults to 0.5 if min_score not set). |
 | `tags` | ``string``[] | No |  |

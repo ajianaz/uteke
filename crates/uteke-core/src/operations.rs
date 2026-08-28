@@ -2146,6 +2146,7 @@ mod fusion_strategy_tests {
     /// the explicit Fusion strategy, and asserts the on-topic memory surfaces
     /// in the top results. Also asserts cold/warm parity through the cache.
     #[test]
+    #[ignore = "requires ONNX embedder (model download) in CI"]
     fn fusion_recall_finds_on_topic_memory() {
         let dir = std::env::temp_dir().join(format!("fusion-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -2229,6 +2230,7 @@ mod fusion_strategy_tests {
     /// store returns empty results (both sub-rankings empty), NOT an error
     /// and NOT a fallback ranking.
     #[test]
+    #[ignore = "requires ONNX embedder (model download) in CI"]
     fn fusion_recall_empty_store_returns_empty() {
         let dir = std::env::temp_dir().join(format!("fusion-e-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
