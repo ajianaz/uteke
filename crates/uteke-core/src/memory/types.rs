@@ -748,7 +748,6 @@ pub struct SimilarPair {
 #[serde(rename_all = "kebab-case")]
 pub enum RecallStrategy {
     /// Hybrid: vector + FTS5 merged via Reciprocal Rank Fusion.
-    #[default]
     Hybrid,
     /// Vector similarity only (original behavior).
     Vector,
@@ -761,6 +760,9 @@ pub enum RecallStrategy {
     /// (×1). Vector and hybrid fail on disjoint question sets; fusing both
     /// captures each other's wins. LongMemEval fast50 evidence: R@5
     /// 0.9267 (hybrid) → 0.98 (fusion), R@10 1.0.
+    ///
+    /// DEFAULT since 0.16.0: the zero-config recall strategy.
+    #[default]
     Fusion,
 }
 
@@ -802,6 +804,12 @@ mod tests {
         // Exact-match parsing like every other variant (uppercase rejected).
         assert_eq!(RecallStrategy::from_str_opt("FUSION"), None);
         assert_eq!(RecallStrategy::from_str_opt("fusio"), None);
+    }
+
+    #[test]
+    fn recall_strategy_default_is_fusion() {
+        // #1123: Fusion is the zero-config default since 0.16.0.
+        assert_eq!(RecallStrategy::default(), RecallStrategy::Fusion);
     }
 
     #[test]
