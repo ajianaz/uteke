@@ -108,9 +108,10 @@ pub enum Commands {
         /// Use strict threshold from config (min_score_strict)
         #[arg(long)]
         strict: bool,
-        /// Recall strategy: vector, fts5, hybrid, or graph (graph = hybrid +
+        /// Recall strategy: vector, fts5, hybrid, graph, or fusion (fusion =
+        /// weighted RRF of vector×1.7 + hybrid×1, #1123; graph = hybrid +
         /// graph-signal reranking, #378). Defaults to config's
-        /// `[recall].default_strategy` (hybrid).
+        /// `[recall].default_strategy` (fusion).
         #[arg(long)]
         strategy: Option<String>,
         /// Enable salience boost (how much each result matters) (#352).
