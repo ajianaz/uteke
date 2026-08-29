@@ -2408,8 +2408,76 @@ fn resolve_db_path(db_path: &Path) -> Result<String, Error> {
 
 #[cfg(test)]
 mod tests {
-    /// #1078 P0 batch 4: validate_input_with_limits boundary matrix —
-    /// previously zero direct tests on the configurable-limit variant.
+    /// #1078 P0: ensure_embedder lazy-init branches — unknown backend
+    /// (rejected eagerly at open), custom backend without embedder
+    /// (immediate error), openai without API key (deterministic init error,
+    /// cached transient → identical message on 2nd call).
+    #[test]
+    fn ensure_embedder_unknown_backend_errors_not_cached() {
+        // Unknown backends are rejected eagerly at open() time (defensive:
+        // ensure_embedder re-checks, but open fails first with the same message).
+        let r = Uteke::open_with_embedding_and_graph(
+            ":memory:",
+            "not-a-backend",
+            EmbeddingSettings::default(),
+            TierConfig::default(),
+            RecallConfig::default(),
+            graph_rerank::GraphRerankConfig::default(),
+        );
+        let e = match r {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("unknown backend must fail at open()"),
+        };
+        assert!(
+            e.contains("Unknown embedding backend: 'not-a-backend'"),
+            "got: {e}"
+        );
+    }
+
+    #[test]
+    fn ensure_embedder_custom_without_embedder_errors() {
+        let u = Uteke::open_with_embedding_and_graph(
+            ":memory:",
+            "custom",
+            EmbeddingSettings::default(),
+            TierConfig::default(),
+            RecallConfig::default(),
+            graph_rerank::GraphRerankConfig::default(),
+        )
+        .unwrap();
+        let e = u.embed_text("x").unwrap_err().to_string();
+        assert!(
+            e.contains("Custom embedder backend set but no embedder was provided"),
+            "got: {e}"
+        );
+    }
+
+    #[test]
+    fn ensure_embedder_openai_missing_key_error_is_cached() {
+        // No UTEKE_EMBEDDING_API_KEY / OPENAI_API_KEY in env → deterministic
+        // init failure at OpenAiEmbedder::new, cached as transient (#822).
+        unsafe {
+            std::env::remove_var("UTEKE_EMBEDDING_API_KEY");
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        let u = Uteke::open_with_embedding_and_graph(
+            ":memory:",
+            "openai",
+            EmbeddingSettings::default(),
+            TierConfig::default(),
+            RecallConfig::default(),
+            graph_rerank::GraphRerankConfig::default(),
+        )
+        .unwrap();
+        let e1 = u.embed_text("x").unwrap_err().to_string();
+        assert!(e1.contains("requires an API key"), "got: {e1}");
+        let e2 = u.embed_text("x").unwrap_err().to_string();
+        assert!(
+            e2.contains("previously failed (cached)"),
+            "2nd call must hit the #822 cache: {e2}"
+        );
+    }
+
     #[test]
     fn validate_input_with_limits_matrix() {
         use super::validate_input_with_limits;
