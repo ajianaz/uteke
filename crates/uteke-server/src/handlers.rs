@@ -12,6 +12,7 @@ use tiny_http::{Header, Method, Request, Response, StatusCode};
 use tracing::{error, warn};
 
 use uteke_core::Uteke;
+use uteke_core::memory::types::validate_author_type;
 
 use crate::context::{self, ApiRole, AuthResult, ReqCtx};
 use crate::types::*;
@@ -181,6 +182,15 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                     Some(serde_json::Value::Object(meta))
                 };
 
+                // Validate author_type BEFORE any write (#1083, cora finding):
+                // invalid values must reject the whole request — inserting then
+                // failing would leave a persisted memory the client believes failed.
+                if let Some(at) = req_data.author_type.as_deref() {
+                    if let Err(e) = validate_author_type(at) {
+                        return ctx.error_response_for(req, 400, e.to_string());
+                    }
+                }
+
                 let result = if req_data.detect_contradiction {
                     uteke
                         .remember_with_contradiction(
@@ -211,7 +221,24 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                                 error!("Failed to set source for {id}: {e}");
                             }
                         }
-                        ctx.ok_response_for(req, &serde_json::json!({"id": id}))
+                        // Set author type after storage (#1083). Validate before
+                        // writing so invalid values fail loudly (400, not silent).
+                        if let Some(at) = req_data.author_type.as_deref() {
+                            if let Err(e) = uteke.set_author_type(&id, at) {
+                                return ctx.error_response_for(req, 400, e.to_string());
+                            }
+                        }
+                        // Echo author_type so clients can confirm what was
+                        // recorded (#1106) — data was already stored correctly,
+                        // the response just omitted the field. Default mirrors
+                        // the schema default (author_type DEFAULT 'agent', #1083).
+                        ctx.ok_response_for(
+                            req,
+                            &serde_json::json!({
+                                "id": id,
+                                "author_type": req_data.author_type.clone().unwrap_or_else(|| "agent".to_string()),
+                            }),
+                        )
                     }
                     Err(e) => {
                         error!("Internal error: {e}");
@@ -333,12 +360,14 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                                 req,
                                 400,
                                 format!(
-                                    "Invalid strategy: '{name}'. Use 'vector', 'fts5', 'hybrid', or 'graph'."
+                                    "Invalid strategy: '{name}'. Use 'vector', 'fts5', 'hybrid', 'graph', or 'fusion'."
                                 ),
                             );
                         }
                     },
-                    None => uteke_core::RecallStrategy::Hybrid,
+                    // Implicit default since 0.16.0 (#1123): fusion.
+                    // Matches the core enum default and CLI default_strategy.
+                    None => uteke_core::RecallStrategy::Fusion,
                 };
 
                 // Unified search path (#531): when search_type is specified,
@@ -977,6 +1006,69 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
             }
         }
 
+        // ── Room Consolidation (#1088) ───────────────────────────────────
+        // Dry-run by default; `apply: true` executes with a hard budget cap.
+        // Blocked for read-only tokens (not in read_only_post_paths).
+        (Method::Post, "/room/consolidate") => {
+            #[derive(Deserialize)]
+            struct RoomConsolidateRequest {
+                room_id: String,
+                /// Execute the plan (LLM calls + writes). Default false = dry-run.
+                #[serde(default)]
+                apply: bool,
+                /// Max LLM requests for this run. Default 10, hard cap 100.
+                #[serde(default = "default_max_calls")]
+                max_calls: usize,
+            }
+            fn default_max_calls() -> usize {
+                10
+            }
+            match read_body::<RoomConsolidateRequest>(req.as_reader()) {
+                Ok(req_data) => {
+                    let max_calls = req_data.max_calls.min(100);
+                    let result = if req_data.apply {
+                        let ext = resolve_extraction_config(ctx, None, None, None);
+                        if ext.api_key.is_empty() {
+                            return ctx.error_response_for(
+                                req,
+                                503,
+                                "Consolidation apply requires server-side extraction LLM config",
+                            );
+                        }
+                        match uteke_core::consolidation_api::consolidate_room(
+                            &uteke,
+                            &req_data.room_id,
+                            &ext,
+                            max_calls,
+                        ) {
+                            Ok(exec) => serde_json::to_value(&exec).unwrap_or_default(),
+                            Err(e) => {
+                                error!("Internal error: {e}");
+                                return ctx.error_response_for(req, 500, "Internal server error");
+                            }
+                        }
+                    } else {
+                        match uteke_core::consolidation_api::plan_room(&uteke, &req_data.room_id) {
+                            Ok(dry) => serde_json::json!({
+                                "room_id": req_data.room_id,
+                                "dry_run": true,
+                                "total_memories": dry.plan.total_memories,
+                                "batches": dry.plan.batches.len(),
+                                "estimated_llm_calls": dry.plan.batches.len().min(max_calls),
+                                "plan": dry.plan,
+                            }),
+                            Err(e) => {
+                                error!("Internal error: {e}");
+                                return ctx.error_response_for(req, 500, "Internal server error");
+                            }
+                        }
+                    };
+                    ctx.ok_response_for(req, &result)
+                }
+                Err(e) => ctx.error_response_for(req, 400, e),
+            }
+        }
+
         // ── DEPRECATED: POST /room/document → /room/summary-document (#735)
         (Method::Post, "/room/document") => {
             warn!(
@@ -1244,15 +1336,50 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         // ── Room Recall (semantic with optional fallback to chronological) ──
         (Method::Post, "/room/recall") => match read_body::<RoomRecallRequest>(req.as_reader()) {
             Ok(req_data) => {
+                // Time-travel: parse & validate `at` before any query so an
+                // invalid timestamp fails loudly (400) instead of being
+                // silently ignored (#1082).
+                let point_in_time = match req_data.at.as_deref() {
+                    Some(at_str) => match chrono::DateTime::parse_from_rfc3339(at_str) {
+                        Ok(dt) => Some(dt.with_timezone(&chrono::Utc)),
+                        Err(_) => {
+                            return ctx.error_response_for(
+                                req,
+                                400,
+                                format!(
+                                    "Invalid 'at' timestamp: {at_str}. Use RFC3339 format (e.g. 2026-06-01T12:00:00Z)"
+                                ),
+                            );
+                        }
+                    },
+                    None => None,
+                };
                 let query = req_data.query.as_deref().unwrap_or("").trim();
                 if query.is_empty() {
                     // No query provided — fall back to chronological recall (#785)
+                    // Over-fetch when time-traveling: the SQL LIMIT applies
+                    // before the temporal post-filter, so fetch extra rows
+                    // and truncate after filtering (cora MAJOR on #1085).
+                    let fetch_limit = if point_in_time.is_some() && req_data.limit > 0 {
+                        req_data.limit.saturating_mul(3).max(req_data.limit + 10)
+                    } else {
+                        req_data.limit
+                    };
                     match uteke.recall_room(
                         &req_data.room_id,
                         req_data.author.as_deref(),
-                        req_data.limit,
+                        fetch_limit,
                     ) {
-                        Ok(memories) => ctx.ok_response_for(req, &memories),
+                        Ok(memories) => {
+                            let mut memories = match point_in_time {
+                                Some(pit) => filter_room_memories_at_time(memories, pit),
+                                None => memories,
+                            };
+                            if point_in_time.is_some() && req_data.limit > 0 {
+                                memories.truncate(req_data.limit);
+                            }
+                            ctx.ok_response_for(req, &memories)
+                        }
                         Err(e) => {
                             error!("Internal error: {e}");
                             ctx.error_response_for(req, 500, "Internal server error")
@@ -1273,7 +1400,20 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                         req_data.author.as_deref(),
                         min_score,
                     ) {
-                        Ok(results) => ctx.ok_response_for(req, &results),
+                        Ok(results) => {
+                            let results = match point_in_time {
+                                Some(pit) => {
+                                    let mut kept: Vec<_> = results
+                                        .into_iter()
+                                        .filter(|sr| memory_exists_at(&sr.memory, pit))
+                                        .collect();
+                                    kept.truncate(req_data.limit.max(1));
+                                    kept
+                                }
+                                None => results,
+                            };
+                            ctx.ok_response_for(req, &results)
+                        }
                         Err(e) => {
                             error!("Internal error: {e}");
                             ctx.error_response_for(req, 500, "Internal server error")
@@ -2129,6 +2269,31 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
             Err(e) => ctx.error_response_for(req, 400, e),
         },
 
+        // Per-pair dedup control (#1076): caller picks the survivor.
+        (Method::Post, "/consolidate/pair") => {
+            match read_body::<ConsolidatePairRequest>(req.as_reader()) {
+                Ok(req_data) => {
+                    let result = uteke.consolidate_pair(
+                        &req_data.id_keep,
+                        &req_data.id_remove,
+                        req_data.hard,
+                    );
+                    match result {
+                        Ok(r) => ctx.ok_response_for(req, &r),
+                        Err(e) => {
+                            let status = if matches!(e, uteke_core::Error::Validation(_)) {
+                                400
+                            } else {
+                                500
+                            };
+                            ctx.error_response_for(req, status, e.to_string())
+                        }
+                    }
+                }
+                Err(e) => ctx.error_response_for(req, 400, e),
+            }
+        }
+
         // ── Aging (maintenance) ─────────────────────────────────────────
         (Method::Post, "/aging") => match read_body::<AgingRequest>(req.as_reader()) {
             Ok(req_data) => {
@@ -2238,5 +2403,179 @@ fn resolve_extraction_config(
         base_url: base.base_url,
         endpoint_path: base.endpoint_path,
         max_facts: req_max_facts.unwrap_or(base.max_facts),
+    }
+}
+
+/// Point-in-time predicate for room time-travel (#1082).
+/// Mirrors the core `recall_at_time` temporal rules: memory must have been
+/// created at or before `pit`, not yet invalidated (valid_until), not
+/// deprecated, and valid_from must not be in the future relative to `pit`.
+///
+/// Known limitation (#1086): the schema stores no deprecation timestamp,
+/// so a memory deprecated *after* `pit` is also excluded here — time-travel
+/// treats `deprecated` as "never existed". Same rule as core `recall_at_time`.
+fn memory_exists_at(
+    memory: &uteke_core::memory::types::Memory,
+    pit: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if memory.created_at > pit {
+        return false;
+    }
+    if let Some(valid_until) = memory.valid_until {
+        if valid_until <= pit {
+            return false;
+        }
+    }
+    if memory.deprecated {
+        // Deprecated before the point-in-time → did not exist then;
+        // deprecated after it → existed (#1086). Matches core semantics:
+        // NULL deprecated_at is treated as "deprecated after the pit"
+        // (the v17 migration backfills a timestamp onto every deprecated
+        // row, so NULL + deprecated should not occur in practice).
+        let gone_by_then = match memory.deprecated_at {
+            Some(dep_at) => dep_at <= pit,
+            None => false,
+        };
+        if gone_by_then {
+            return false;
+        }
+    }
+    if let Some(valid_from) = memory.valid_from {
+        if valid_from > pit {
+            return false;
+        }
+    }
+    true
+}
+
+/// Apply the time-travel predicate to chronological room recall results
+/// (no-query path), preserving chronological order (#1082).
+fn filter_room_memories_at_time(
+    memories: Vec<uteke_core::memory::types::Memory>,
+    pit: chrono::DateTime<chrono::Utc>,
+) -> Vec<uteke_core::memory::types::Memory> {
+    memories
+        .into_iter()
+        .filter(|m| memory_exists_at(m, pit))
+        .collect()
+}
+
+#[cfg(test)]
+mod room_recall_at_tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn mem(created_offset_secs: i64) -> uteke_core::memory::types::Memory {
+        uteke_core::memory::types::Memory {
+            id: uuid::Uuid::new_v4().to_string(),
+            content: format!("m{created_offset_secs}"),
+            embedding: Vec::new(),
+            tags: Vec::new(),
+            metadata: serde_json::Value::Object(serde_json::Map::new()),
+            created_at: Utc::now() + chrono::Duration::seconds(created_offset_secs),
+            updated_at: Utc::now(),
+            namespace: "default".into(),
+            access_count: 0,
+            last_accessed: None,
+            deprecated: false,
+            deprecated_at: None,
+            valid_from: None,
+            valid_until: None,
+            memory_type: "fact".into(),
+            importance: 0.5,
+            pinned: false,
+            content_type: "text".into(),
+            slug: None,
+            source: None,
+            source_type: "user".into(),
+            author_type: "agent".into(),
+        }
+    }
+
+    #[test]
+    fn at_time_excludes_future_and_invalidated() {
+        let now = Utc::now();
+        let old = mem(-3600); // created an hour ago — existed at `now`
+        let future = mem(3600); // created an hour from now — must be excluded
+        let mut invalidated = mem(-7200);
+        invalidated.valid_until = Some(now - chrono::Duration::seconds(60)); // expired before `now`
+        let mut not_yet_valid = mem(-7200);
+        not_yet_valid.valid_from = Some(now + chrono::Duration::seconds(60));
+
+        assert!(memory_exists_at(&old, now));
+        assert!(!memory_exists_at(&future, now));
+        assert!(!memory_exists_at(&invalidated, now));
+        assert!(!memory_exists_at(&not_yet_valid, now));
+    }
+
+    #[test]
+    fn at_time_excludes_deprecated() {
+        let now = Utc::now();
+        let mut dep = mem(-60);
+        dep.deprecated = true;
+        dep.deprecated_at = Some(now - chrono::Duration::seconds(30)); // deprecated before pit
+        assert!(!memory_exists_at(&dep, now));
+    }
+
+    #[test]
+    fn at_time_includes_deprecated_after_pit() {
+        // #1086: deprecated AFTER the pit — the memory existed then.
+        let now = Utc::now();
+        let mut dep = mem(-60);
+        dep.deprecated = true;
+        dep.deprecated_at = Some(now + chrono::Duration::seconds(30)); // deprecated after pit
+        assert!(memory_exists_at(&dep, now));
+    }
+
+    #[test]
+    fn at_time_boundary_inclusive_created_at() {
+        let exact = mem(0);
+        // created_at == pit: memory existed at that instant (inclusive, matches core recall_at_time rule `> pit → reject`)
+        assert!(memory_exists_at(&exact, exact.created_at));
+    }
+
+    #[test]
+    fn filter_room_memories_preserves_order() {
+        let now = Utc::now();
+        let older = mem(-100);
+        let newer = mem(-50);
+        let future = mem(100);
+        let out = filter_room_memories_at_time(vec![older, newer, future], now);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].content, "m-100");
+        assert_eq!(out[1].content, "m-50");
+    }
+
+    #[test]
+    fn room_recall_request_deserializes_at() {
+        // Regression for #1082: `at` must be a recognized field, not silently dropped.
+        let req: RoomRecallRequest =
+            serde_json::from_str(r#"{"room_id":"r1","limit":3,"at":"2020-01-01T00:00:00Z"}"#)
+                .expect("at field must deserialize");
+        assert_eq!(req.at.as_deref(), Some("2020-01-01T00:00:00Z"));
+        assert_eq!(req.room_id, "r1");
+        // Omitted → None (backwards compatible)
+        let req: RoomRecallRequest =
+            serde_json::from_str(r#"{"room_id":"r1"}"#).expect("no-at body must parse");
+        assert!(req.at.is_none());
+    }
+
+    /// #1076: ConsolidatePairRequest deserialization — happy path + defaults.
+    #[test]
+    fn consolidate_pair_request_parses() {
+        let req: ConsolidatePairRequest =
+            serde_json::from_str(r#"{"id_keep":"abc","id_remove":"def","hard":true}"#)
+                .expect("pair body must parse");
+        assert_eq!(req.id_keep, "abc");
+        assert_eq!(req.id_remove, "def");
+        assert!(req.hard);
+
+        // hard defaults to false
+        let req: ConsolidatePairRequest =
+            serde_json::from_str(r#"{"id_keep":"abc","id_remove":"def"}"#).unwrap();
+        assert!(!req.hard);
+
+        // missing id_remove → 400 at deserialize
+        assert!(serde_json::from_str::<ConsolidatePairRequest>(r#"{"id_keep":"abc"}"#).is_err());
     }
 }

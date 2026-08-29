@@ -858,6 +858,27 @@ impl super::Store {
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
+    /// Load embeddings for ALL document chunks (id, embedding).
+    ///
+    /// Used by `repair()` to rebuild the vector index including document
+    /// chunk vectors — `load_all` returns memories only, so without this the
+    /// rebuild silently evicts every `chunk:<id>` entry (#1110).
+    pub fn load_all_chunk_embeddings(&self) -> Result<Vec<(String, Vec<f32>)>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, embedding FROM document_chunks WHERE embedding IS NOT NULL AND length(embedding) > 0")
+            .map_err(|e| Error::db("prepare load all chunk embeddings", e))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
+            .map_err(|e| Error::db("load all chunk embeddings query", e))?;
+        Ok(rows
+            .filter_map(|r| r.ok())
+            .map(|(id, blob)| (id, super::store::deserialize_embedding(&blob)))
+            .collect())
+    }
+
     /// Get document chunks by their IDs (for semantic search result enrichment).
     ///
     /// Returns chunk data needed for search result display.

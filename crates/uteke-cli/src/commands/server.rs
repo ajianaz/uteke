@@ -48,6 +48,7 @@ pub(crate) fn run_via_server(cli: &Cli, server_url: &str) -> Result<(), String> 
             detect_contradiction,
             entity,
             category,
+            author_type,
             meta,
             room,
             author,
@@ -59,6 +60,9 @@ pub(crate) fn run_via_server(cli: &Cli, server_url: &str) -> Result<(), String> 
                 "tags": tags,
                 "namespace": ns
             });
+            if let Some(at) = author_type {
+                body["author_type"] = serde_json::json!(at);
+            }
             if !r#type.is_empty() {
                 body["type"] = serde_json::json!(r#type);
             }

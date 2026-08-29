@@ -63,6 +63,10 @@ pub enum Commands {
         /// Entity identifier for structured metadata
         #[arg(long)]
         entity: Option<String>,
+        /// Who authored the memory: human or agent (#1084). Default: agent
+        /// (matches the schema default, #1083).
+        #[arg(long)]
+        author_type: Option<String>,
         /// Category classification
         #[arg(long)]
         category: Option<String>,
@@ -104,9 +108,10 @@ pub enum Commands {
         /// Use strict threshold from config (min_score_strict)
         #[arg(long)]
         strict: bool,
-        /// Recall strategy: vector, fts5, hybrid, or graph (graph = hybrid +
+        /// Recall strategy: vector, fts5, hybrid, graph, or fusion (fusion =
+        /// weighted RRF of vector×1.7 + hybrid×1, #1123; graph = hybrid +
         /// graph-signal reranking, #378). Defaults to config's
-        /// `[recall].default_strategy` (hybrid).
+        /// `[recall].default_strategy` (fusion).
         #[arg(long)]
         strategy: Option<String>,
         /// Enable salience boost (how much each result matters) (#352).
@@ -205,7 +210,8 @@ pub enum Commands {
         /// Delete ALL memories in namespace (requires --confirm)
         #[arg(long)]
         all: bool,
-        /// Confirm destructive operations
+        /// Confirm destructive operations (the non-interactive equivalent of
+        /// the y/N prompt; scripts and cron jobs must pass this)
         #[arg(long)]
         confirm: bool,
     },
@@ -775,6 +781,21 @@ pub enum RoomCommands {
     ListRooms {
         /// Document slug
         doc_slug: String,
+    },
+    /// Consolidate a room's memories into fewer, denser records (#1088).
+    ///
+    /// Dry-run by default: shows the batching plan and estimated LLM calls
+    /// without contacting any API. Pass --apply to execute (requires
+    /// extraction LLM config in uteke.toml or UTEKE_* env vars).
+    Consolidate {
+        /// Room ID
+        room_id: String,
+        /// Execute the plan (LLM calls + store writes). Omit for dry-run.
+        #[arg(long)]
+        apply: bool,
+        /// Max LLM requests for this run (default 10, failed calls count too)
+        #[arg(long, default_value_t = 10)]
+        max_calls: usize,
     },
 }
 

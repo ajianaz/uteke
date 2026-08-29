@@ -119,6 +119,7 @@ impl crate::Uteke {
                 access_count: 0,
                 last_accessed: None,
                 deprecated: false,
+                deprecated_at: None,
                 valid_from: Some(entry.created_at),
                 valid_until: None,
                 memory_type: "fact".to_string(),
@@ -128,6 +129,7 @@ impl crate::Uteke {
                 slug: None,
                 source: Some(format!("import:{}", entry.source.unwrap_or_default())),
                 source_type: "import".to_string(),
+                author_type: "agent".to_string(),
             };
 
             // Write-ahead: vector index first (can be rolled back), then SQLite.

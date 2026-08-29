@@ -217,6 +217,7 @@ mod tests {
                 access_count: 0,
                 last_accessed: None,
                 deprecated: false,
+                deprecated_at: None,
                 valid_from: None,
                 valid_until: None,
                 memory_type: "fact".to_string(),
@@ -226,6 +227,7 @@ mod tests {
                 slug: None,
                 source: None,
                 source_type: "user".to_string(),
+                author_type: "agent".to_string(),
             },
             score: 0.95,
         }];

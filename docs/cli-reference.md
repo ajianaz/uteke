@@ -394,7 +394,21 @@ uteke room list-documents "project-kickoff"
 
 # List rooms that reference a document (#859, positional slug)
 uteke room list-rooms "architecture-spec"
+
+# Consolidate a room's memories (#1088) — dry-run by default, no LLM calls
+uteke room consolidate "project-kickoff"
+
+# Execute consolidation (LLM calls + writes; budget-capped)
+uteke room consolidate "project-kickoff" --apply --max-calls 20
 ```
+
+### Room consolidation notes (#1088)
+
+- **Dry-run default**: shows memory count, batches, and estimated LLM calls — zero API calls.
+- **`--apply`** requires LLM config (same `[extraction]` setup as `import --extract`).
+- **`--max-calls`** (default 10) is a hard budget: failed LLM calls count too, batches beyond the cap are skipped.
+- Source memories are **soft-deprecated** (never deleted), each carrying a `consolidated into <id>` reason.
+- New consolidated records pass a provenance policy gate (hedging language, trust tier) before being written.
 
 ## uteke bench
 

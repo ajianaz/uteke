@@ -19,6 +19,23 @@ use uteke_core::Uteke;
 /// Global flag set by SIGINT handler.
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+/// Store resolution order (#1105): `--store` flag > `UTEKE_HOME` env >
+/// `uteke.toml [store].path` > built-in default. `UTEKE_HOME` previously only
+/// affected models/config/logs while the DB silently stayed on the default
+/// (often production) path — an operator trap that could read/write the wrong
+/// database from an "isolated-looking" invocation.
+pub(crate) fn resolve_store_path(cli: &Cli, config: &Config) -> String {
+    if let Some(s) = cli.store.as_deref() {
+        return s.to_string();
+    }
+    if let Ok(home) = std::env::var("UTEKE_HOME") {
+        if !home.is_empty() {
+            return home;
+        }
+    }
+    Config::expand_tilde(&config.store.path)
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -130,11 +147,7 @@ fn main() {
         tracing::debug!("No server detected, using local store");
     }
 
-    let store_path = cli
-        .store
-        .as_deref()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| Config::expand_tilde(&config.store.path));
+    let store_path = resolve_store_path(&cli, &config);
 
     tracing::debug!("Opening store at: {store_path}");
 
@@ -235,4 +248,38 @@ pub(crate) fn resolve_namespace(cli: &Cli, config: &Config) -> String {
         return config.store.namespace.clone();
     }
     "default".to_string()
+}
+
+#[cfg(test)]
+mod resolve_store_tests {
+    use super::*;
+
+    /// All four precedence cases mutate the process-global UTEKE_HOME, so
+    /// they run sequentially inside ONE #[test] — parallel #[test]s racing
+    /// on the same env var flake nondeterministically (same lesson as the
+    /// ort_init tests).
+    #[test]
+    fn store_resolution_precedence() {
+        let cfg = Config::default();
+        let expanded_default = Config::expand_tilde(&cfg.store.path);
+
+        // 1) --store flag beats everything
+        // SAFETY: single-threaded test section; no other test touches this var.
+        unsafe { std::env::set_var("UTEKE_HOME", "/tmp/env-home") };
+        let mut cli = Cli::try_parse_from(["uteke", "stats"]).unwrap();
+        cli.store = Some("/tmp/flag-store".to_string());
+        assert_eq!(resolve_store_path(&cli, &cfg), "/tmp/flag-store");
+
+        // 2) UTEKE_HOME beats config when flag absent
+        cli.store = None;
+        assert_eq!(resolve_store_path(&cli, &cfg), "/tmp/env-home");
+
+        // 3) empty env falls back to config
+        unsafe { std::env::set_var("UTEKE_HOME", "") };
+        assert_eq!(resolve_store_path(&cli, &cfg), expanded_default);
+
+        // 4) config default when no flag, no env
+        unsafe { std::env::remove_var("UTEKE_HOME") };
+        assert_eq!(resolve_store_path(&cli, &cfg), expanded_default);
+    }
 }

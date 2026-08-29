@@ -995,6 +995,7 @@ mod tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".to_string(),
@@ -1004,6 +1005,7 @@ mod tests {
             slug: None,
             source: None,
             source_type: "user".to_string(),
+            author_type: "agent".to_string(),
         }
     }
 
@@ -1353,7 +1355,11 @@ mod tests {
     fn migration_dispatcher_reaches_v8() {
         let store = Store::open(":memory:").unwrap();
         let v = store.schema_version().unwrap();
-        assert_eq!(v, 15, "fresh store must reach CURRENT_SCHEMA_VERSION=15");
+        assert_eq!(
+            v,
+            crate::memory::store::CURRENT_SCHEMA_VERSION,
+            "fresh store must reach CURRENT_SCHEMA_VERSION"
+        );
 
         // memory_edges table must exist and be queryable after migration.
         let n = store.count_memory_edges().unwrap();
@@ -2025,7 +2031,7 @@ impl crate::Uteke {
             )
             .map_err(|e| Error::db("insert supersedes edge", e))?;
             tx.execute(
-                "UPDATE memories SET deprecated = 1, valid_until = ?1, deprecate_reason = ?2, updated_at = ?1 WHERE id = ?3 AND deprecated = 0",
+                "UPDATE memories SET deprecated = 1, valid_until = ?1, deprecate_reason = ?2, updated_at = ?1, deprecated_at = ?1 WHERE id = ?3 AND deprecated = 0",
                 params![now, reason_text, old.id],
             )
             .map_err(|e| Error::db("deprecate superseded memory", e))?;
