@@ -47,6 +47,7 @@ title: Architecture
 | Vector Index | usearch + RwLock | Persistent HNSW, concurrent reads via RwLock |
 | Full-Text Search | SQLite FTS5 | Built-in, auto-created, phrase + token-OR fallback |
 | Hybrid Search | RRF (k=60) | Merges vector + FTS5 via Reciprocal Rank Fusion |
+| Fusion (default) | weighted RRF | Since 0.16.0: fuses the vector and hybrid rankings (#1123) |
 | Storage | SQLite (rusqlite) | Embedded, zero-config, battle-tested |
 | Embedding | EmbeddingGemma Q4 ONNX | 768d vectors, multilingual, downloaded on first run |
 | Namespaces | SQLite column | Multi-agent isolation, zero overhead |

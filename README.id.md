@@ -108,7 +108,7 @@ Setiap AI tool lupa. Context window penuh, sesi berakhir, dan AI kamu start over
 | **Setup** | Satu binary | pip + Docker + Qdrant | npm + Docker (iii-engine) | pip + Docker + Postgres | pip + Docker + Neo4j | Satu binary (Go) |
 | **API key** | ❌ Nggak perlu | ✅ OpenAI/LLM | ✅ LLM key | ✅ LLM key | ✅ LLM key | ❌ Nggak perlu |
 | **Offline** | ✅ Full | ❌ Cloud embedding | ❌ Butuh LLM | ❌ Butuh LLM | ❌ Butuh LLM + vector DB | ✅ Full |
-| **Search** | **Hybrid** (Vector + FTS5 + RRF) | Vector + Graph | Vector + Graph | Vector | Temporal Graph | **FTS5 doang** |
+| **Search** | **Fusion** (weighted RRF vector + hybrid; hybrid = HNSW + FTS5 RRF) | Vector + Graph | Vector + Graph | Vector | Temporal Graph | **FTS5 doang** |
 | **Kecepatan recall** | ~45ms | Network round-trip | Network round-trip | Network round-trip | Network round-trip | ~Cepat (lokal) |
 | **Data kamu** | ✅ Nggak pernah keluar | ⚠️ Dikirim ke cloud LLM | ⚠️ Dikirim ke cloud LLM | ⚠️ Dikirim ke cloud LLM | ⚠️ Dikirim ke cloud LLM | ✅ Lokal |
 | **Stars** | 🌱 Growing | ⭐ ~60K | ⭐ ~25K | ⭐ ~24K | ⭐ ~5K | ⭐ ~5K |
@@ -171,7 +171,7 @@ uteke recall "caching decision" --room engineering
 
 | Fitur | Apa fungsinya |
 |-------|---------------|
-| 🧠 **Hybrid Search** | Cari berdasarkan makna (vector) + kata kunci exact (FTS5). Digabung dengan Reciprocal Rank Fusion (RRF). |
+| 🧠 **Hybrid + Fusion Search** | Cari berdasarkan makna (vector) + kata kunci exact (FTS5). Digabung dengan Reciprocal Rank Fusion (RRF). Sejak v0.16.0, `fusion` — weighted RRF dari ranking vector dan hybrid — jadi default recall strategy. |
 | 🏠 **Rooms** | **Shared memory multi-agent.** Kelompokkan memori berdasarkan konteks (meeting, project, klien). Multiple agent baca/tulis ke room yang sama dengan atribusi author. Cross-agent recall tanpa sync manual. |
 | ⏳ **Time-travel** | Recall memori seperti adanya di titik waktu manapun. `uteke recall "deploy" --at 2025-01-15` |
 | 🏷️ **Metadata Kaya** | Tag, entity, kategori, key:value di setiap memori. |
@@ -210,7 +210,7 @@ uteke recall "caching decision" --room engineering
 | 🔥 **Tiered Memory** | Tracking Hot/Warm/Cold dengan auto-cleanup memori basi. |
 | 🔄 **Embed Fallback** | Degrade ke no-op embedder kalau local model gagal (nggak pernah crash). |
 | 👥 **Namespace Multi-Agent** | Memori terisolasi penuh per agent, tanpa overhead. |
-| 📊 **Benchmark** | `uteke bench` untuk perf testing. [Lihat hasil](docs/BENCHMARKS.md). |
+| 📊 **Benchmark** | `uteke bench` untuk perf testing. [Lihat hasil](docs/benchmarks.md). |
 
 <details>
 <summary>🔌 Konfigurasi MCP Server — connect ke Claude Code, Cursor, Hermes</summary>
@@ -299,7 +299,7 @@ Bisa. Uteke punya MCP server yang langsung pakai dengan Claude Code, Cursor, dan
 <details>
 <summary><strong>Sudah production-ready?</strong></summary>
 
-Uteke sekarang v0.14.3 dengan 530+ test, CI/CD di setiap commit, dan benchmark harness. Dipakai production oleh tim CodeCora dan early adopter lain. Masih di versi 0.x — mungkin ada rough edges, tapi core-nya udah stabil.
+Uteke sekarang v0.16.0 dengan 200+ test, CI/CD di setiap commit, dan benchmark harness. Dipakai production oleh tim CodeCora dan early adopter lain. Masih di versi 0.x — mungkin ada rough edges, tapi core-nya udah stabil.
 </details>
 
 ---
@@ -308,7 +308,7 @@ Uteke sekarang v0.14.3 dengan 530+ test, CI/CD di setiap commit, dan benchmark h
 
 ```bash
 cargo build --workspace        # Build
-cargo test --workspace         # Test (530+ test)
+cargo test --workspace         # Test (200+ test)
 cargo clippy -- -D warnings    # Lint
 cargo fmt                      # Format
 ```
