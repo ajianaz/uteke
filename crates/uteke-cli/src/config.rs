@@ -1818,4 +1818,147 @@ max_seq_length = 128
         assert_eq!(cfg.server.port, 8767);
         assert!((cfg.recall.min_score - 0.3).abs() < f64::EPSILON);
     }
+
+    // ── #1078 P0 batch 3: score range guards, strategy validation, graph
+    // weights, embed fallback — none previously covered. ─────────────────
+
+    #[test]
+    #[serial_test::serial]
+    fn env_override_min_score_out_of_range_ignored() {
+        unsafe {
+            std::env::set_var("UTEKE_RECALL_MIN_SCORE", "1.5");
+        }
+        let cfg = Config::default().apply_env_overrides();
+        unsafe {
+            std::env::remove_var("UTEKE_RECALL_MIN_SCORE");
+        }
+        assert!((cfg.recall.min_score - 0.3).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn env_override_min_score_not_a_number_ignored() {
+        unsafe {
+            std::env::set_var("UTEKE_RECALL_MIN_SCORE", "banana");
+        }
+        let cfg = Config::default().apply_env_overrides();
+        unsafe {
+            std::env::remove_var("UTEKE_RECALL_MIN_SCORE");
+        }
+        assert!((cfg.recall.min_score - 0.3).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn env_override_strategy_valid_values_accepted() {
+        for v in ["vector", "fts5", "hybrid", "graph", "fusion"] {
+            unsafe {
+                std::env::set_var("UTEKE_RECALL_STRATEGY", v);
+            }
+            let cfg = Config::default().apply_env_overrides();
+            assert_eq!(cfg.recall.default_strategy, v, "strategy {v} rejected");
+        }
+        unsafe {
+            std::env::remove_var("UTEKE_RECALL_STRATEGY");
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn env_override_strategy_invalid_ignored() {
+        unsafe {
+            std::env::set_var("UTEKE_RECALL_STRATEGY", "quantum");
+        }
+        let cfg = Config::default().apply_env_overrides();
+        unsafe {
+            std::env::remove_var("UTEKE_RECALL_STRATEGY");
+        }
+        // Invalid strategy keeps the fusion default
+        assert_eq!(cfg.recall.default_strategy, "fusion");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn env_override_graph_weights_valid() {
+        unsafe {
+            std::env::set_var("UTEKE_GRAPH_DENSITY_WEIGHT", "0.5");
+            std::env::set_var("UTEKE_GRAPH_AUTHORITY_WEIGHT", "0.7");
+        }
+        let cfg = Config::default().apply_env_overrides();
+        unsafe {
+            std::env::remove_var("UTEKE_GRAPH_DENSITY_WEIGHT");
+            std::env::remove_var("UTEKE_GRAPH_AUTHORITY_WEIGHT");
+        }
+        assert!((cfg.recall.graph_density_weight - 0.5).abs() < f32::EPSILON);
+        assert!((cfg.recall.graph_authority_weight - 0.7).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn env_override_graph_weights_out_of_range_ignored() {
+        unsafe {
+            std::env::set_var("UTEKE_GRAPH_DENSITY_WEIGHT", "-1.0");
+            std::env::set_var("UTEKE_GRAPH_AUTHORITY_WEIGHT", "2.0");
+        }
+        let cfg = Config::default().apply_env_overrides();
+        unsafe {
+            std::env::remove_var("UTEKE_GRAPH_DENSITY_WEIGHT");
+            std::env::remove_var("UTEKE_GRAPH_AUTHORITY_WEIGHT");
+        }
+        assert!((cfg.recall.graph_density_weight - 0.1).abs() < f32::EPSILON);
+        assert!((cfg.recall.graph_authority_weight - 0.1).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn env_override_embed_fallback_all_fields() {
+        unsafe {
+            std::env::set_var("UTEKE_EMBED_FALLBACK_API_KEY", "fb-key");
+            std::env::set_var("UTEKE_EMBED_FALLBACK_BASE_URL", "https://fb.example");
+            std::env::set_var("UTEKE_EMBED_FALLBACK_ENDPOINT_PATH", "/v1/e");
+            std::env::set_var("UTEKE_EMBED_FALLBACK_MODEL", "fb-model");
+        }
+        let cfg = Config::default().apply_env_overrides();
+        unsafe {
+            std::env::remove_var("UTEKE_EMBED_FALLBACK_API_KEY");
+            std::env::remove_var("UTEKE_EMBED_FALLBACK_BASE_URL");
+            std::env::remove_var("UTEKE_EMBED_FALLBACK_ENDPOINT_PATH");
+            std::env::remove_var("UTEKE_EMBED_FALLBACK_MODEL");
+        }
+        assert_eq!(cfg.embed_fallback.api_key, "fb-key");
+        assert_eq!(cfg.embed_fallback.base_url, "https://fb.example");
+        assert_eq!(cfg.embed_fallback.endpoint_path, "/v1/e");
+        assert_eq!(cfg.embed_fallback.model, "fb-model");
+        assert!(cfg.embed_fallback.is_configured());
+    }
+
+    #[test]
+    fn embed_fallback_is_configured_matrix() {
+        // Nothing set — not configured
+        let none = EmbedFallbackConfig {
+            api_key: String::new(),
+            base_url: String::new(),
+            endpoint_path: String::new(),
+            model: String::new(),
+        };
+        assert!(!none.is_configured());
+
+        // Partial (2 of 3 required) — still not configured
+        let partial = EmbedFallbackConfig {
+            api_key: "k".into(),
+            base_url: "u".into(),
+            endpoint_path: String::new(),
+            model: String::new(),
+        };
+        assert!(!partial.is_configured());
+
+        // All three required set — configured (endpoint_path optional)
+        let full = EmbedFallbackConfig {
+            api_key: "k".into(),
+            base_url: "u".into(),
+            endpoint_path: String::new(),
+            model: "m".into(),
+        };
+        assert!(full.is_configured());
+    }
 }
