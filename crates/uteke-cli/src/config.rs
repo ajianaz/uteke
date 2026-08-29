@@ -1961,4 +1961,92 @@ max_seq_length = 128
         };
         assert!(full.is_configured());
     }
+
+    // ── #1078 P0 batch 5: mutation survivors — migrate_content,
+    // global_config_path, set_namespace_in_toml. Previously untested.
+
+    #[test]
+    fn migrate_content_moves_embedding_keys_to_section() {
+        let old = "store_path = ~/.uteke\nmodel = gemma\nmax_seq_length = 512\n";
+        let out = migrate_content(old);
+        assert!(
+            out.contains("[store]\npath = ~/.uteke"),
+            "store path: {out}"
+        );
+        assert!(
+            out.contains("[embedding]\nmodel = gemma\nmax_seq_length = 512"),
+            "embedding keys must move to [embedding]: {out}"
+        );
+    }
+
+    #[test]
+    fn migrate_content_passes_through_unknown_and_sections() {
+        let old = "# comment\nunknown_key = 1\n[new_section]\nfoo = bar\n";
+        let out = migrate_content(old);
+        assert!(out.contains("# comment"));
+        assert!(out.contains("unknown_key = 1"));
+        assert!(out.contains("[new_section]\nfoo = bar"));
+        assert!(!out.contains("[store]"), "no store keys: {out}");
+        assert!(!out.contains("[embedding]"), "no embedding keys: {out}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn global_config_path_respects_uteke_home() {
+        unsafe {
+            std::env::set_var("UTEKE_HOME", "/tmp/uteke-home-test");
+        }
+        let p = global_config_path().expect("UTEKE_HOME set → Some");
+        assert_eq!(p, PathBuf::from("/tmp/uteke-home-test/uteke.toml"));
+        unsafe {
+            std::env::remove_var("UTEKE_HOME");
+        }
+    }
+
+    #[test]
+    fn set_namespace_rewrites_only_store_section() {
+        // namespace in [other] must NOT be rewritten (guards the != and &&
+        // mutants: section-boundary tracking).
+        let content = "[store]\nnamespace = \"old\"\npath = p\n[other]\nnamespace = \"keep\"\n";
+        let out = set_namespace_in_toml(content, "new");
+        assert!(out.contains("namespace = \"new\""));
+        assert!(
+            out.contains("namespace = \"keep\""),
+            "[other] namespace untouched: {out}"
+        );
+        assert!(out.contains("path = p"), "other keys preserved: {out}");
+    }
+
+    #[test]
+    fn set_namespace_inserts_immediately_after_store_header() {
+        // namespace must land right after [store], not before it (guards
+        // the pos+1 insert-position mutant).
+        let content = "[store]\npath = p\n";
+        let out = set_namespace_in_toml(content, "ns1");
+        let lines: Vec<&str> = out.lines().collect();
+        let pos = lines.iter().position(|l| *l == "[store]").unwrap();
+        assert_eq!(
+            lines[pos + 1],
+            "namespace = \"ns1\"",
+            "insert after header: {out}"
+        );
+        assert!(out.contains("path = p"), "existing keys kept: {out}");
+    }
+
+    #[test]
+    fn set_namespace_appends_store_section_when_missing() {
+        let out = set_namespace_in_toml("top = 1\n", "ns2");
+        assert!(
+            out.contains("[store]\nnamespace = \"ns2\""),
+            "appended [store]: {out}"
+        );
+        assert!(out.contains("top = 1"));
+    }
+
+    #[test]
+    fn set_namespace_replaces_existing_value_in_place() {
+        let out = set_namespace_in_toml("[store]\nnamespace = \"a\"\n", "b");
+        assert!(out.contains("namespace = \"b\""));
+        assert!(!out.contains("\"a\""), "old value gone: {out}");
+    }
 }
