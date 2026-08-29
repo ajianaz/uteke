@@ -282,4 +282,39 @@ mod resolve_store_tests {
         unsafe { std::env::remove_var("UTEKE_HOME") };
         assert_eq!(resolve_store_path(&cli, &cfg), expanded_default);
     }
+
+    /// Namespace precedence (#1078 P0 batch 2). All cases mutate the
+    /// process-global UTEKE_NAMESPACE, so they run sequentially inside ONE
+    /// #[test] — same rationale as store_resolution_precedence above.
+    #[test]
+    fn namespace_resolution_precedence() {
+        let mut cfg = Config::default();
+
+        // Baseline: nothing set → "default"
+        unsafe { std::env::remove_var("UTEKE_NAMESPACE") };
+        let mut cli = Cli::try_parse_from(["uteke", "stats"]).unwrap();
+        assert_eq!(resolve_namespace(&cli, &cfg), "default");
+
+        // 1) --namespace flag beats env AND config
+        cfg.store.namespace = "from-config".to_string();
+        unsafe { std::env::set_var("UTEKE_NAMESPACE", "from-env") };
+        cli.namespace = Some("from-flag".to_string());
+        assert_eq!(resolve_namespace(&cli, &cfg), "from-flag");
+
+        // 2) UTEKE_NAMESPACE env beats config when flag absent
+        cli.namespace = None;
+        assert_eq!(resolve_namespace(&cli, &cfg), "from-env");
+
+        // 3) empty env is ignored, falls back to config
+        unsafe { std::env::set_var("UTEKE_NAMESPACE", "") };
+        assert_eq!(resolve_namespace(&cli, &cfg), "from-config");
+
+        // 4) config namespace used when no flag, no env
+        unsafe { std::env::remove_var("UTEKE_NAMESPACE") };
+        assert_eq!(resolve_namespace(&cli, &cfg), "from-config");
+
+        // 5) config "default" literal falls through to "default"
+        cfg.store.namespace = "default".to_string();
+        assert_eq!(resolve_namespace(&cli, &cfg), "default");
+    }
 }
