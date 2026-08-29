@@ -109,11 +109,12 @@ def run_shard(spec: dict) -> dict:
         variant += f"_mmr{mmr_lambda}"
     if fusion:
         variant += f"_fusion{fusion_w}"
-    # Dataset fingerprint: sha1 of the mounted dataset file. Cross-dataset
+    # Dataset fingerprint: sha256 of the mounted dataset file (non-security
+    # fingerprinting, but avoids scanner flags). Cross-dataset
     # stale hits are possible without it (fast50 shard satisfies a 15Q run's
     # `len(prior) >= expected` check and is returned verbatim) — see #1129.
     data_bytes = pathlib.Path("/root/harness/data.json").read_bytes()
-    data_tag = hashlib.sha1(data_bytes).hexdigest()[:8]
+    data_tag = hashlib.sha256(data_bytes).hexdigest()[:8]
     vol_path = pathlib.Path("/root/vol") / variant / data_tag / f"shard_{shard_idx:02d}.jsonl"
     data = _json.loads(data_bytes)
     if limit and limit > 0:
