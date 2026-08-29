@@ -97,3 +97,21 @@ Remaining headroom is insert-side granularity (3 partial-recall fails) —
 separate project, uncertain payoff.
 
 Artifacts: sim3way_final.py, preview_scores.py, results_modal_fts5_partial/
+
+### Pure-default (zero-config fusion) 500Q — Modal x86_64, binary 0.16.0 from git bfbc296 (2026-08-29)
+
+Pre-release validation: `--strategy default` (no flag at all) against the full 500Q dataset.
+Binary built in-image from exact SHA bfbc296 (PR #1137/#1138), image build prints `uteke 0.16.0`.
+
+| Question Type | Count | Recall@5 | Recall@10 | NDCG@5 | NDCG@10 |
+|---|---|---|---|---|---|
+| **Overall** | 470 | **0.946** | 0.977 | 0.897 | 0.911 |
+| knowledge-update | 72 | 1.000 | 1.000 | 0.972 | 0.972 |
+| multi-session | 121 | 0.906 | 0.976 | 0.880 | 0.913 |
+| single-session-assistant | 56 | 0.982 | 1.000 | 0.959 | 0.965 |
+| single-session-preference | 30 | 0.967 | 0.967 | 0.839 | 0.839 |
+| single-session-user | 64 | 0.969 | 0.969 | 0.913 | 0.913 |
+| temporal-reasoning | 127 | 0.920 | 0.962 | 0.849 | 0.867 |
+
+Context: v0.15.0 hybrid baseline on the same dataset: Overall R@5 = 0.854 / R@10 = 0.885 (2026-08-13).
+Fusion default lifts full-500Q recall@5 by **+9.2 points** (0.854 → 0.946) with zero configuration.
