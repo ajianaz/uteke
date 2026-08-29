@@ -14,6 +14,11 @@ The new `fusion` strategy — weighted Reciprocal Rank Fusion of the vector and 
 
 - **Default recall strategy: `hybrid` → `fusion` (#1123)** — applies ONLY when no strategy is specified (CLI flag, HTTP field, MCP param, or `default_strategy` config). Existing configs with an explicit `default_strategy` are untouched.
 
+### Validated
+
+- **Full-release validation: pure-default 500Q LongMemEval run (2026-08-29)** — zero-config `--strategy default` on the complete validation set: **R@5 0.946 / R@10 0.977** on 470 non-abstention questions (**+9.2 pts** R@5 vs 0.15.0 hybrid baseline 0.854). Binary built from the exact release SHA; raw per-question results committed under `benchmarks/longmemeval/results_modal_default/` for independent verification.
+- **Public benchmark page + comparison chart (#1141)** — `docs/benchmarks.md` now publishes the dual-metric view from the same run: recall_any@5 **98.2%** (the metric competitor benchmarks publish) alongside the stricter recall_all family (recall_all@10 95.4%, strict recall_all@5 88.0% with mathematical ceiling 99.4%, coverage@5 94.3%). No other system in the comparison publicly reports the strict family.
+
 ## [0.15.0] — 2026-08-19
 
 Minor release. The theme: memory you can trust across surfaces, and a store you can move.
