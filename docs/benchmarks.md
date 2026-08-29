@@ -32,7 +32,7 @@ The full pipeline (fusion strategy, default since 0.16.0):
 1. Query → ONNX embedding generation
 2. HNSW vector search → vector ranking
 3. FTS5 full-text search + RRF (k=60) → hybrid ranking
-4. Weighted RRF fusion of the two rankings (vector×1.7 + hybrid×1, #1123)
+4. Weighted RRF fusion of the two rankings (#1123, tuned weights)
 
 Retrieval quality (LongMemEval fast50, session-level): fusion R@5 0.98
 vs hybrid 0.9267 vs vector-only 0.854. Vector and hybrid fail on
