@@ -39,14 +39,13 @@ pub(crate) fn run_repair(
     if rebuild {
         tracing::info!("Running repair --rebuild (deleting index files first)");
 
-        // Determine index path: cli --store override or config default.
-        let store_dir = cli
-            .store
-            .as_deref()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| crate::Config::expand_tilde(&config.store.path));
+        // Same resolution order as main (#1105): --store > UTEKE_HOME > config.
+        let store_dir = crate::resolve_store_path(cli, config);
 
-        let index_path = std::path::PathBuf::from(&store_dir).join("uteke_index.usearch");
+        let index_path = std::path::PathBuf::from(&store_dir).join(format!(
+            "uteke_index.{}",
+            uteke_core::memory::vector::INDEX_EXT
+        ));
         let keys_path = std::path::PathBuf::from(&store_dir).join("uteke_index.keys");
 
         // Delete both index files so the store opens cleanly.

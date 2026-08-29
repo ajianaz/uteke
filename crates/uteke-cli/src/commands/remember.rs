@@ -58,6 +58,7 @@ pub(crate) fn run(
     detect_contradiction: bool,
     entity: Option<&str>,
     category: Option<&str>,
+    author_type: Option<&str>,
     meta: &[String],
     room: Option<&str>,
     author: Option<&str>,
@@ -65,6 +66,14 @@ pub(crate) fn run(
     source_type: Option<&str>,
 ) -> Result<(), String> {
     tracing::debug!("Remembering: {content} (type: {type}, contradiction: {detect_contradiction})");
+
+    // #1106: validate BEFORE any write so an invalid value fails loudly
+    // without leaving a stored row behind (the post-store set would have
+    // been too late — the row already exists with the schema default).
+    if let Some(at) = author_type {
+        uteke_core::memory::types::validate_author_type(at)
+            .map_err(|e| format!("Invalid --author-type: {e}"))?;
+    }
 
     // Read from stdin when content argument is "-" (#620).
     // Standard Unix convention: pipe content via echo "text" | uteke remember - --tags "test"
@@ -130,9 +139,16 @@ pub(crate) fn run(
             .map_err(|e| format!("Failed to store memory: {e}"))?;
         stored_id = id.clone();
         tracing::info!("Memory stored with ID: {id}");
+        // #1084/#1106: persist the (already-validated) author_type.
+        if let Some(at) = author_type {
+            if let Err(e) = uteke.set_author_type(&id, at) {
+                return Err(format!("Failed to set author_type: {e}"));
+            }
+        }
         if cli.json {
             let mut obj = serde_json::json!({
                 "id": id,
+                "author_type": author_type.unwrap_or("agent"),
                 "contradiction": {
                     "detected": contradiction.contradicted,
                     "deprecated_id": contradiction.deprecated_id,
@@ -185,8 +201,17 @@ pub(crate) fn run(
         };
         stored_id = id.clone();
         tracing::info!("Memory stored with ID: {id}");
+        // #1084/#1106: persist the (already-validated) author_type.
+        if let Some(at) = author_type {
+            if let Err(e) = uteke.set_author_type(&id, at) {
+                return Err(format!("Failed to set author_type: {e}"));
+            }
+        }
         if cli.json {
-            let mut obj = serde_json::json!({"id": id});
+            let mut obj = serde_json::json!({
+                "id": id,
+                "author_type": author_type.unwrap_or("agent"),
+            });
             // Reconstruct metadata for JSON output (already consumed by remember)
             if entity.is_some() || category.is_some() || !meta.is_empty() {
                 let mut m = serde_json::Map::new();

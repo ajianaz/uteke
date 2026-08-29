@@ -148,7 +148,7 @@ impl crate::Uteke {
             ),
             (
                 "room_document",
-                "SELECT room_id, doc_slug FROM room_documents",
+                "SELECT room_id, doc_slug, added_at FROM room_documents",
             ),
             (
                 "graph_node",
@@ -322,6 +322,9 @@ impl crate::Uteke {
         let mut pending_chunks: Vec<serde_json::Value> = Vec::new();
         let mut pending_nodes: Vec<serde_json::Value> = Vec::new();
         let mut pending_graph_edges: Vec<serde_json::Value> = Vec::new();
+        // room_documents has no FK on doc_slug, but restore it after documents
+        // (pass 2) for clarity of dependency ordering (#1078).
+        let mut pending_room_documents: Vec<serde_json::Value> = Vec::new();
         let mut rest: Vec<serde_json::Value> = Vec::new();
 
         for line in input.lines().filter(|l| !l.trim().is_empty()) {
@@ -338,6 +341,7 @@ impl crate::Uteke {
                 "document_chunk" => pending_chunks.push(v),
                 "graph_node" => pending_nodes.push(v),
                 "graph_edge" => pending_graph_edges.push(v),
+                "room_document" => pending_room_documents.push(v),
                 _ => rest.push(v),
             }
         }
@@ -419,16 +423,6 @@ impl crate::Uteke {
                         .map_err(|e| Error::db_msg(format!("import room_memory: {e}")))?;
                     *counts.entry("room_memories".into()).or_default() += n;
                 }
-                "room_document" => {
-                    let r = &v["row"];
-                    let n = conn
-                        .execute(
-                            "INSERT OR IGNORE INTO room_documents (room_id, doc_slug) VALUES (?1,?2)",
-                            rusqlite::params![r[0].as_str().unwrap_or(""), r[1].as_str().unwrap_or("")],
-                        )
-                        .map_err(|e| Error::db_msg(format!("import room_document: {e}")))?;
-                    *counts.entry("room_documents".into()).or_default() += n;
-                }
                 "memory_edge" => {
                     let r = &v["row"];
                     let n = conn
@@ -459,56 +453,6 @@ impl crate::Uteke {
                         )
                         .map_err(|e| Error::db_msg(format!("import timeline_event: {e}")))?;
                     *counts.entry("timeline_events".into()).or_default() += n;
-                }
-                "document" => {
-                    let tags = serde_json::to_string(&v["tags"]).unwrap_or_else(|_| "[]".into());
-                    let metadata =
-                        serde_json::to_string(&v["metadata"]).unwrap_or_else(|_| "{}".into());
-                    let n = conn
-                        .execute(
-                            "INSERT OR IGNORE INTO documents (id, slug, title, content, namespace, author, tags, metadata, version, content_type, created_at, updated_at, parent_id, depth, sort_order, has_children) \
-                             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
-                            rusqlite::params![
-                                v["id"].as_str().unwrap_or(""),
-                                v["slug"].as_str().unwrap_or(""),
-                                v["title"].as_str().unwrap_or(""),
-                                v["content"].as_str().unwrap_or(""),
-                                v["namespace"].as_str(),
-                                v["author"].as_str(),
-                                tags,
-                                metadata,
-                                v["version"].as_i64().unwrap_or(1),
-                                v["content_type"].as_str().unwrap_or("markdown"),
-                                v["created_at"].as_str().unwrap_or(""),
-                                v["updated_at"].as_str().unwrap_or(""),
-                                v["parent_id"].as_str(),
-                                v["depth"].as_i64().unwrap_or(0),
-                                v["sort_order"].as_i64().unwrap_or(0),
-                                v["has_children"].as_bool().unwrap_or(false),
-                            ],
-                        )
-                        .map_err(|e| Error::db_msg(format!("import document: {e}")))?;
-                    *counts.entry("documents".into()).or_default() += n;
-                }
-                "document_chunk" => {
-                    let tags = serde_json::to_string(&v["tags"]).unwrap_or_else(|_| "[]".into());
-                    let n = conn
-                        .execute(
-                            "INSERT OR IGNORE INTO document_chunks (id, document_id, chunk_index, heading, content, char_start, char_end, tags) \
-                             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-                            rusqlite::params![
-                                v["id"].as_str().unwrap_or(""),
-                                v["document_id"].as_str().unwrap_or(""),
-                                v["chunk_index"].as_i64().unwrap_or(0),
-                                v["heading"].as_str().unwrap_or(""),
-                                v["content"].as_str().unwrap_or(""),
-                                v["char_start"].as_i64().unwrap_or(0),
-                                v["char_end"].as_i64().unwrap_or(0),
-                                tags,
-                            ],
-                        )
-                        .map_err(|e| Error::db_msg(format!("import document_chunk: {e}")))?;
-                    *counts.entry("document_chunks".into()).or_default() += n;
                 }
                 _ => {
                     // Unknown tag — ignore for forward compatibility (newer
@@ -614,6 +558,20 @@ impl crate::Uteke {
             *counts.entry("graph_edges".into()).or_default() += n;
         }
 
+        for v in &pending_room_documents {
+            let r = &v["row"];
+            let n = conn
+                .execute(
+                    "INSERT OR IGNORE INTO room_documents (room_id, doc_slug, added_at) VALUES (?1,?2,?3)",
+                    rusqlite::params![
+                        r[0].as_str().unwrap_or(""),
+                        r[1].as_str().unwrap_or(""),
+                        r[2].as_str().unwrap_or(""),
+                    ],
+                )
+                .map_err(|e| Error::db_msg(format!("import room_document: {e}")))?;
+            *counts.entry("room_documents".into()).or_default() += n;
+        }
         // Sentinel-embedded rows must NOT enter the vector index (dimension
         // mismatch); load_all filters NULL embeddings but these are non-NULL.
         // Repair with --reembed fixes them; flag the count in the result.
@@ -670,7 +628,7 @@ mod tests {
         ).unwrap();
         conn.execute(
             "INSERT INTO memories (id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, deprecated, memory_type, importance, pinned, content_type, source_type) \
-             VALUES ('m2','second memory',NULL,'[]','{}',?1,?1,'sx-ns',0,0,'fact',0.5,0,'text','user')",
+             VALUES ('m2','second memory',NULL,'[]','{}',?1,?1,'sx-ns',0,0,'fact',0.5,1,'text','user')",
             [now],
         ).unwrap();
         conn.execute(
@@ -687,6 +645,30 @@ mod tests {
              VALUES ('c1','d1',0,'# Title','# Title\ncontent body',0,20,'[]',?1)",
             [now],
         ).unwrap();
+        // Seed every remaining exported section so the round-trip exercises
+        // each match arm end-to-end (#1078: a section missing from the test
+        // fixture leaves delete-arm mutants uncatchable).
+        conn.execute(
+            "INSERT INTO room_documents (room_id, doc_slug, added_at) VALUES ('r1','rt-doc',?1)",
+            [now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO graph_nodes (id, label, entity_type, properties_json, created_at) VALUES ('gn1','n1','concept','{}',?1)",
+            [now],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO graph_nodes (id, label, entity_type, properties_json, created_at) VALUES ('gn2','n2','concept','{}',?1)",
+            [now],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO graph_edges (id, source_id, target_id, relation, weight, created_at) VALUES ('ge1','gn1','gn2','relates',0.5,?1)",
+            [now],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO timeline_events (memory_id, event_type, event_data, created_at) VALUES ('m1','created','{}',?1)",
+            [now],
+        ).unwrap();
 
         let exported = src.export_full().unwrap();
         let first_line = exported.lines().next().unwrap();
@@ -694,6 +676,23 @@ mod tests {
         assert!(manifest["uteke_export"].is_object(), "manifest first line");
         assert_eq!(manifest["uteke_export"]["format_version"], 1);
         assert_eq!(manifest["uteke_export"]["sections"]["memories"], 2);
+        for (section, expected) in [
+            ("memories", 2),
+            ("rooms", 1),
+            ("room_memories", 1),
+            ("room_documents", 1),
+            ("memory_edges", 1),
+            ("documents", 1),
+            ("document_chunks", 1),
+            ("graph_nodes", 2),
+            ("graph_edges", 1),
+            ("timeline_events", 1),
+        ] {
+            assert_eq!(
+                manifest["uteke_export"]["sections"][section], expected,
+                "manifest count for {section}"
+            );
+        }
 
         // Import into a fresh store.
         let dst = Uteke::open(dir_b.join("t.db").to_str().unwrap()).unwrap();
@@ -704,6 +703,23 @@ mod tests {
         assert_eq!(result["imported"]["memory_edges"], 1);
         assert_eq!(result["imported"]["documents"], 1);
         assert_eq!(result["imported"]["document_chunks"], 1);
+        for (section, expected) in [
+            ("memories", 2),
+            ("rooms", 1),
+            ("room_memories", 1),
+            ("room_documents", 1),
+            ("memory_edges", 1),
+            ("documents", 1),
+            ("document_chunks", 1),
+            ("graph_nodes", 2),
+            ("graph_edges", 1),
+            ("timeline_events", 1),
+        ] {
+            assert_eq!(
+                result["imported"][section], expected,
+                "imported count for {section}"
+            );
+        }
 
         // ids intact: room links at restored memory ids.
         let dconn = dst.graph_store();
@@ -715,6 +731,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(linked, "m1", "room points at restored memory id");
+        // pinned flag must survive the round-trip verbatim
+        let pinned: i64 = dconn
+            .query_row("SELECT pinned FROM memories WHERE id='m2'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(pinned, 1, "pinned flag round-trips");
         let doc: String = dconn
             .query_row("SELECT slug FROM documents WHERE id='d1'", [], |r| r.get(0))
             .unwrap();

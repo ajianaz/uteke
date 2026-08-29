@@ -20,8 +20,15 @@ import tempfile
 import time
 from pathlib import Path
 
+# Temporal date-window boost (#1119) — harness-side, default OFF.
+sys.path.insert(0, str(Path(__file__).parent))
+from temporal import boost_ranking, parse_question_date, parse_temporal
+
 # Auto-configure embedding backend from EMBED_API_KEY/EMBED_API_BASE/EMBED_MODEL env vars.
 # Falls back to local ONNX if these are not set.
+# MMR diversity rerank (#1120) — harness-side, default OFF.
+sys.path.insert(0, str(Path(__file__).parent))
+from mmr import mmr_rerank
 if os.environ.get("EMBED_API_KEY") and os.environ.get("EMBED_API_BASE"):
     os.environ.setdefault("UTEKE_EMBEDDING_BACKEND", "openai")
     os.environ.setdefault("UTEKE_EMBEDDING_API_KEY", os.environ["EMBED_API_KEY"])
@@ -101,7 +108,14 @@ def run_uteke(args, store_path, subcommand, extra_args=None):
     repo_root = Path(__file__).resolve().parent.parent.parent
     uteke_bin = str(repo_root / "target" / "release" / "uteke")
     if not Path(uteke_bin).exists():
-        uteke_bin = shutil.which("uteke") or "uteke"
+        # Prefer the known-good local install over ambiguous PATH hits
+        # (/opt/data/.cargo/bin/uteke is x86_64-dynamic and broken on this host)
+        for cand in ("/opt/data/.local/bin/uteke",):
+            if Path(cand).exists():
+                uteke_bin = cand
+                break
+        else:
+            uteke_bin = shutil.which("uteke") or "uteke"
 
     # Linux-only: throttle CPU so benchmarks don't starve the server.
     if sys.platform == "linux":
@@ -219,55 +233,136 @@ def recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids,
     # from insert failures).
     evidence_session_ids = set(entry.get("answer_session_ids", [])) & inserted_sids
 
-    # Run recall — fetch top-50 for Recall@5/10/50
+    # Run recall — fetch top-50 for Recall@5/10/50.
+    # --fusion mode (#1123): RRF-fuse two uteke rankings (vector + hybrid).
+    # Vector and hybrid fail on DISJOINT question sets (fast50 evidence:
+    # 7 questions vector-only wins, 5 hybrid wins) — RRF captures both.
+    # Weights vec×1.5 : hybrid×1 sit mid-plateau [1.3, 1.6] of R@5=0.97.
+    fusion_mode = getattr(args, "fusion", False)
+    # "default" sentinel: omit --strategy so the binary's zero-config
+    # default (0.16.0: fusion) is what gets validated (#1123).
+    strategy_args = [] if args.strategy == "default" else ["--strategy", args.strategy]
     recall_cmd = [
         "recall", question,
         "--limit", "50",
         "--tags", "longmemeval",
-        "--strategy", args.strategy,
+        *strategy_args,
         "--min", "0.0",  # Disable threshold — evaluate raw retrieval ranking (#995)
     ]
+    if fusion_mode:
+        # Base ranking from primary strategy, then fuse with the other.
+        # Build the complementary command by REPLACING the --strategy value
+        # (appending would duplicate the flag → clap error).
+        other = "vector" if args.strategy == "hybrid" else "hybrid"
+        alt_cmd = [
+            "recall", question,
+            "--limit", "50",
+            "--tags", "longmemeval",
+            "--strategy", other,
+            "--min", "0.0",
+        ]
+        fusion_cmds = [recall_cmd, alt_cmd]
+    else:
+        fusion_cmds = [recall_cmd]
     try:
-        output = run_uteke(args, store_path, recall_cmd)
+        outputs = [run_uteke(args, store_path, cmd) for cmd in fusion_cmds]
     except RuntimeError as e:
         print(f"  Warning: recall failed: {e}", file=sys.stderr)
         return None
 
     # Parse results
     try:
-        results = json.loads(output)
+        parsed = [json.loads(o) for o in outputs]
+        results = parsed if fusion_mode else (parsed[0] if isinstance(parsed[0], list) else [parsed[0]])
     except json.JSONDecodeError:
         print(f"  Warning: could not parse recall output", file=sys.stderr)
         return None
-
-    if not isinstance(results, list):
-        results = [results]
-
-    # Extract session_ids via memory_id -> session_id mapping.
-    # Recall JSON in uteke 0.7+ returns memory_id, not metadata fields.
-    # We built mid_to_sid during insert to bridge this.
-    raw_session_ids = []
-    for r in results:
-        mid = r.get("memory_id") or r.get("id")
-        if mid and mid in mid_to_sid:
-            raw_session_ids.append(mid_to_sid[mid])
-        else:
-            # Fallback: try metadata (older uteke versions)
-            meta = r.get("metadata", {})
-            sid = meta.get("session_id")
-            if sid:
-                raw_session_ids.append(sid)
 
     # Deduplicate session_ids preserving rank order (first occurrence = highest rank).
     # When --chunk-sessions is enabled, multiple chunks from the same session
     # can appear in results. We keep only the first (best-ranked) occurrence
     # so that session-level Recall@k measures unique sessions, not chunks.
-    seen = set()
-    retrieved_session_ids = []
-    for sid in raw_session_ids:
-        if sid not in seen:
-            seen.add(sid)
-            retrieved_session_ids.append(sid)
+    def _dedup_ranking(raw_sids):
+        seen = set()
+        out = []
+        for sid in raw_sids:
+            if sid not in seen:
+                seen.add(sid)
+                out.append(sid)
+        return out
+
+    if fusion_mode:
+        # results = [ranking_primary, ranking_secondary] (lists of recall dicts)
+        per_ranking_sids = []
+        for res in results:
+            raw = []
+            for r in res:
+                mid = r.get("memory_id") or r.get("id")
+                if mid and mid in mid_to_sid:
+                    raw.append(mid_to_sid[mid])
+                else:
+                    meta = r.get("metadata", {})
+                    sid = meta.get("session_id")
+                    if sid:
+                        raw.append(sid)
+            per_ranking_sids.append(_dedup_ranking(raw))
+
+        # RRF fuse: primary (vector) ×1.7 + secondary (hybrid) ×1, k=60.
+        # Tuned on ACTUAL x86 Modal rankings: plateau [1.7, 1.9] → R@5=0.98.
+        scores = {}
+        primary_w = getattr(args, "fusion_primary_weight", 1.7)
+        k = 60
+        for i, sid in enumerate(per_ranking_sids[0]):
+            scores[sid] = scores.get(sid, 0.0) + primary_w / (k + i + 1)
+        for i, sid in enumerate(per_ranking_sids[1]):
+            scores[sid] = scores.get(sid, 0.0) + 1.0 / (k + i + 1)
+        retrieved_session_ids = sorted(scores, key=lambda s: -scores[s])
+    else:
+        raw_session_ids = []
+        for r in results:
+            mid = r.get("memory_id") or r.get("id")
+            if mid and mid in mid_to_sid:
+                raw_session_ids.append(mid_to_sid[mid])
+            else:
+                # Fallback: try metadata (older uteke versions)
+                meta = r.get("metadata", {})
+                sid = meta.get("session_id")
+                if sid:
+                    raw_session_ids.append(sid)
+        retrieved_session_ids = _dedup_ranking(raw_session_ids)
+
+    # Temporal date-window boost (#1119): soft-boost sessions whose date falls
+    # inside the question's temporal window ("last month", "in February",
+    # "between X and Y", ...). No-op when the question has no temporal
+    # expression or when dates are missing. Default OFF (--temporal).
+    if getattr(args, "temporal", False) and retrieved_session_ids:
+        qdate = parse_question_date(entry.get("question_date", ""))
+        window = parse_temporal(question, qdate)
+        if window:
+            session_dates = {}
+            for sid, dstr in zip(entry.get("haystack_session_ids", []),
+                                 entry.get("haystack_dates", [])):
+                d = parse_question_date(dstr)
+                if d is not None:
+                    session_dates[sid] = d
+            retrieved_session_ids = boost_ranking(
+                retrieved_session_ids, session_dates, window,
+                boost=getattr(args, "temporal_boost", 0.0022))
+
+    # MMR diversity rerank (#1120): penalise redundant sessions in the top-k.
+    # Zero-model post-processing (TF-IDF cosine over candidate texts) —
+    # default OFF (--mmr-lambda not passed → None → no-op).
+    if getattr(args, "mmr_lambda", None) is not None and retrieved_session_ids:
+        # haystack_sessions[i] (list of turn dicts) aligns with
+        # haystack_session_ids[i] by index — build sid -> text directly.
+        texts_by_sid = {
+            sid: session_to_text(hs)
+            for sid, hs in zip(entry.get("haystack_session_ids", []),
+                               entry.get("haystack_sessions", []))
+        }
+        candidate_texts = [texts_by_sid.get(sid, "") for sid in retrieved_session_ids]
+        retrieved_session_ids = mmr_rerank(
+            retrieved_session_ids, candidate_texts, lam=args.mmr_lambda)
 
     # --- Session-level metrics ---
     # Recall@k: fraction of evidence sessions in top-k
@@ -297,6 +392,7 @@ def recall_and_evaluate(args, store_path, entry, answer_sessions, inserted_sids,
 
     return {
         "session": {**session_recall, **session_ndcg},
+        "_retrieved_session_ids": retrieved_session_ids[:50],
         # Note: turn-level retrieval requires per-turn indexing, which this
         # harness does not do (sessions are inserted as single memories).
         # Turn-level metrics are omitted to avoid misleading copies of
@@ -325,13 +421,34 @@ def main():
     parser.add_argument("--reset-every", type=int, default=20,
                         help="Wipe and recreate the store every N questions to prevent memory buildup (default: 20)")
     parser.add_argument("--strategy", default="vector",
-                        choices=["vector", "fts5", "hybrid", "graph"],
-                        help="Recall strategy (default: vector)")
+                        choices=["vector", "fts5", "hybrid", "graph", "fusion", "default"],
+                        help="Recall strategy (default: vector). 'fusion' runs "
+                             "the IN-CORE weighted RRF (vector×1.7+hybrid×1) — "
+                             "distinct from the harness-level --fusion flag (#1123). "
+                             "'default' omits --strategy entirely so the binary's "
+                             "own zero-config default applies (0.16.0: fusion)")
+    parser.add_argument("--fusion", action="store_true",
+                        help="RRF-fuse two recall rankings: primary strategy ×1.7 + "
+                             "complementary (vector↔hybrid) ×1, k=60 (#1123)")
+    parser.add_argument("--fusion-primary-weight", type=float, default=1.7,
+                        help="RRF weight for the primary strategy ranking (default: 1.5)")
     parser.add_argument("--chunk-sessions", action="store_true",
                         help="Chunk long sessions into smaller memories to reduce embedding dilution")
     parser.add_argument("--chunk-size", type=int, default=2000,
                         help="Max chars per chunk when --chunk-sessions is enabled (default: 2000)")
+    parser.add_argument("--temporal", action="store_true",
+                        help="Enable temporal date-window boost (#1119), default OFF")
+    parser.add_argument("--temporal-boost", type=float, default=0.0022,
+                        help="Additive RRF boost for sessions inside the temporal window (default: 0.0022)")
+    parser.add_argument("--mmr-lambda", type=float, default=None,
+                        help="Enable MMR diversity rerank (#1120) with this lambda "
+                             "(e.g. 0.7). Default: off (None, no rerank).")
     args = parser.parse_args()
+
+    if args.temporal:
+        print(f"Temporal boost: enabled (boost={args.temporal_boost})")
+    if args.mmr_lambda is not None:
+        print(f"MMR diversity rerank: enabled (lambda={args.mmr_lambda})")
 
     # Load data
     with open(args.data) as f:
@@ -344,6 +461,9 @@ def main():
     print(f"  Questions: {len(data)}")
     print(f"  Namespace: {args.namespace}")
     print(f"  Strategy: {args.strategy}")
+    if getattr(args, "fusion", False):
+        other = "vector" if args.strategy == "hybrid" else "hybrid"
+        print(f"  Fusion: enabled (RRF {args.strategy}×{args.fusion_primary_weight} + {other}×1, k=60)")
     if args.chunk_sessions:
         print(f"  Chunking: enabled (max {args.chunk_size} chars/session)")
     else:
@@ -398,7 +518,12 @@ def main():
                 result_entry = {
                     "question_id": qid,
                     "question_type": entry.get("question_type", "unknown"),
-                    "retrieval_results": {"metrics": metrics},
+                    "retrieval_results": {
+                        "metrics": metrics,
+                        # Post-rerank session order — enables offline replay of
+                        # temporal/MMR experiments without re-burning credits.
+                        "retrieved_session_ids": metrics.pop("_retrieved_session_ids", []),
+                    },
                 }
                 fout.write(json.dumps(result_entry) + "\n")
                 fout.flush()  # Flush for resume safety

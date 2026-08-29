@@ -140,6 +140,14 @@ Merge similar/duplicate memories automatically.
 
 **Request body**: [`ConsolidateRequest`](#consolidaterequest)
 
+#### 🟡 `POST` `/consolidate/pair`
+
+Consolidate a single caller-chosen duplicate pair: keep id_keep, deprecate (or hard-delete) id_remove.
+
+**Request body**: [`ConsolidatePairRequest`](#consolidatepairrequest)
+
+*Related: `1076`*
+
 #### 🟡 `POST` `/aging`
 
 Run aging cleanup — deprioritize or remove old/stale memories.
@@ -334,6 +342,14 @@ Get room summary focused on document-type memories.
 #### 🟢 `GET` `/room/list`
 
 List all rooms.
+
+#### 🟡 `POST` `/room/consolidate`
+
+Plan or execute segment-level LLM consolidation of room memories (#1088). Dry-run by default; `apply: true` executes with a hard budget cap. Write op — blocked for read-only tokens.
+
+**Request body**: JSON object (see handler source for fields)
+
+*Related: `#1088`*
 
 #### 🟡 `POST` `/room/stats`
 
@@ -640,9 +656,10 @@ Default: 0.0 (no filtering). Use `strict=true` for 0.5 default (#995). |
 | `namespace` | any | No |  |
 | `query` | `string` | Yes |  |
 | `search_type` | any | No | Search type filter: "all" (default, unified), "memory", or "doc" (#531). |
-| `strategy` | any | No | Recall strategy: "hybrid" (default), "vector", "fts5", or "graph" (#900, #1034).
+| `strategy` | any | No | Recall strategy: "fusion" (default since 0.16.0), "vector", "fts5",
+"hybrid", or "graph" (#900, #1034, #1123).
 When absent, the server falls back to `[recall] default_strategy` from
-uteke.toml, then to "hybrid" — matching the CLI default.
+uteke.toml, then to "fusion" — matching the CLI default.
 Invalid values return HTTP 400. |
 | `strict` | `boolean` | No | Use strict threshold (defaults to 0.5 if min_score not set). |
 | `tags` | ``string``[] | No |  |
@@ -652,6 +669,7 @@ Invalid values return HTTP 400. |
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `author_type` | any | No | Author type: "human" | "agent" (#1083). Defaults to "agent" when omitted. |
 | `category` | any | No | Category — stored as metadata key "category". |
 | `content` | `string` | Yes |  |
 | `detect_contradiction` | `boolean` | No |  |
@@ -671,6 +689,8 @@ Accepts an object (e.g. {"project": "uteke"}). |
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `at` | any | No | Time-travel: recall room state as of this RFC3339 timestamp (#1082).
+Memories created after `at` (or invalidated before it) are excluded. |
 | `author` | any | No |  |
 | `limit` | `integer` | No |  |
 | `min_score` | any | No |  |

@@ -230,7 +230,10 @@ fn bench_single_count(count: usize) -> Result<BenchResult, String> {
         let _ = uteke.shutdown();
 
         let db_path = dir.join("uteke.db");
-        let index_path = dir.join("uteke_index.usearch");
+        let index_path = dir.join(format!(
+            "uteke_index.{}",
+            uteke_core::memory::vector::INDEX_EXT
+        ));
         let keys_path = dir.join("uteke_index.keys");
 
         let db_size_kb = file_size_kb(&db_path);

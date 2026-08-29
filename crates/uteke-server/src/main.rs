@@ -85,6 +85,11 @@ fn main() {
                     std::process::exit(1);
                 }
             }
+            "--version" | "-V" => {
+                // Match the main CLI's format: `uteke v0.15.0` (see #1044)
+                println!("uteke-serve {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
             "--help" | "-h" => {
                 println!("uteke-serve — persistent warm memory server");
                 println!();
@@ -96,6 +101,7 @@ fn main() {
                 println!("  --auth-token <TOKEN> Bearer token for API auth");
                 println!("  --cors-origin <URL>  Allowed CORS origin (repeatable)");
                 println!("  --read-only-token <T> Read-only API token (GET endpoints only) (#409)");
+                println!("  -V, --version        Show version");
                 println!("  -h, --help           Show this help");
                 println!();
                 println!("Config: reads [server] section from uteke.toml");

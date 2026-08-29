@@ -286,6 +286,15 @@ pub const ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         method: "POST",
+        path: "/room/consolidate",
+        description: "Plan or execute segment-level LLM consolidation of room memories (#1088). Dry-run by default; `apply: true` executes with a hard budget cap. Write op — blocked for read-only tokens.",
+        request_type: Some("serde_json::Value"),
+        response_type: None,
+        excludes_deprecated: false,
+        issues: &["#1088"],
+    },
+    Endpoint {
+        method: "POST",
         path: "/room/stats",
         description: "Get memory count for a room. Includes deprecated memories (known discrepancy vs /room/summary).",
         request_type: Some("serde_json::Value"),
@@ -514,6 +523,15 @@ pub const ENDPOINTS: &[Endpoint] = &[
         response_type: None,
         excludes_deprecated: false,
         issues: &[],
+    },
+    Endpoint {
+        method: "POST",
+        path: "/consolidate/pair",
+        description: "Consolidate a single caller-chosen duplicate pair: keep id_keep, deprecate (or hard-delete) id_remove.",
+        request_type: Some("ConsolidatePairRequest"),
+        response_type: None,
+        excludes_deprecated: false,
+        issues: &["1076"],
     },
     Endpoint {
         method: "POST",

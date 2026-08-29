@@ -11,6 +11,9 @@
 
 pub mod chunker;
 mod consolidate;
+pub mod consolidation_api;
+pub mod consolidation_exec;
+pub mod consolidation_plan;
 pub mod dream;
 mod edges;
 mod embed;
@@ -26,8 +29,10 @@ pub mod memory;
 pub mod offline_extraction;
 mod operations;
 mod orphans;
+pub mod provenance;
 mod recall_cache;
 mod rooms;
+pub mod rooms_segments;
 pub mod salience_recency;
 pub mod structural_export;
 mod timeline;
@@ -589,6 +594,47 @@ impl Uteke {
         &self.lifecycle_config
     }
 
+    /// Embed an arbitrary text with the configured backend (lazy init).
+    /// Used by the consolidation executor to embed consolidated records
+    /// before writing them so they stay vector-searchable.
+    pub fn embed_text(&self, text: &str) -> Result<Vec<f32>, Error> {
+        self.ensure_embedder()?;
+        self.embedder
+            .lock()
+            .map_err(|_| Error::lock("embedder lock during embed_text"))?
+            .as_ref()
+            .expect("embedder ensured above")
+            .embed(text)
+    }
+
+    /// Add an already-persisted memory's embedding to the vector index.
+    /// Used by the consolidation write path so new records are searchable.
+    pub(crate) fn add_to_index(&self, id: &str, embedding: &[f32]) -> Result<(), Error> {
+        let mut index = self
+            .index
+            .write()
+            .map_err(|_| Error::lock("index write lock during consolidation insert"))?;
+        index.insert(id, embedding)?;
+        if let Err(e) = index.save() {
+            tracing::warn!("failed to persist vector index after insert id={id}: {e}");
+        }
+        Ok(())
+    }
+
+    /// Remove an entry from the vector index (compensating action for a
+    /// failed consolidation insert). Persistence failure is logged, not
+    /// fatal — the caller is already unwinding an error.
+    pub(crate) fn remove_from_index(&self, id: &str) {
+        let Ok(mut index) = self.index.write() else {
+            return;
+        };
+        if index.remove(id) {
+            if let Err(e) = index.save() {
+                tracing::warn!("failed to persist vector index after remove id={id}: {e}");
+            }
+        }
+    }
+
     /// Open or create a Uteke memory store.
     ///
     /// `path` can be a directory path (will create `uteke.db` inside)
@@ -667,10 +713,24 @@ impl Uteke {
         embedding_settings: EmbeddingSettings,
         graph_rerank_config: graph_rerank::GraphRerankConfig,
     ) -> Result<Self, Error> {
-        // Determine index path: same directory as SQLite DB
-        let index_path = store.path().map(|p| {
-            let dir = p.parent().unwrap_or(Path::new("."));
-            dir.join("uteke_index.usearch")
+        // Determine index path: same directory as SQLite DB.
+        // `:memory:` databases get an EPHEMERAL in-memory index instead:
+        // persisting to `./uteke_index.usearch` in the CWD would make every
+        // concurrent in-memory instance (e.g. parallel #[test]s) share and
+        // corrupt one index file (sidecar keys vs usearch keys race →
+        // "Duplicate keys not allowed" flakes).
+        let index_path = store.path().and_then(|p| {
+            // rusqlite reports "" (empty) for in-memory DBs, not ":memory:"
+            if matches!(p.to_str(), Some(":memory:") | Some("")) {
+                None
+            } else {
+                let dir = p.parent().unwrap_or(Path::new("."));
+                // Backend-specific extension (#1112): a vecq build reads/writes
+                // `uteke_index.vecq`, a usearch build `uteke_index.usearch`.
+                // Cross-backend opens no longer parse (and re-save over) the
+                // other format's file.
+                Some(dir.join(format!("uteke_index.{}", crate::memory::vector::INDEX_EXT)))
+            }
         });
 
         // Use dims from the provided embedder if available.
@@ -749,9 +809,15 @@ impl Uteke {
 
         // Resolve embedding cache path: same directory as the main DB.
         // `embed_cache.db` avoids ONNX model load for repeated queries (#896).
-        let embed_cache_path = store.path().map(|p| {
-            let dir = p.parent().unwrap_or(Path::new("."));
-            dir.join("embed_cache.db")
+        let embed_cache_path = store.path().and_then(|p| {
+            // In-memory DBs are ephemeral — no cache file beside them
+            // (prevents a stray ./embed_cache.db in the CWD, see #1101).
+            if matches!(p.to_str(), Some(":memory:") | Some("")) {
+                None
+            } else {
+                let dir = p.parent().unwrap_or(Path::new("."));
+                Some(dir.join("embed_cache.db"))
+            }
         });
 
         Ok(Self {
@@ -1139,6 +1205,12 @@ impl Uteke {
         source_type: &str,
     ) -> Result<bool, Error> {
         self.store.set_source(id, source, source_type)
+    }
+
+    /// Set author type on a memory (#1083): "human" | "agent".
+    /// Invalid values return a Validation error.
+    pub fn set_author_type(&self, id: &str, author_type: &str) -> Result<bool, Error> {
+        self.store.set_author_type(id, author_type)
     }
 
     /// Recalculate importance scores for all memories.
@@ -2336,6 +2408,26 @@ fn resolve_db_path(db_path: &Path) -> Result<String, Error> {
 
 #[cfg(test)]
 mod tests {
+    #[ignore = "requires ONNX embedder — index file extension follows active backend"]
+    #[test]
+    fn index_file_uses_backend_extension() {
+        // #1112: the index filename must follow the active backend, so
+        // vecq builds write `uteke_index.vecq` and never clobber a
+        // usearch-written `uteke_index.usearch` (and vice versa).
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("uteke.db");
+        let uteke = crate::Uteke::open(&db).unwrap();
+        uteke.remember("backend ext test", &[], None, None).unwrap();
+        uteke.shutdown().unwrap();
+        let expected = dir
+            .path()
+            .join(format!("uteke_index.{}", crate::memory::vector::INDEX_EXT));
+        assert!(
+            expected.exists(),
+            "expected index file {expected:?} to exist after shutdown"
+        );
+    }
+
     use super::*;
     use serial_test::serial;
 
@@ -2354,6 +2446,7 @@ mod tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".to_string(),
@@ -2363,6 +2456,7 @@ mod tests {
             slug: None,
             source: None,
             source_type: "user".to_string(),
+            author_type: "agent".to_string(),
         };
 
         let json = serde_json::to_string(&m).unwrap();
@@ -2402,6 +2496,7 @@ mod tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".to_string(),
@@ -2411,6 +2506,7 @@ mod tests {
             slug: None,
             source: None,
             source_type: "user".to_string(),
+            author_type: "agent".to_string(),
         };
 
         let sr = SearchResult {
@@ -3167,6 +3263,7 @@ mod tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".to_string(),
@@ -3176,6 +3273,7 @@ mod tests {
             slug: None,
             source: None,
             source_type: "user".to_string(),
+            author_type: "agent".to_string(),
         };
         uteke.store.insert(&m1).unwrap();
 

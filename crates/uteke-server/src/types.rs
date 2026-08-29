@@ -206,6 +206,9 @@ pub struct RememberRequest {
     /// Source type (defaults to "user").
     #[serde(default)]
     pub source_type: Option<String>,
+    /// Author type: "human" | "agent" (#1083). Defaults to "agent" when omitted.
+    #[serde(default)]
+    pub author_type: Option<String>,
 }
 
 #[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
@@ -242,9 +245,10 @@ pub struct RecallRequest {
     /// `linked_memory_ids` on document results.
     #[serde(default)]
     pub enrich: bool,
-    /// Recall strategy: "hybrid" (default), "vector", "fts5", or "graph" (#900, #1034).
+    /// Recall strategy: "fusion" (default since 0.16.0), "vector", "fts5",
+    /// "hybrid", or "graph" (#900, #1034, #1123).
     /// When absent, the server falls back to `[recall] default_strategy` from
-    /// uteke.toml, then to "hybrid" — matching the CLI default.
+    /// uteke.toml, then to "fusion" — matching the CLI default.
     /// Invalid values return HTTP 400.
     #[serde(default)]
     pub strategy: Option<String>,
@@ -337,6 +341,10 @@ pub struct RoomRecallRequest {
     pub author: Option<String>,
     #[serde(default)]
     pub min_score: Option<f32>,
+    /// Time-travel: recall room state as of this RFC3339 timestamp (#1082).
+    /// Memories created after `at` (or invalidated before it) are excluded.
+    #[serde(default)]
+    pub at: Option<String>,
 }
 
 pub fn default_limit_search() -> usize {
@@ -432,7 +440,8 @@ pub struct RecallFileSection {
     /// Strict mode threshold (higher, for critical queries).
     pub min_score_strict: Option<f64>,
     /// Default recall strategy when a request omits `strategy` (#1034).
-    /// One of: vector | fts5 | hybrid | graph. Server-side default: hybrid.
+    /// One of: vector | fts5 | hybrid | graph | fusion. Server-side default:
+    /// fusion (#1123).
     pub default_strategy: Option<String>,
 }
 
@@ -626,6 +635,18 @@ pub struct ConsolidateRequest {
 
 fn default_consolidate_threshold() -> f32 {
     0.9
+}
+
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
+#[derive(Deserialize)]
+pub struct ConsolidatePairRequest {
+    /// Memory to keep untouched.
+    pub id_keep: String,
+    /// Memory to deprecate (or hard-delete when `hard` is true).
+    pub id_remove: String,
+    /// Hard-delete instead of soft-delete (deprecate). Default false.
+    #[serde(default)]
+    pub hard: bool,
 }
 
 /// Deserialize an `f32` from either a number or a JSON string.

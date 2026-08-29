@@ -292,6 +292,7 @@ impl crate::Uteke {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: Some(now),
             valid_until: None,
             memory_type: memory_type.to_string(),
@@ -301,6 +302,7 @@ impl crate::Uteke {
             slug: None,
             source: None,
             source_type: "user".to_string(),
+            author_type: "agent".to_string(),
         };
 
         // Acquire index write lock BEFORE any writes so lock failures are detected early.
@@ -384,6 +386,32 @@ impl crate::Uteke {
         min_score: f32,
         entity_filter: Option<&str>,
         category_filter: Option<&str>,
+    ) -> Result<Vec<SearchResult>, Error> {
+        self.recall_inner(
+            query,
+            limit,
+            tags_filter,
+            namespace,
+            min_score,
+            entity_filter,
+            category_filter,
+            false,
+        )
+    }
+
+    /// Same as `recall` but optionally keeps deprecated memories so temporal
+    /// filters (#1086) can decide their fate based on `deprecated_at`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn recall_inner(
+        &self,
+        query: &str,
+        limit: usize,
+        tags_filter: Option<&[&str]>,
+        namespace: Option<&str>,
+        min_score: f32,
+        entity_filter: Option<&str>,
+        category_filter: Option<&str>,
+        include_deprecated: bool,
     ) -> Result<Vec<SearchResult>, Error> {
         // Embed query outside any lock — CPU-intensive (~50ms), no shared state needed.
         // Only the embedder Mutex is held here, allowing concurrent index reads.
@@ -474,8 +502,9 @@ impl crate::Uteke {
                     }
                 }
 
-                // Filter deprecated memories (#748)
-                if memory.deprecated {
+                // Filter deprecated memories (#748) — unless the caller
+                // needs them for point-in-time filtering (#1086).
+                if memory.deprecated && !include_deprecated {
                     continue;
                 }
 
@@ -573,36 +602,14 @@ impl crate::Uteke {
         // min_score is passed as 0.0 to the underlying paths: thresholding
         // happens AFTER boosts (on both cache-miss and cache-hit reads) so
         // cold and warm calls filter identical boosted score sets.
-        let results = match strategy {
-            RecallStrategy::Vector => {
-                self.recall(query, boost_window, tags_filter, namespace, 0.0, None, None)?
-            }
-            RecallStrategy::Fts5 => {
-                self.recall_fts5_only(query, boost_window, tags_filter, namespace, 0.0)?
-            }
-            // Hybrid (RRF): min_score is passed but not used for filtering.
-            // RRF scores are rank-based, not cosine similarity. Applying a
-            // cosine threshold to RRF scores would incorrectly filter results.
-            RecallStrategy::Hybrid => {
-                self.recall_rrf(query, boost_window, tags_filter, namespace, min_score)?
-            }
-            // Graph (#378): hybrid RRF, then fuse graph-signal boosts.
-            // The boost is additive + log-scaled, so isolated memories are
-            // untouched and well-connected memories drift upward. Reranking
-            // happens *before* caching so cache entries store the final scores.
-            RecallStrategy::Graph => {
-                let rrf =
-                    self.recall_rrf(query, boost_window, tags_filter, namespace, min_score)?;
-                if self.graph_rerank_config.enabled && !rrf.is_empty() {
-                    let ids: Vec<String> = rrf.iter().map(|r| r.memory.id.clone()).collect();
-                    let signals =
-                        crate::graph_rerank::compute_graph_signals(&self.store.conn, &ids)?;
-                    crate::graph_rerank::rerank_with_graph(rrf, &signals, &self.graph_rerank_config)
-                } else {
-                    rrf
-                }
-            }
-        };
+        let results = self.compute_recall(
+            strategy,
+            query,
+            boost_window,
+            tags_filter,
+            namespace,
+            min_score,
+        )?;
 
         // Cache results for future queries (without min_score filtering,
         // so cached results are reusable for any threshold). The cached set
@@ -625,6 +632,87 @@ impl crate::Uteke {
         }
         results.truncate(limit);
         Ok(results)
+    }
+
+    /// Raw strategy computation below the cache layer. Shared by the
+    /// dispatch path (cache-miss) and by Fusion, which runs two
+    /// sub-strategies and fuses their rankings (#1123).
+    ///
+    /// Callers must NOT cache inside this method — the dispatcher owns the
+    /// cache put and applies salience/recency boosts exactly once.
+    fn compute_recall(
+        &self,
+        strategy: RecallStrategy,
+        query: &str,
+        boost_window: usize,
+        tags_filter: Option<&[&str]>,
+        namespace: Option<&str>,
+        min_score: f32,
+    ) -> Result<Vec<SearchResult>, Error> {
+        match strategy {
+            RecallStrategy::Vector => {
+                self.recall(query, boost_window, tags_filter, namespace, 0.0, None, None)
+            }
+            RecallStrategy::Fts5 => {
+                self.recall_fts5_only(query, boost_window, tags_filter, namespace, 0.0)
+            }
+            // Hybrid (RRF): min_score is passed but not used for filtering.
+            // RRF scores are rank-based, not cosine similarity. Applying a
+            // cosine threshold to RRF scores would incorrectly filter results.
+            RecallStrategy::Hybrid => {
+                self.recall_rrf(query, boost_window, tags_filter, namespace, min_score)
+            }
+            // Graph (#378): hybrid RRF, then fuse graph-signal boosts.
+            // The boost is additive + log-scaled, so isolated memories are
+            // untouched and well-connected memories drift upward. Reranking
+            // happens *before* caching so cache entries store the final scores.
+            RecallStrategy::Graph => {
+                let rrf =
+                    self.recall_rrf(query, boost_window, tags_filter, namespace, min_score)?;
+                if self.graph_rerank_config.enabled && !rrf.is_empty() {
+                    let ids: Vec<String> = rrf.iter().map(|r| r.memory.id.clone()).collect();
+                    let signals =
+                        crate::graph_rerank::compute_graph_signals(&self.store.conn, &ids)?;
+                    Ok(crate::graph_rerank::rerank_with_graph(
+                        rrf,
+                        &signals,
+                        &self.graph_rerank_config,
+                    ))
+                } else {
+                    Ok(rrf)
+                }
+            }
+            // Fusion (#1123): run vector and hybrid rankings at boost_window
+            // depth, then weighted-RRF fuse them. Vector and hybrid fail on
+            // disjoint question sets; the fused ranking captures both sides'
+            // wins (fast50 R@5 0.9267 hybrid → 0.98 fusion). Sub-calls bypass
+            // the cache/boost layer — THIS dispatcher applies boosts once and
+            // caches the fused set, mirroring harness semantics.
+            RecallStrategy::Fusion => {
+                let vec_res = self.compute_recall(
+                    RecallStrategy::Vector,
+                    query,
+                    boost_window,
+                    tags_filter,
+                    namespace,
+                    0.0,
+                )?;
+                let hyb_res = self.compute_recall(
+                    RecallStrategy::Hybrid,
+                    query,
+                    boost_window,
+                    tags_filter,
+                    namespace,
+                    min_score,
+                )?;
+                Ok(rrf_fuse_weighted(
+                    vec_res,
+                    hyb_res,
+                    FUSION_W_VECTOR,
+                    FUSION_W_HYBRID,
+                ))
+            }
+        }
     }
 
     /// Apply salience/recency boosts in place, then re-sort and truncate.
@@ -1496,7 +1584,7 @@ impl crate::Uteke {
 
         loop {
             let fetch_limit = (limit * multiplier).max(50);
-            let candidates = self.recall(
+            let candidates = self.recall_inner(
                 query,
                 fetch_limit,
                 tags_filter,
@@ -1504,34 +1592,13 @@ impl crate::Uteke {
                 min_score,
                 entity_filter,
                 category_filter,
+                true,
             )?;
             let candidates_len = candidates.len();
 
             let mut results: Vec<SearchResult> = candidates
                 .into_iter()
-                .filter(|r| {
-                    // Memory must have existed at this time
-                    if r.memory.created_at > point_in_time {
-                        return false;
-                    }
-                    // Memory must not have been invalidated before this time
-                    if let Some(valid_until) = r.memory.valid_until {
-                        if valid_until <= point_in_time {
-                            return false;
-                        }
-                    }
-                    // Memory should not be deprecated
-                    if r.memory.deprecated {
-                        return false;
-                    }
-                    // valid_from should be before point_in_time (if set)
-                    if let Some(valid_from) = r.memory.valid_from {
-                        if valid_from > point_in_time {
-                            return false;
-                        }
-                    }
-                    true
-                })
+                .filter(|r| memory_existed_at(&r.memory, point_in_time))
                 .collect();
 
             // Stop if we have enough results or exhausted retry budget.
@@ -1946,9 +2013,275 @@ mod recall_cache_parity_tests {
     }
 }
 
+/// Fusion weights benchmark-tuned on LongMemEval fast50 (#1123):
+/// plateau [1.7, 1.9] → R@5 0.98; 1.7 chosen mid-plateau.
+/// k=60 matches the k used by recall_rrf.
+const FUSION_W_VECTOR: f64 = 1.7;
+const FUSION_W_HYBRID: f64 = 1.0;
+const FUSION_RRF_K: f64 = 60.0;
+
+/// Weighted RRF fuse of two complete SearchResult rankings (#1123).
+///
+/// Deduplicates by memory id (first occurrence keeps the Memory payload),
+/// sorts by fused score descending, and rewrites each result's score to the
+/// fused RRF score. No truncation — the caller truncates to its window.
+fn rrf_fuse_weighted(
+    primary: Vec<SearchResult>,
+    secondary: Vec<SearchResult>,
+    w_primary: f64,
+    w_secondary: f64,
+) -> Vec<SearchResult> {
+    use std::collections::HashMap;
+    let mut scores: HashMap<String, f64> = HashMap::new();
+    for (rank, r) in primary.iter().enumerate() {
+        *scores.entry(r.memory.id.clone()).or_default() +=
+            w_primary / (FUSION_RRF_K + rank as f64 + 1.0);
+    }
+    for (rank, r) in secondary.iter().enumerate() {
+        *scores.entry(r.memory.id.clone()).or_default() +=
+            w_secondary / (FUSION_RRF_K + rank as f64 + 1.0);
+    }
+
+    // Chain both rankings, dedup by id (first occurrence wins the payload),
+    // then stable-sort by fused score descending.
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<SearchResult> = primary
+        .into_iter()
+        .chain(secondary)
+        .filter(|r| seen.insert(r.memory.id.clone()))
+        .collect();
+    out.sort_by(|a, b| {
+        let sb = scores.get(&b.memory.id).copied().unwrap_or(0.0);
+        let sa = scores.get(&a.memory.id).copied().unwrap_or(0.0);
+        sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for r in out.iter_mut() {
+        r.score = scores.get(&r.memory.id).copied().unwrap_or(0.0) as f32;
+    }
+    out
+}
+
+#[cfg(test)]
+mod rrf_fuse_weighted_tests {
+    use super::rrf_fuse_weighted;
+    use crate::memory::types::{Memory, SearchResult};
+
+    fn sr(id: &str, score: f32) -> SearchResult {
+        let now = chrono::Utc::now();
+        let memory = Memory {
+            id: id.to_string(),
+            content: format!("content {id}"),
+            embedding: vec![0.1_f32; 4],
+            tags: vec![],
+            metadata: serde_json::Value::Null,
+            created_at: now,
+            updated_at: now,
+            namespace: "test".to_string(),
+            access_count: 0,
+            last_accessed: None,
+            deprecated: false,
+            deprecated_at: None,
+            valid_from: Some(now),
+            valid_until: None,
+            memory_type: "note".to_string(),
+            importance: 0.5,
+            pinned: false,
+            content_type: "text".to_string(),
+            slug: None,
+            source: None,
+            source_type: "user".to_string(),
+            author_type: "agent".to_string(),
+        };
+        SearchResult { memory, score }
+    }
+
+    #[test]
+    fn overlap_wins_and_ids_dedup() {
+        // 'both' appears in BOTH rankings; 'gold' only in secondary.
+        let primary = vec![sr("a", 0.9), sr("b", 0.8), sr("both", 0.7)];
+        let secondary = vec![sr("gold", 0.95), sr("both", 0.85), sr("c", 0.6)];
+        let fused = rrf_fuse_weighted(primary, secondary, 1.7, 1.0);
+        // 'both' ranks 3rd primary + 2nd secondary → highest fused score.
+        assert_eq!(fused[0].memory.id, "both");
+        // No duplicate ids survive.
+        let n = fused.len();
+        let uniq = fused
+            .iter()
+            .map(|r| r.memory.id.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        assert_eq!(n, uniq);
+        // Scores are fused RRF scores (small positive), not the originals.
+        assert!(fused[0].score > 0.0 && fused[0].score < 0.1);
+    }
+
+    #[test]
+    fn primary_weight_orders_disagreeing_rankings() {
+        let primary = vec![sr("x", 0.9), sr("y", 0.8)];
+        let secondary = vec![sr("y", 0.95), sr("x", 0.85)];
+        // x: 1st primary + 2nd secondary; y: mirrored. Higher primary weight
+        // must lift x; higher secondary weight must lift y.
+        let f1 = rrf_fuse_weighted(primary.clone(), secondary.clone(), 2.0, 1.0);
+        assert_eq!(f1[0].memory.id, "x");
+        let f2 = rrf_fuse_weighted(primary, secondary, 0.5, 2.0);
+        assert_eq!(f2[0].memory.id, "y");
+    }
+
+    #[test]
+    fn empty_inputs_yield_empty() {
+        let fused = rrf_fuse_weighted(vec![], vec![], 1.7, 1.0);
+        assert!(fused.is_empty());
+        let fused = rrf_fuse_weighted(vec![sr("only", 0.9)], vec![], 1.7, 1.0);
+        assert_eq!(fused.len(), 1);
+        assert_eq!(fused[0].memory.id, "only");
+    }
+}
+
+#[cfg(test)]
+mod fusion_strategy_tests {
+    use crate::Uteke;
+    use crate::memory::types::RecallStrategy;
+
+    /// #1123: Fusion strategy end-to-end — seeds a store, runs recall with
+    /// the explicit Fusion strategy, and asserts the on-topic memory surfaces
+    /// in the top results. Also asserts cold/warm parity through the cache.
+    #[test]
+    #[ignore = "requires ONNX embedder (model download) in CI"]
+    fn fusion_recall_finds_on_topic_memory() {
+        let dir = std::env::temp_dir().join(format!("fusion-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+
+        let base = vec![0.1_f32; 768];
+        // On-topic memory: near-parallel to the probe direction.
+        let mut on_topic = base.clone();
+        for v in on_topic.iter_mut().take(384) {
+            *v = 0.9;
+        }
+        // Off-topic memories: anti-parallel.
+        let mut off = base.clone();
+        for v in off.iter_mut().take(384) {
+            *v = -0.9;
+        }
+
+        uteke
+            .remember_precomputed(
+                "quarterly revenue projections for the board meeting",
+                &["finance"],
+                None,
+                Some("fusion-ns"),
+                "fact",
+                "text",
+                &on_topic,
+            )
+            .unwrap();
+        for i in 0..4 {
+            uteke
+                .remember_precomputed(
+                    &format!("unrelated filler note {i} about gardening"),
+                    &["misc"],
+                    None,
+                    Some("fusion-ns"),
+                    "note",
+                    "text",
+                    &off,
+                )
+                .unwrap();
+        }
+
+        let ns = Some("fusion-ns");
+        let cold = uteke
+            .recall_hybrid(
+                "board meeting revenue projections",
+                3,
+                None,
+                ns,
+                RecallStrategy::Fusion,
+                0.0,
+            )
+            .unwrap();
+        assert!(!cold.is_empty(), "fusion must return results");
+        assert_eq!(
+            cold[0].memory.content, "quarterly revenue projections for the board meeting",
+            "on-topic memory must rank first under fusion"
+        );
+        assert!(cold.len() <= 3);
+
+        // Cold/warm parity through the recall cache (#1037 invariant).
+        let warm = uteke
+            .recall_hybrid(
+                "board meeting revenue projections",
+                3,
+                None,
+                ns,
+                RecallStrategy::Fusion,
+                0.0,
+            )
+            .unwrap();
+        let cold_ids: Vec<_> = cold.iter().map(|r| r.memory.id.clone()).collect();
+        let warm_ids: Vec<_> = warm.iter().map(|r| r.memory.id.clone()).collect();
+        assert_eq!(cold_ids, warm_ids, "cold and warm fusion must match");
+
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Fusion must not silently degrade: an explicit Fusion call on an empty
+    /// store returns empty results (both sub-rankings empty), NOT an error
+    /// and NOT a fallback ranking.
+    #[test]
+    #[ignore = "requires ONNX embedder (model download) in CI"]
+    fn fusion_recall_empty_store_returns_empty() {
+        let dir = std::env::temp_dir().join(format!("fusion-e-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+        let res = uteke
+            .recall_hybrid(
+                "anything",
+                5,
+                None,
+                Some("empty-ns"),
+                RecallStrategy::Fusion,
+                0.0,
+            )
+            .unwrap();
+        assert!(res.is_empty());
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
 #[cfg(test)]
 mod dedup_tests {
+    use super::memory_existed_at;
     use crate::Uteke;
+
+    fn probe_memory(created: chrono::DateTime<chrono::Utc>) -> crate::memory::types::Memory {
+        crate::memory::types::Memory {
+            id: "probe-1086".to_string(),
+            content: "temporal deprecation probe alpha".to_string(),
+            embedding: vec![],
+            tags: vec![],
+            metadata: serde_json::json!({}),
+            created_at: created,
+            updated_at: created,
+            namespace: crate::memory::types::DEFAULT_NAMESPACE.to_string(),
+            access_count: 0,
+            last_accessed: None,
+            deprecated: false,
+            deprecated_at: None,
+            valid_from: Some(created),
+            valid_until: None,
+            memory_type: "fact".to_string(),
+            importance: 0.5,
+            pinned: false,
+            content_type: "text".to_string(),
+            slug: None,
+            source: None,
+            source_type: "direct".to_string(),
+            author_type: "agent".to_string(),
+        }
+    }
 
     #[test]
     #[ignore = "requires ONNX embedder (model download) in CI"]
@@ -2024,4 +2357,48 @@ mod dedup_tests {
         assert_eq!(obj.get("entity").unwrap(), "test-app");
         assert_eq!(obj.get("category").unwrap(), "integration");
     }
+
+    /// #1086: a memory deprecated AFTER the point-in-time must still appear in
+    /// time-travel recall; one deprecated BEFORE it must not.
+    #[test]
+    fn test_recall_at_time_deprecated_after_pit() {
+        let past = chrono::Utc::now() - chrono::Duration::hours(2);
+        let now = chrono::Utc::now();
+
+        // Deprecated after `past` -> existed at `past`.
+        let mut m = probe_memory(past);
+        m.deprecated = true;
+        m.deprecated_at = Some(now);
+        assert!(memory_existed_at(&m, past));
+        assert!(!memory_existed_at(&m, now));
+    }
+}
+
+/// Temporal predicate shared by `recall_at_time` (core) and
+/// `memory_exists_at` (server): did this memory exist at `pit`?
+/// Deprecated-before-pit excludes; deprecated-after-pit includes (#1086).
+pub fn memory_existed_at(
+    m: &crate::memory::types::Memory,
+    pit: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if m.created_at > pit {
+        return false;
+    }
+    if let Some(valid_until) = m.valid_until {
+        if valid_until <= pit {
+            return false;
+        }
+    }
+    if m.deprecated {
+        match m.deprecated_at {
+            Some(dep_at) if dep_at <= pit => return false,
+            _ => {}
+        }
+    }
+    if let Some(valid_from) = m.valid_from {
+        if valid_from > pit {
+            return false;
+        }
+    }
+    true
 }

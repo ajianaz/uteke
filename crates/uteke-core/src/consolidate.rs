@@ -330,6 +330,80 @@ impl crate::Uteke {
             kept_ids,
         })
     }
+
+    /// Consolidate a single caller-chosen pair (#1076): keep `id_keep`
+    /// untouched, deprecate (or hard-delete) `id_remove`.
+    ///
+    /// Unlike [`Uteke::consolidate`], the keep-newer rule is NOT applied —
+    /// the caller explicitly picks the survivor. Reuses the same
+    /// soft-delete + reason + index cleanup path as bulk consolidate.
+    pub fn consolidate_pair(
+        &self,
+        id_keep: &str,
+        id_remove: &str,
+        hard: bool,
+    ) -> Result<crate::memory::types::PairConsolidationResult, Error> {
+        if id_keep == id_remove {
+            return Err(Error::validation("id_keep and id_remove must differ"));
+        }
+        // Both memories must exist (and the keeper must not already be
+        // deprecated) — otherwise the pair choice is stale.
+        let keeper = self
+            .store
+            .get_by_id(id_keep)
+            .map_err(|e| Error::db("consolidate_pair lookup keeper", e))?
+            .ok_or_else(|| Error::validation(format!("memory {id_keep} not found")))?;
+        if keeper.deprecated {
+            return Err(Error::validation(format!(
+                "memory {id_keep} is deprecated and cannot be kept"
+            )));
+        }
+        let loser = self
+            .store
+            .get_by_id(id_remove)
+            .map_err(|e| Error::db("consolidate_pair lookup loser", e))?
+            .ok_or_else(|| Error::validation(format!("memory {id_remove} not found")))?;
+
+        let namespace = loser.namespace.clone();
+        let dream_soft = self.lifecycle_config.dream_dedup_soft_delete;
+        if hard || !dream_soft {
+            self.store
+                .delete(id_remove)
+                .map_err(|e| Error::db("consolidate_pair delete", e))?;
+        } else {
+            let reason = format!("manual pair dedup: superseded by {id_keep}");
+            self.store
+                .deprecate_with_reason(id_remove, &reason)
+                .map_err(|e| Error::db("consolidate_pair soft-delete", e))?;
+        }
+        // SQLite first (source of truth), then vector index.
+        let mut index = self
+            .index
+            .write()
+            .map_err(|_| Error::lock("index write lock during consolidate_pair"))?;
+        if !index.remove(id_remove) {
+            tracing::warn!(
+                "Vector index entry not found during consolidate_pair for id={id_remove}"
+            );
+        }
+        if let Err(e) = index.save() {
+            tracing::warn!(
+                "Failed to persist vector index after consolidate_pair: {e}. \
+                 Orphan entries will be cleaned up by verify/repair."
+            );
+        }
+        // Invalidate recall cache — the removed memory affects search results.
+        if namespace.is_empty() {
+            self.recall_cache.clear();
+        } else {
+            self.recall_cache.invalidate_namespace(&namespace);
+        }
+        Ok(crate::memory::types::PairConsolidationResult {
+            kept: id_keep.to_string(),
+            removed: id_remove.to_string(),
+            hard: hard || !dream_soft,
+        })
+    }
 }
 
 /// Compute cosine similarity between two vectors.
@@ -445,6 +519,117 @@ mod tests {
     /// Verify that metadata JSON values round-trip through serde correctly.
     /// This guards against type mismatches when metadata is passed through
     /// remember_with_contradiction → remember_precomputed.
+    /// #1076: per-pair consolidation keeps the caller-chosen survivor
+    /// and deprecates the loser (soft path, dream_dedup_soft_delete on).
+    #[test]
+    fn test_consolidate_pair_soft_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let uteke = crate::Uteke::open(dir.path().join("t.db")).unwrap();
+
+        let older = crate::memory::types::Memory {
+            id: "older-1076".to_string(),
+            content: "older entry with richer content".to_string(),
+            created_at: chrono::Utc::now() - chrono::Duration::hours(3),
+            ..probe_base()
+        };
+        let newer = crate::memory::types::Memory {
+            id: "newer-1076".to_string(),
+            content: "newer truncated re-save".to_string(),
+            created_at: chrono::Utc::now(),
+            ..probe_base()
+        };
+        uteke.store().insert(&older).unwrap();
+        uteke.store().insert(&newer).unwrap();
+
+        // Caller keeps the OLDER (richer) one — overrides keep-newer.
+        let res = uteke
+            .consolidate_pair("older-1076", "newer-1076", false)
+            .unwrap();
+        assert_eq!(res.kept, "older-1076");
+        assert_eq!(res.removed, "newer-1076");
+        assert!(!res.hard);
+
+        let kept = uteke.store().get_by_id("older-1076").unwrap().unwrap();
+        assert!(!kept.deprecated);
+        let removed = uteke.store().get_by_id("newer-1076").unwrap().unwrap();
+        assert!(removed.deprecated);
+
+        assert!(removed.deprecated_at.is_some());
+    }
+
+    /// #1076: hard=true bypasses soft-delete and deletes the row outright.
+    #[test]
+    fn test_consolidate_pair_hard_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let uteke = crate::Uteke::open(dir.path().join("t.db")).unwrap();
+
+        let a = crate::memory::types::Memory {
+            id: "keep-a".to_string(),
+            ..probe_base()
+        };
+        let b = crate::memory::types::Memory {
+            id: "drop-b".to_string(),
+            ..probe_base()
+        };
+        uteke.store().insert(&a).unwrap();
+        uteke.store().insert(&b).unwrap();
+
+        let res = uteke.consolidate_pair("keep-a", "drop-b", true).unwrap();
+        assert!(res.hard);
+        assert!(uteke.store().get_by_id("drop-b").unwrap().is_none());
+        assert!(uteke.store().get_by_id("keep-a").unwrap().is_some());
+    }
+
+    /// #1076: validation guards — same id, missing memory, deprecated keeper.
+    #[test]
+    fn test_consolidate_pair_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let uteke = crate::Uteke::open(dir.path().join("t.db")).unwrap();
+
+        let a = crate::memory::types::Memory {
+            id: "v-a".to_string(),
+            ..probe_base()
+        };
+        uteke.store().insert(&a).unwrap();
+
+        // same id
+        assert!(uteke.consolidate_pair("v-a", "v-a", false).is_err());
+        // missing loser
+        assert!(uteke.consolidate_pair("v-a", "nope", false).is_err());
+        // missing keeper
+        assert!(uteke.consolidate_pair("nope", "v-a", false).is_err());
+        // deprecated keeper rejected
+        uteke.store().deprecate("v-a").unwrap();
+        assert!(uteke.consolidate_pair("v-a", "nope", false).is_err());
+    }
+
+    fn probe_base() -> crate::memory::types::Memory {
+        crate::memory::types::Memory {
+            content: "probe".to_string(),
+            embedding: vec![],
+            tags: vec![],
+            metadata: serde_json::json!({}),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            namespace: crate::memory::types::DEFAULT_NAMESPACE.to_string(),
+            access_count: 0,
+            last_accessed: None,
+            deprecated: false,
+            deprecated_at: None,
+            valid_from: None,
+            valid_until: None,
+            memory_type: "fact".to_string(),
+            importance: 0.5,
+            pinned: false,
+            content_type: "text".to_string(),
+            slug: None,
+            source: None,
+            source_type: "direct".to_string(),
+            author_type: "agent".to_string(),
+            id: String::new(),
+        }
+    }
+
     #[test]
     fn test_metadata_value_serialization() {
         use serde_json::Value;

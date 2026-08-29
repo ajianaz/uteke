@@ -33,9 +33,12 @@ pub struct DoctorReport {
 pub struct VerifyReport {
     /// Count of memories in SQLite.
     pub db_count: usize,
+    /// Count of document chunks in SQLite (chunk vectors share the index).
+    #[serde(default)]
+    pub chunk_count: usize,
     /// Count of vectors in usearch index.
     pub index_count: usize,
-    /// Whether they match.
+    /// Whether they match (db_count + chunk_count == index_count).
     pub consistent: bool,
 }
 
@@ -48,6 +51,10 @@ pub struct RepairReport {
     pub index_before: usize,
     /// Index count after repair.
     pub index_after: usize,
+    /// Document chunks included in the rebuilt index (#1110).
+    /// Defaults to 0 when deserializing reports from older binaries.
+    #[serde(default)]
+    pub chunk_count: usize,
 }
 
 /// Result of `uteke repair --reembed`.
@@ -92,6 +99,7 @@ mod tests {
     fn test_verify_report_serialization() {
         let report = VerifyReport {
             db_count: 10,
+            chunk_count: 0,
             index_count: 10,
             consistent: true,
         };
@@ -106,9 +114,11 @@ mod tests {
             db_count: 10,
             index_before: 5,
             index_after: 10,
+            chunk_count: 2,
         };
         let json = serde_json::to_string(&report).unwrap();
         let restored: RepairReport = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.index_after, 10);
+        assert_eq!(restored.chunk_count, 2);
     }
 }
