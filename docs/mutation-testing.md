@@ -99,4 +99,4 @@ Some mutants produce identical behavior regardless of tests. These are documente
 
 5 chunker mutants cause **infinite loops** (progress guard mutations) — the test binary hangs and cargo-mutants reports TIMEOUT. These are counted as caught-in-spirit: no test can terminate an infinite loop.
 
-Last updated: v0.14.1
+Last updated: v0.16.0
