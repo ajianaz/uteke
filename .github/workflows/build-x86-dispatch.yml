@@ -1,0 +1,31 @@
+name: Build x86_64 snapshot (dispatch)
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to build (default: develop)'
+        required: false
+        default: 'develop'
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.ref || 'develop' }}
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add x86_64-unknown-linux-gnu
+      - name: Build release binary
+        run: |
+          cargo build --release --target x86_64-unknown-linux-gnu -p uteke-cli
+      - name: Package bundle
+        run: |
+          cd target/x86_64-unknown-linux-gnu/release
+          tar czf /tmp/uteke-x86_64.tar.gz uteke
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uteke-x86_64-snapshot
+          path: /tmp/uteke-x86_64.tar.gz
