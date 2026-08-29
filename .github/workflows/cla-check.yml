@@ -48,7 +48,7 @@ jobs:
 
       - name: Comment on PR (unsigned only)
         if: steps.check.outputs.signed != 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const author = '${{ github.event.pull_request.user.login }}';
@@ -97,7 +97,7 @@ jobs:
             }
 
       - name: Set commit status
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const signed = '${{ steps.check.outputs.signed }}' === 'true';
