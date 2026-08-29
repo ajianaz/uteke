@@ -4,11 +4,11 @@
 
 Minor release. One theme: retrieval quality that ships by default.
 
-The new `fusion` strategy — weighted Reciprocal Rank Fusion of the vector ranking (×1.7) and the hybrid ranking (×1) — is now the default everywhere: CLI, HTTP API, and MCP. Vector and hybrid fail on different questions; fusing both captures each side's wins. Zero config needed.
+The new `fusion` strategy — weighted Reciprocal Rank Fusion of the vector and hybrid rankings — is now the default everywhere: CLI, HTTP API, and MCP. Vector and hybrid fail on different questions; fusing both captures each side's wins. Zero config needed.
 
 ### Added
 
-- **`fusion` recall strategy (#1123)** — runs vector and hybrid rankings and RRF-fuses them (k=60, weights 1.7/1.0 tuned on LongMemEval fast50 actual x86 rankings). LongMemEval fast50: R@5 0.98 vs 0.9267 hybrid, R@10 1.0. Available on every surface: `--strategy fusion`, HTTP `strategy: "fusion"`, MCP `strategy: "fusion"`.
+- **`fusion` recall strategy (#1123)** — runs vector and hybrid rankings and RRF-fuses them (k=60, weights tuned on LongMemEval fast50 actual x86 rankings). LongMemEval fast50: R@5 0.98 vs 0.9267 hybrid, R@10 1.0. Available on every surface: `--strategy fusion`, HTTP `strategy: "fusion"`, MCP `strategy: "fusion"`.
 
 ### Changed
 
