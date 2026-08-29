@@ -35,6 +35,7 @@ Notes:
 """
 
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -44,6 +45,11 @@ import modal
 
 REPO_DIR = pathlib.Path(__file__).parent
 UTEKE_VERSION = "v0.15.0"
+# When set, the image builds uteke from this git ref instead of downloading
+# the UTEKE_VERSION release. Used for pre-release validation (e.g. develop tip
+# before tagging). The exact SHA must be used, not a branch name, so the image
+# build is reproducible.
+UTEKE_GIT_REF = os.environ.get("UTEKE_GIT_REF", "")
 DATA_FILE = "longmemeval_s_cleaned.json"
 # Local source of the embedding model (must contain onnx/ + tokenizer.json).
 MODEL_SOURCE = pathlib.Path("/opt/data/.codecora/uteke/models/embeddinggemma-q4")
@@ -60,13 +66,35 @@ image = (
     # (debian slim/bookworm ships glibc 2.36 → too old, incl. the "legacy" build).
     modal.Image.from_registry("ubuntu:24.04", add_python="3.11")
     .apt_install("curl", "ca-certificates", "util-linux")
+)
+if UTEKE_GIT_REF:
+    # Pre-release validation: build uteke from the exact SHA (reproducible),
+    # but reuse the official ORT 1.24.4 x86_64 (SSE4.2) shared lib from the
+    # latest release tarball — ort is load-dynamic, so the lib is decoupled
+    # from the binary and versioned identically to official releases.
+    image = image.run_commands(
+        "curl -sL https://github.com/codecoradev/uteke/releases/download/"
+        f"{UTEKE_VERSION}/uteke-x86_64-unknown-linux-gnu-legacy-{UTEKE_VERSION}.tar.gz"
+        " | tar xz -C /tmp && "
+        "cp /tmp/libonnxruntime* /usr/local/bin/ && "
+        "curl -sL https://github.com/codecoradev/uteke/archive/" + UTEKE_GIT_REF + ".tar.gz | tar xz -C /tmp && "
+        "cd /tmp/uteke-*/ && "
+        "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable && "
+        "$HOME/.cargo/bin/cargo build --release -p uteke-cli && "
+        "cp target/release/uteke /usr/local/bin/uteke && "
+        "chmod +x /usr/local/bin/uteke && "
+        "uteke --version"
+    )
+else:
     # uteke release bundle: binary + libonnxruntime colocated (exe-dir lookup).
-    .run_commands(
+    image = image.run_commands(
         f"curl -sL https://github.com/codecoradev/uteke/releases/download/{UTEKE_VERSION}/"
         f"uteke-x86_64-unknown-linux-gnu-legacy-{UTEKE_VERSION}.tar.gz | tar xz -C /tmp && "
         "cp /tmp/uteke /usr/local/bin/uteke && cp /tmp/libonnxruntime* /usr/local/bin/ && "
         "chmod +x /usr/local/bin/uteke && uteke --version"
     )
+image = (
+    image
     .pip_install("tqdm>=4.65.0", "numpy>=1.24.0")
     # Bake the embedding model so containers never download at runtime.
     # (add_local_* must come last — Modal mounts them at container start.)
