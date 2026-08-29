@@ -634,6 +634,55 @@ impl super::Store {
         Ok(memories)
     }
 
+    /// Load active memories whose embedding is missing (SQL NULL or empty blob).
+    ///
+    /// Unlike [`load_all`], this deliberately includes NULL-embedding rows: it is
+    /// the scan source for `repair --reembed` (#1146). The NULL guard in
+    /// `load_all` exists to keep such rows out of `index.build()` (#992), but
+    /// reusing it as the reembed scan made NULL rows permanently invisible to
+    /// the one tool designed to fix them.
+    pub fn load_missing_embeddings(&self, namespace: Option<&str>) -> Result<Vec<Memory>, Error> {
+        let sql = match namespace {
+            Some(_) => {
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type, deprecated_at FROM memories WHERE namespace = ?1 AND (embedding IS NULL OR length(embedding) = 0) AND deprecated = 0 ORDER BY created_at"
+            }
+            None => {
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type, deprecated_at FROM memories WHERE (embedding IS NULL OR length(embedding) = 0) AND deprecated = 0 ORDER BY created_at"
+            }
+        };
+
+        let mut memories = Vec::new();
+        match namespace {
+            Some(ns) => {
+                let mut stmt = self
+                    .conn
+                    .prepare(sql)
+                    .map_err(|e| Error::db("database operation", e))?;
+                let rows = stmt
+                    .query_map(params![ns], row_to_memory)
+                    .map_err(|e| Error::db("database store operation", e))?;
+                for row in rows {
+                    let m = row.map_err(|e| Error::db("database operation", e))?;
+                    memories.push(m);
+                }
+            }
+            None => {
+                let mut stmt = self
+                    .conn
+                    .prepare(sql)
+                    .map_err(|e| Error::db("database operation", e))?;
+                let rows = stmt
+                    .query_map([], row_to_memory)
+                    .map_err(|e| Error::db("database operation", e))?;
+                for row in rows {
+                    let m = row.map_err(|e| Error::db("database operation", e))?;
+                    memories.push(m);
+                }
+            }
+        }
+        Ok(memories)
+    }
+
     /// Count total memories, optionally filtered by namespace.
     /// Count ACTIVE (non-deprecated) memories, optionally filtered by namespace.
     ///
