@@ -49,7 +49,7 @@ The wizard covers:
 uteke remember --tags project "My app uses SvelteKit 5 with Tailwind" \
   --entity my-app --category frontend
 
-# Hybrid search (vector + FTS5, ranked by RRF)
+# Fusion recall — weighted RRF of vector + hybrid rankings (default since 0.16.0)
 uteke recall "What frontend framework do I use?"
 
 # Filter by entity or category
