@@ -21,7 +21,7 @@
 
 **Improvement (Hybrid vs Vector): +12.6pp R@5**
 
-### Fusion (weighted RRF: vector×1.7 + hybrid×1, #1123) — default since 0.16.0
+### Fusion (weighted RRF of vector + hybrid rankings, #1123) — default since 0.16.0
 
 | Questions | R@5 | R@10 | NDCG@5 | NDCG@10 | Embedding | Date |
 |-----------|-----|------|--------|---------|-----------|------|
@@ -42,7 +42,7 @@ fast10 detail: 1 partial miss @5 (60472f9c multi-session, R@5 0.67 → R@10 1.0)
 
 **Why fusion works:** vector-only and hybrid-only fail on DISJOINT question sets (fast50: 7 questions vector wins, 5 hybrid wins, no overlap in failures). RRF fusing both rankings captures each side's wins.
 
-**Tuning evidence:** weight plateau [1.7, 1.9] → R@5 0.98 on actual x86 rankings; 1.7 chosen mid-plateau. wv=1.5 (ARM-local tuning) measured 0.9535 on x86 — arch drift of ±1 rank motivated re-tuning on the deployment arch (commit 47155af).
+**Tuning evidence:** weight grid sweep on actual x86 rankings; chosen value sits mid-plateau (stable across a range), not at an edge. Weights are internal implementation details (see core crate) rather than part of the public contract.
 
 ---
 
@@ -86,7 +86,7 @@ Simulation over saved rankings; fts5-only rankings collected on Modal x86
 (500Q, ~4.5h, resume-safe via volume). Cross-check: sim fts5-only R@5=0.8211
 vs harness-reported 0.820 — parsing validated.
 
-- 2-way shipped fusion (1.7/1.0) R@5 = 0.9800 (fast50)
+- 2-way shipped fusion (tuned weights) R@5 = 0.9800 (fast50)
 - best 3-way (2.0/1.0/0.1) R@5 = 0.9800 — delta +0.0000, **0 flipped questions**
 - adding fts5 as third arm changes nothing at any grid weight tried
 - fts5-only fails: temporal-reasoning (63) + multi-session (55) dominate —
