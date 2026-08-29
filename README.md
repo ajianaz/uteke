@@ -114,7 +114,7 @@ Every AI tool forgets. Context windows fill up, sessions end, and your AI starts
 | **Setup** | One binary (`curl \| sh`) | pip install + venv | pip + Docker + Qdrant | npm + iii-engine | npm (Node.js) | pip + Docker + Neo4j | Cloud or local binary | One binary |
 | **API keys** | ❌ None | ⚠️ For remote embeddings | ✅ OpenAI/LLM | ✅ LLM key | ✅ LLM key | ✅ LLM key | ⚠️ Cloud only | ❌ None |
 | **Works offline** | ✅ Fully | ⚠️ Optional | ❌ Cloud embedding | ❌ Needs LLM | ❌ Needs LLM | ❌ Needs LLM + vector DB | ✅ Local binary + Ollama | ✅ Fully |
-| **Search** | **Hybrid** (Vector + FTS5 + RRF) | sqlite-vec + FTS5 | Vector + Graph | Vector + Graph | Vector | Hybrid (semantic + keyword + graph) | Vector + rerank | **FTS5 only** |
+| **Search** | **Fusion** (weighted RRF of vector + hybrid; hybrid = HNSW + FTS5 RRF) | sqlite-vec + FTS5 | Vector + Graph | Vector + Graph | Vector | Hybrid (semantic + keyword + graph) | Vector + rerank | **FTS5 only** |
 | **Recall speed** | ~45ms | ~50ms+ | Network round-trip | Network round-trip | Network round-trip | Network round-trip | Network round-trip | ~Fast (local) |
 | **Multi-agent** | ✅ **Rooms** (shared memory, cross-agent recall, author attribution) | ✅ Multi-agent surface | ❌ | ✅ Shared server | ✅ Multi-agent groups | ❌ | ❌ | ⚠️ Shared via MCP |
 | **Time-travel** | ✅ Native point-in-time | ⚠️ Temporal triples | ❌ | ❌ | ❌ | ✅ Temporal graphs | ❌ | ❌ |
@@ -142,9 +142,9 @@ Every AI tool forgets. Context windows fill up, sessions end, and your AI starts
 | **Recall latency (10K memories)** | **42ms** P50, 50ms P95 | Flat from 100 to 10K memories (HNSW O(log N)) |
 | **Insert throughput** | 6-22 ops/s | CPU-bound (ONNX embedding inference) |
 | **Storage per memory** | ~10KB | SQLite + HNSW, scales linearly |
-| **LongMemEval Recall@5** | **0.958** | 12-question diverse sample, EmbeddingGemma Q4 |
+| **LongMemEval Recall@5** | **0.946** | Full 500Q validation, zero-config fusion default (R@10 0.977), EmbeddingGemma Q4 |
 
-Full benchmarks: `uteke bench --counts 100,1000,10000 --json` · [Benchmark details](docs/benchmarks.md) · [LongMemEval results](benchmarks/longmemeval/RESULTS.md)
+Full benchmarks: `uteke bench --counts 100,1000,10000 --json` · [Benchmark details](docs/benchmarks.md) · [LongMemEval results](benchmarks/longmemeval/RESULTS.md) — fusion default: R@5 0.946 / R@10 0.977 on the full 500Q validation set (v0.16.0)
 
 </details>
 
@@ -201,7 +201,7 @@ uteke recall "caching decision" --room engineering
 
 | Feature | What it does |
 |---------|-------------|
-| 🧠 **Hybrid Search** | Vector similarity + FTS5 full-text search, merged by Reciprocal Rank Fusion (RRF). Finds by meaning AND exact keywords. |
+| 🧠 **Hybrid + Fusion Search** | Vector similarity + FTS5 full-text search, merged by Reciprocal Rank Fusion (RRF). Since v0.16.0, `fusion` — a weighted RRF of the vector and hybrid rankings — is the default recall strategy. Finds by meaning AND exact keywords. |
 | 🏠 **Rooms** | **Multi-agent shared memory.** Group memories by context (meetings, projects, clients). Multiple agents read/write to the same room with author attribution. Cross-agent recall without manual sync. |
 | ⏳ **Time-travel** | Recall memories as they existed at any point in time. `uteke recall "deploy" --at 2025-01-15` |
 | 🏷️ **Rich Metadata** | Tags, entities, categories, key:value pairs on every memory. |
@@ -220,6 +220,7 @@ uteke recall "caching decision" --room engineering
 | 📈 **Salience + Recency** | Dual-axis recall boost by memory type and age. |
 | 🔍 **Orphan Detection** | Find disconnected, low-importance memories for cleanup. |
 | 🌙 **Dream Cycle** | One-command maintenance: lint → backlinks → dedup → orphans. |
+| 🧬 **Consolidation** | Merge near-duplicate room memories into fewer, denser records — segment-level planner, provenance trust policy, per-pair control. (0.16.0) |
 
 ### Integrations
 
@@ -231,6 +232,7 @@ uteke recall "caching decision" --room engineering
 | 📝 **Document Engine** | Wiki/knowledge base with `uteke doc create/get/list` and auto-chunking. |
 | 📥 **Import/Export** | JSONL-based backup and restore. |
 | 🔑 **View-Only API Keys** | Read-only tokens for safe GET-only access to the server. |
+| 👤 **Author Types** | `human` vs `agent` attribution on every memory, across CLI, HTTP, and MCP. (0.16.0) |
 
 ### Performance & Privacy
 
@@ -243,7 +245,7 @@ uteke recall "caching decision" --room engineering
 | 🔥 **Tiered Memory** | Hot/Warm/Cold tracking with auto-cleanup of stale memories. |
 | 🔄 **Embed Fallback** | Gracefully degrades to no-op embedder if local model fails (never crashes). |
 | 👥 **Multi-Agent Namespaces** | Fully isolated memory per agent, zero overhead. |
-| 📊 **Benchmarks** | Built-in `uteke bench` for perf testing. [See results](docs/BENCHMARKS.md). |
+| 📊 **Benchmarks** | Built-in `uteke bench` for perf testing. [See results](docs/benchmarks.md). |
 
 <details>
 <summary>🔌 MCP Server config: connect to Claude Code, Cursor, Hermes</summary>
@@ -376,7 +378,7 @@ Yes. Uteke ships with an MCP server that works with Claude Code, Cursor, and Her
 <details>
 <summary><strong>Is it production-ready?</strong></summary>
 
-Uteke is at v0.14.3 with 530+ tests, CI/CD on every commit, and benchmark harness. It's used in production by the CodeCora team and other early adopters. Still in 0.x, so expect rough edges, but the core is stable.
+Uteke is at v0.16.0 with 200+ tests, CI/CD on every commit, and a benchmark harness. It's used in production by the CodeCora team and other early adopters. Still in 0.x, so expect rough edges, but the core is stable.
 </details>
 
 ---
@@ -385,7 +387,7 @@ Uteke is at v0.14.3 with 530+ tests, CI/CD on every commit, and benchmark harnes
 
 ```bash
 cargo build --workspace        # Build
-cargo test --workspace         # Test (530+ tests)
+cargo test --workspace         # Test (200+ tests)
 cargo clippy -- -D warnings    # Lint
 cargo fmt                      # Format
 ```
