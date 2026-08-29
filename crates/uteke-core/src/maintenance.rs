@@ -182,17 +182,16 @@ impl crate::Uteke {
 
     /// Re-embed memories that have missing or empty embedding vectors.
     ///
-    /// Scans all non-deprecated memories, finds those with empty embeddings,
-    /// generates new embeddings, updates the database, and adds them to the index.
+    /// Scans active memories with NULL/empty embeddings via a dedicated SQL
+    /// query (`load_missing_embeddings`), generates new embeddings, updates
+    /// the database, and adds them to the index.
     pub fn reembed_missing(&self) -> Result<ReembedReport, Error> {
-        let all_memories = self.store.load_all(None)?;
-        let total_scanned = all_memories.len();
-
-        // Filter to memories with empty embeddings, excluding deprecated.
-        let missing: Vec<&Memory> = all_memories
-            .iter()
-            .filter(|m| !m.deprecated && m.embedding.is_empty())
-            .collect();
+        // Scan directly for NULL/empty embeddings (#1146). This must NOT go
+        // through load_all(): its `embedding IS NOT NULL` guard (kept for
+        // index.build() safety, #992) filtered out exactly the rows this
+        // function exists to repair, making NULL rows permanently invisible.
+        let missing: Vec<Memory> = self.store.load_missing_embeddings(None)?;
+        let total_scanned = self.store.load_all(None)?.len();
 
         let missing_count = missing.len();
         if missing_count == 0 {
@@ -655,6 +654,91 @@ mod tests {
         let restored: PruneResult = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.pruned, 5);
         assert_eq!(restored.deprecated, 3);
+    }
+
+    #[ignore = "requires ONNX embedder — validates reembed repairs NULL-embedding rows (#1146)"]
+    #[test]
+    fn test_reembed_repairs_null_embedding_rows() {
+        // Regression test for #1146: `repair --reembed` used to scan through
+        // load_all(), whose `embedding IS NOT NULL` guard (#992) filtered out
+        // exactly the rows needing repair. NULL-embedding rows (write-path
+        // crash artifacts) were permanently invisible to reembed and doctor
+        // reported an unresolvable MISMATCH.
+        let dir = tempfile::tempdir().unwrap();
+        let uteke = crate::Uteke::open(dir.path().join("uteke.db")).unwrap();
+
+        // Create one healthy memory (gets a real embedding).
+        let id = uteke
+            .remember("raft consensus requires a majority quorum", &[], None, None)
+            .unwrap();
+
+        // Simulate a write-path crash artifact: NULL embedding.
+        let id_null = uteke
+            .remember("vector quantization compresses embeddings", &[], None, None)
+            .unwrap();
+        uteke
+            .graph_store()
+            .execute(
+                "UPDATE memories SET embedding = NULL WHERE id = ?1",
+                rusqlite::params![id_null],
+            )
+            .unwrap();
+
+        // And the empty-blob variant (what the old code could only see).
+        let id_empty = uteke
+            .remember(
+                "hybrid search blends keyword and vector signals",
+                &[],
+                None,
+                None,
+            )
+            .unwrap();
+        uteke
+            .graph_store()
+            .execute(
+                "UPDATE memories SET embedding = X'' WHERE id = ?1",
+                rusqlite::params![id_empty],
+            )
+            .unwrap();
+
+        // Scan finds both NULL and empty-blob rows.
+        let scanned = uteke.store.load_missing_embeddings(None).unwrap();
+        assert_eq!(
+            scanned.len(),
+            2,
+            "scan must see NULL-embedding rows, not just empty-blob ones"
+        );
+
+        // Reembed repairs both; the healthy row is untouched.
+        let report = uteke.reembed_missing().unwrap();
+        assert_eq!(report.missing_count, 2);
+        assert_eq!(report.reembedded, 2, "both rows must be re-embedded");
+        assert_eq!(report.failed, 0);
+
+        // DB no longer has NULL/empty embeddings among active memories.
+        let remaining: i64 = uteke
+            .graph_store()
+            .query_row(
+                "SELECT COUNT(*) FROM memories WHERE (embedding IS NULL OR length(embedding) = 0) AND deprecated = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0);
+
+        // End-to-end: verify() reports a consistent store after repair.
+        let v = uteke.verify().unwrap();
+        assert!(
+            v.consistent,
+            "store must be consistent after reembed, got db={} index={}",
+            v.db_count, v.index_count
+        );
+
+        // Reembed is now a no-op.
+        let again = uteke.reembed_missing().unwrap();
+        assert_eq!(again.missing_count, 0);
+        assert_eq!(again.reembedded, 0);
+        let _ = (id, id_null, id_empty);
     }
 
     #[test]
