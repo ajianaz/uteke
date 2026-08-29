@@ -6,6 +6,22 @@ title: Roadmap
 
 Demand-gated — we build what people actually use. Track progress on [GitHub Issues](https://github.com/codecoradev/uteke/issues).
 
+## v0.16.0 — Fusion Default `✓ Released 2026-08-29`
+
+- **`fusion` is now the default recall strategy (#1123)** — weighted RRF of the vector and hybrid rankings; LongMemEval 500Q R@5 0.946 vs 0.854 hybrid (+9.2 pts), zero config needed
+- Public benchmark page: dual-metric view (recall_any + strict recall_all) with comparison chart (#1141)
+- Full-release validation: 500Q pure-default run, binary built from the exact release SHA
+- Post-release fixes: `repair --reembed` handles NULL-embedding rows (#1146), CLA check bot allowlist (#1132), repair report reflects final index state (#1149)
+
+## v0.15.0 — Trust Across Surfaces, Portable Store `✓ Released 2026-08-19`
+
+- **Supersession workflow (#1069)** — mark a stale decision as superseded by a newer one; recall flags superseded entries
+- **Structural export/import (#1068)** — full-store round-trip (rooms, graph, edges, documents, timeline) without loss
+- UUIDv7 IDs for new memories — time-ordered at the front
+- MCP `uteke_get` + `uteke_update` (#1067), richer MCP outputs (#1066)
+- `uteke_dream` runs dry-run first — destructive passes need explicit confirmation (#1065)
+- `/export` keeps namespace attribution (#1064); recall cache score parity (#1063)
+
 ## v0.14.0–v0.14.3 — Hybrid Default, Scene Extraction, Surface Parity `✓ Released 2026-08-14–15`
 
 - **Hybrid (RRF) is now the default recall strategy (#1005)** — recall@5 85.4% → 98.0%; revert via `strategy = "vector"` in `[recall]`

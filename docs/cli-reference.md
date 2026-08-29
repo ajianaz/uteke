@@ -108,7 +108,7 @@ uteke remember "User prefers dark mode" --tags pref --namespace my-agent
 
 ## uteke recall
 
-Unified search combining vector similarity with FTS5 full-text search, ranked by Reciprocal Rank Fusion (RRF). Searches **both memories and documents** by default (unified mode). Hot memories (accessed within 7 days) get a score boost.
+Unified search combining vector similarity with FTS5 full-text search, ranked by Reciprocal Rank Fusion (RRF). Default strategy since v0.16.0: **fusion** — a weighted RRF of the vector and hybrid rankings. Searches **both memories and documents** by default (unified mode). Hot memories (accessed within 7 days) get a score boost.
 
 ```bash
 uteke recall "What framework does the API use?"
@@ -309,8 +309,9 @@ uteke recall "deployment process" --at 2026-06-01T12:00:00Z
 # Relationship graph traversal
 uteke recall "auth" --related --depth 2
 
-# Recall strategy (vector | fts5 | hybrid | graph)
-uteke recall "auth" --strategy hybrid   # default — vector + FTS5 (RRF fusion)
+# Recall strategy (fusion | vector | fts5 | hybrid | graph)
+uteke recall "auth" --strategy fusion   # default since 0.16.0 — weighted RRF of vector + hybrid rankings
+uteke recall "auth" --strategy hybrid   # vector + FTS5 fused via RRF (k=60)
 uteke recall "auth" --strategy vector   # vector similarity only
 uteke recall "auth" --strategy fts5     # full-text search only
 uteke recall "auth" --strategy graph    # hybrid + graph-signal reranking (#378)

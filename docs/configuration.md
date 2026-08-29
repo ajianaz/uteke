@@ -196,10 +196,12 @@ min_score = 0.3
 min_score_strict = 0.5
 
 # Default recall strategy for `uteke recall` when --strategy is not given.
-# One of: vector | fts5 | hybrid | graph.
+# One of: fusion | vector | fts5 | hybrid | graph.
+#   fusion — weighted RRF of the vector and hybrid rankings (default since 0.16.0;
+#            LongMemEval 500Q R@5 0.946 vs 0.854 hybrid, #1123)
 #   vector — vector similarity only (original behavior)
 #   fts5   — full-text search only
-#   hybrid — vector + FTS5 fused via Reciprocal Rank Fusion (default)
+#   hybrid — vector + FTS5 fused via Reciprocal Rank Fusion (k=60)
 #   graph  — hybrid + graph-signal reranking (#378): well-connected memories
 #            get a subtle log-scaled score boost
 default_strategy = "fusion"

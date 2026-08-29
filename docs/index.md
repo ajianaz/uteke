@@ -19,7 +19,7 @@ hero:
 features:
   - icon: 🧠
     title: Semantic Memory
-    details: AI remembers by meaning, not keywords. Local ONNX embeddings (768d) with usearch persistent HNSW index. Hybrid search via FTS5 + RRF.
+    details: AI remembers by meaning, not keywords. Local ONNX embeddings (768d) with usearch persistent HNSW index. Hybrid search (FTS5 + RRF) with fusion as the default strategy since 0.16.0.
   - icon: 📦
     title: Single Binary
     details: Zero dependencies. No Docker, no database server, no Python, no API keys.
