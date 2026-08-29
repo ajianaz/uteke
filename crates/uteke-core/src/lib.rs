@@ -2408,6 +2408,43 @@ fn resolve_db_path(db_path: &Path) -> Result<String, Error> {
 
 #[cfg(test)]
 mod tests {
+    /// #1078 P0 batch 4: validate_input_with_limits boundary matrix —
+    /// previously zero direct tests on the configurable-limit variant.
+    #[test]
+    fn validate_input_with_limits_matrix() {
+        use super::validate_input_with_limits;
+
+        // 1) happy path
+        assert!(validate_input_with_limits("hello", &["a"], 100, 10, 20).is_ok());
+        // 2) empty content (incl. whitespace-only)
+        assert!(validate_input_with_limits("", &["a"], 100, 10, 20).is_err());
+        assert!(validate_input_with_limits("   \n\t", &["a"], 100, 10, 20).is_err());
+        // 3) content exactly at limit → ok; over limit → err
+        let no_tags: &[&str] = &[];
+        let at = "x".repeat(100);
+        assert!(validate_input_with_limits(&at, no_tags, 100, 10, 20).is_ok());
+        let over = "x".repeat(101);
+        assert!(validate_input_with_limits(&over, no_tags, 100, 10, 20).is_err());
+        // 4) content length check disabled when limit = 0
+        let huge = "x".repeat(500);
+        assert!(validate_input_with_limits(&huge, no_tags, 0, 10, 20).is_ok());
+        // 5) tags exactly at count limit → ok; over → err
+        let ten: Vec<&str> = vec!["t"; 10];
+        assert!(validate_input_with_limits("c", &ten, 100, 10, 20).is_ok());
+        let eleven: Vec<&str> = vec!["t"; 11];
+        assert!(validate_input_with_limits("c", &eleven, 100, 10, 20).is_err());
+        // 6) empty tag string rejected
+        assert!(validate_input_with_limits("c", &[""], 100, 10, 20).is_err());
+        // 7) tag exactly at length limit → ok; over → err
+        let tag_at = "y".repeat(20);
+        assert!(validate_input_with_limits("c", &[&tag_at], 100, 10, 20).is_ok());
+        let tag_over = "y".repeat(21);
+        assert!(validate_input_with_limits("c", &[&tag_over], 100, 10, 20).is_err());
+        // 8) tag length check disabled when limit = 0
+        let tag_huge = "y".repeat(200);
+        assert!(validate_input_with_limits("c", &[&tag_huge], 100, 10, 0).is_ok());
+    }
+
     #[ignore = "requires ONNX embedder — index file extension follows active backend"]
     #[test]
     fn index_file_uses_backend_extension() {
