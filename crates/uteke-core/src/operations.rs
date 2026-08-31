@@ -179,17 +179,31 @@ impl crate::Uteke {
         } else {
             content.to_string()
         };
-        // Lazy-load embedder on first use
-        self.ensure_embedder()?;
-        // Retry embedding generation up to 3 times with exponential backoff.
-        // Embedding failures silently drop vector entries, causing desync (#621).
-        let embedding = self::retry_embed(&self.embedder, &embed_text)?;
+        // Lazy-load embedder on first use. #1166: when no backend is
+        // configured (backend == "" on a build without the onnx feature,
+        // or open_with_backend(.., None)), skip embedding entirely — the
+        // row is stored FTS5-only and stays keyword-searchable. Vector
+        // search for this row becomes available once an embedding is
+        // supplied via the injected-embedding path or `uteke repair`.
+        let embedding = if self.embedder_backend.is_empty() {
+            tracing::debug!("No embedding backend configured; storing memory FTS5-only (#1166)");
+            Vec::new()
+        } else {
+            self.ensure_embedder()?;
+            // Retry embedding generation up to 3 times with exponential backoff.
+            // Embedding failures silently drop vector entries, causing desync (#621).
+            self::retry_embed(&self.embedder, &embed_text)?
+        };
 
         // Dedup check: if an existing memory has cosine >= 0.95, return it
         // instead of creating a duplicate (#442 enhancement).
-        if let Some(existing_id) = self.check_duplicate(&embedding, namespace)? {
-            tracing::info!("Dedup: memory {existing_id} is nearly identical, skipping insert");
-            return Ok(existing_id);
+        // #1166: skip when no embedding was produced (no embedder) — cosine
+        // dedup is meaningless without vectors.
+        if !embedding.is_empty() {
+            if let Some(existing_id) = self.check_duplicate(&embedding, namespace)? {
+                tracing::info!("Dedup: memory {existing_id} is nearly identical, skipping insert");
+                return Ok(existing_id);
+            }
         }
 
         self.remember_precomputed(
@@ -334,7 +348,13 @@ impl crate::Uteke {
         // Invalidate recall cache — new memory may affect future queries
         self.recall_cache.invalidate_namespace(&memory.namespace);
 
-        index.insert(&id, embedding)?;
+        // #1166: empty embedding = "no embedder configured" — store the row
+        // (already committed to SQLite above) without a vector entry. The
+        // row stays FTS5-searchable; `uteke repair` can backfill vectors
+        // once an embedder is available.
+        if !embedding.is_empty() {
+            index.insert(&id, embedding)?;
+        }
         // Retry index persistence up to 3 times (#621).
         // A failed save means the in-memory index has the entry but
         // on-disk doesn't → silent desync on next process launch.
@@ -365,7 +385,11 @@ impl crate::Uteke {
         // Cosine-similarity auto-linking (#401).
         // Must run AFTER index.insert() so the new memory is searchable.
         // Best-effort: errors logged, never fails remember().
-        self.auto_link_cosine(&id, embedding, Some(memory.namespace.as_str()));
+        // #1166: cosine auto-linking needs a real embedding; skip when the
+        // row was stored FTS5-only (no embedder configured).
+        if !embedding.is_empty() {
+            self.auto_link_cosine(&id, embedding, Some(memory.namespace.as_str()));
+        }
 
         Ok(id)
     }

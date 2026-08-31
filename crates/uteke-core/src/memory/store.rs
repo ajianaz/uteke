@@ -345,6 +345,25 @@ impl Store {
         }
         Ok(updated)
     }
+
+    /// Infer embedding dimensions from any persisted embedding (#1166).
+    ///
+    /// Returns None when the store has no embeddings at all (fresh store).
+    /// Used when opening without an embedder backend on builds compiled
+    /// without the `onnx` feature: the vector index needs valid dims, and
+    /// existing data is the most truthful source.
+    pub fn infer_embedding_dims(&self) -> Option<usize> {
+        self.conn
+            .query_row(
+                "SELECT length(embedding) / 4 FROM memories \
+                 WHERE embedding IS NOT NULL AND length(embedding) > 0 \
+                 LIMIT 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .ok()
+            .map(|n| n as usize)
+    }
 }
 
 /// Serialize an embedding vector to a byte blob (little-endian f32).
