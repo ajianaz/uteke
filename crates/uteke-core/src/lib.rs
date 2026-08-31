@@ -583,6 +583,23 @@ pub struct Uteke {
     embed_cache_path: Option<std::path::PathBuf>,
 }
 
+/// Canonical uteke embedding width (EmbeddingGemma ONNX, 768).
+///
+/// Last-resort fallback when opening a store with no embedder, no
+/// UTEKE_EMBEDDING_DIMS, and no persisted embeddings (#1166).
+const DEFAULT_EMBEDDING_DIMS: usize = 768;
+
+/// Default embedder backend for `Uteke::open` (#1166).
+///
+/// Feature-aware: a build compiled without the `onnx` feature can never
+/// initialize the onnx backend, so the default falls back to `""` (no
+/// embedder configured; lazy init is skipped until an embedding arrives
+/// via the injected-embedding path). With `onnx` compiled in, the default
+/// stays `"onnx"` as before.
+fn default_embedder_backend() -> &'static str {
+    if cfg!(feature = "onnx") { "onnx" } else { "" }
+}
+
 impl Uteke {
     /// Borrow the underlying store (for CLI/advanced use).
     pub fn store(&self) -> &Store {
@@ -648,7 +665,28 @@ impl Uteke {
         Self::finish_open(
             store,
             None,
-            "onnx".to_string(),
+            default_embedder_backend().to_string(),
+            TierConfig::default(),
+            RecallConfig::default(),
+            EmbeddingSettings::default(),
+        )
+    }
+
+    /// Open with an explicit embedder backend choice (#1166).
+    ///
+    /// `Some("onnx" | "openai" | "ollama")` selects the backend lazily, exactly
+    /// like `open_with_embedding_and_graph`. `None` opens the store **without
+    /// an embedder**: FTS5 keyword recall works, and embeddings can be
+    /// supplied per-write by hosts that embed externally (mobile profiles,
+    /// injected-embedding pipelines). Useful for builds compiled without the
+    /// `onnx` feature, where the old `open()` default requested a backend
+    /// that could never initialize.
+    pub fn open_with_backend(path: impl AsRef<Path>, backend: Option<&str>) -> Result<Self, Error> {
+        let (_db_str, store) = Self::open_store(path)?;
+        Self::finish_open(
+            store,
+            None,
+            backend.unwrap_or("").to_string(),
             TierConfig::default(),
             RecallConfig::default(),
             EmbeddingSettings::default(),
@@ -740,6 +778,12 @@ impl Uteke {
             None => match embedder_backend.as_str() {
                 #[cfg(feature = "onnx")]
                 "onnx" | "" | "custom" => crate::embed::OnnxEmbedder::dims(),
+                // No embedder configured (open_with_backend(.., None)) on a
+                // build without the onnx feature (#1166): dims stay unknown
+                // until the first externally-supplied embedding lands. The
+                // index starts empty and accepts the first injected dims.
+                #[cfg(not(feature = "onnx"))]
+                "" => 0,
                 "openai" => {
                     // User-configurable via uteke.toml or UTEKE_EMBEDDING_DIMS.
                     // Default 1536 (text-embedding-3-small).
@@ -764,6 +808,40 @@ impl Uteke {
                     )));
                 }
             },
+        };
+
+        // #1166: dims == 0 means "unknown yet" (open_with_backend(.., None) on
+        // a build without onnx). The vector index cannot be created at dims 0,
+        // so resolve from, in order: explicit UTEKE_EMBEDDING_DIMS, then
+        // embeddings already persisted in the store. Only if both are empty
+        // (fresh store, no embedder) fail with a clear error instead of a
+        // vecq/usearch panic on dims 0.
+        let dims = if dims == 0 {
+            let cfg = EmbeddingSettings::resolve_with_defaults(&embedding_settings);
+            if cfg.dims > 0 {
+                cfg.dims
+            } else if let Some(inferred) = store.infer_embedding_dims() {
+                tracing::debug!(
+                    dims = inferred,
+                    "Inferred embedding dims from existing store"
+                );
+                inferred
+            } else {
+                // Nothing else is known: assume the canonical uteke dims
+                // (EmbeddingGemma ONNX, 768). This keeps plain open() working
+                // on builds compiled without the onnx feature (#1166) — the
+                // mobile/FFI profile embeds externally at 768 anyway. A host
+                // injecting embeddings of a different width gets a clear
+                // dimension-mismatch error at insert time and can rebuild the
+                // index via uteke repair.
+                tracing::warn!(
+                    dims = DEFAULT_EMBEDDING_DIMS,
+                    "No embedder, no UTEKE_EMBEDDING_DIMS, no existing embeddings; assuming canonical dims"
+                );
+                DEFAULT_EMBEDDING_DIMS
+            }
+        } else {
+            dims
         };
 
         let mut index = match &index_path {
@@ -2408,6 +2486,70 @@ fn resolve_db_path(db_path: &Path) -> Result<String, Error> {
 
 #[cfg(test)]
 mod tests {
+    /// #1166: `open()` must not request a backend the build cannot
+    /// initialize. On a build without the `onnx` feature the default is
+    /// `""` (no embedder) — opening succeeds and FTS5 paths work without
+    /// ever touching an embedder.
+    #[test]
+    fn open_default_backend_is_feature_aware() {
+        // On onnx builds open() keeps working exactly as before.
+        if cfg!(feature = "onnx") {
+            let u = Uteke::open(":memory:").expect("open() must succeed with onnx feature");
+            drop(u);
+        } else {
+            // Non-onnx build with an EMPTY store: no embedder, no persisted
+            // embeddings, so dims cannot be resolved. Must fail with a clear
+            // validation error (#1166) — never a vecq/usearch panic on 0 dims.
+            let _u = Uteke::open(":memory:")
+                .expect("open() must succeed on vecq-only builds via canonical-dims fallback");
+        }
+        // The default must track the feature set in both directions.
+        assert_eq!(
+            default_embedder_backend(),
+            if cfg!(feature = "onnx") { "onnx" } else { "" }
+        );
+    }
+
+    /// #1166: explicit `None` backend opens without an embedder; a vecq-only
+    /// (no-onnx) build must open cleanly instead of failing on a hardcoded
+    /// "onnx" request. FTS5 write+search round-trip works without embedding.
+    #[test]
+    #[serial_test::serial]
+    fn open_with_backend_none_works_without_embedder() {
+        // With UTEKE_EMBEDDING_DIMS set, open succeeds on any build; writes
+        // store without embeddings and FTS search still finds them.
+        unsafe { std::env::set_var("UTEKE_EMBEDDING_DIMS", "768") };
+        let u = Uteke::open_with_backend(":memory:", None)
+            .expect("open must succeed when dims are supplied via env");
+        let id = u
+            .remember("sqlite fts fallback probe", &["probe"], None, None)
+            .expect("write without embedder must succeed");
+        let _ = id;
+        let hits = u
+            .search("fts fallback", 5, None, None)
+            .expect("fts search must work without embedder");
+        assert!(
+            !hits.is_empty(),
+            "FTS5 must find the probe without an embedder"
+        );
+        unsafe { std::env::remove_var("UTEKE_EMBEDDING_DIMS") };
+    }
+
+    /// #1166: `open_with_backend(Some("openai"))` keeps the explicit-backend
+    /// contract (validation still happens at open, same as before).
+    #[test]
+    fn open_with_backend_invalid_name_rejected() {
+        let r = Uteke::open_with_backend(":memory:", Some("not-a-backend"));
+        let e = match r {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("invalid backend must fail at open()"),
+        };
+        assert!(
+            e.contains("Unknown embedding backend"),
+            "expected unknown-backend error, got: {e}"
+        );
+    }
+
     /// #1078 P0: ensure_embedder lazy-init branches — unknown backend
     /// (rejected eagerly at open), custom backend without embedder
     /// (immediate error), openai without API key (deterministic init error,
@@ -2436,6 +2578,29 @@ mod tests {
 
     #[test]
     fn ensure_embedder_custom_without_embedder_errors() {
+        // The "custom" backend dim-arm is gated on the onnx feature (it maps
+        // to the ONNX dims); on a vecq-only build open() rejects "custom"
+        // eagerly as unknown — both outcomes are correct, assert the one the
+        // current feature set produces (#1166).
+        if !cfg!(feature = "onnx") {
+            let r = Uteke::open_with_embedding_and_graph(
+                ":memory:",
+                "custom",
+                EmbeddingSettings::default(),
+                TierConfig::default(),
+                RecallConfig::default(),
+                graph_rerank::GraphRerankConfig::default(),
+            );
+            let e = match r {
+                Err(e) => e.to_string(),
+                Ok(_) => panic!("custom must be rejected at open() on non-onnx builds"),
+            };
+            assert!(
+                e.contains("Unknown embedding backend: 'custom'"),
+                "got: {e}"
+            );
+            return;
+        }
         let u = Uteke::open_with_embedding_and_graph(
             ":memory:",
             "custom",
