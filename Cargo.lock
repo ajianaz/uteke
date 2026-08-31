@@ -2882,9 +2882,9 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "vecq-core"
-version = "0.1.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07959c480b6d1d1d0d80eb92fa322271d6c2f1ae69529d6b0fbefc6dd4c88693"
+checksum = "543ddd2e748c26c39bd8ca5ab9c43eb01ba0ca13750a1428b08e8c7dc0d9def7"
 
 [[package]]
 name = "version_check"
