@@ -110,6 +110,10 @@ jobs:
       # #1131: the embedder-less profile (cloud/OpenAI embedders only, no
       # onnx) must keep compiling — the embedding cache is backend-agnostic.
       - run: cargo check -p uteke-core --no-default-features --features vecq
+      # #1168: dual-engine profile (usearch + vecq compiled together, runtime
+      # selection) must keep compiling and passing the engine-switch tests.
+      - run: cargo test -p uteke-core --features "usearch,vecq" --lib vector_engine
+      - run: cargo test -p uteke-core --features "usearch,vecq" --lib memory::vector
 
   docs-check:
     name: API Docs Fresh
