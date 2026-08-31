@@ -174,6 +174,9 @@ fn main() {
             authority_weight: config.recall.graph_authority_weight,
             enabled: config.recall.graph_rerank_enabled,
         },
+        // Runtime vector-engine preference from uteke.toml [vector] (#1168).
+        // UTEKE_VECTOR_BACKEND env (higher precedence) is read inside core.
+        Some(config.vector.backend.as_str()),
     ) {
         Ok(mut u) => {
             // #719: apply Jaccard weight from config
