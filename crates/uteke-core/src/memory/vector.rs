@@ -569,7 +569,11 @@ impl VectorIndex {
 
     #[cfg(feature = "vecq")]
     fn create_index(dims: usize) -> Result<VecqIndex, Error> {
-        Ok(VecqIndex::new(dims, VECQ_SEED))
+        // 4-bit base quantization + residual refinement (issue #1161).
+        // `with_residual` pins bits=4 (residual requires the 4-bit width),
+        // improving recall on noise-dominated data at ~2x scan cost while
+        // keeping the same storage footprint as the legacy 0.1 profile.
+        Ok(VecqIndex::with_residual(dims, VECQ_SEED))
     }
 }
 
