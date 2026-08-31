@@ -2754,8 +2754,6 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn vector_engine_switch_rebuilds_from_sqlite() {
-        use memory::vector::VectorBackend;
-
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("uteke.db");
 
