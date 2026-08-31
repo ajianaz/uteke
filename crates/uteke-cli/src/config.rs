@@ -26,6 +26,16 @@ impl Default for StoreConfig {
     }
 }
 
+/// Vector engine configuration (#1168).
+///
+/// Which engine the index runs on when BOTH are compiled in. Slim builds
+/// (one engine) ignore this — the compiled-in engine always runs.
+#[derive(serde::Deserialize, Clone, Default)]
+pub struct VectorConfig {
+    /// "usearch" or "vecq". Empty = compiled-in default (usearch when present).
+    pub backend: String,
+}
+
 /// Embedding model configuration.
 #[derive(serde::Deserialize, Clone)]
 #[serde(default)]
@@ -430,6 +440,8 @@ impl LifecycleConfig {
 #[serde(default)]
 pub struct Config {
     pub store: StoreConfig,
+    #[serde(default)]
+    pub vector: VectorConfig,
     pub embedding: EmbeddingConfig,
     pub extraction: ExtractionConfig,
     pub embed_fallback: EmbedFallbackConfig,
@@ -457,6 +469,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             store: StoreConfig::default(),
+            vector: VectorConfig::default(),
             embedding: EmbeddingConfig::default(),
             extraction: ExtractionConfig::default(),
             embed_fallback: EmbedFallbackConfig::default(),
@@ -875,6 +888,14 @@ impl Config {
                 _ => tracing::warn!(
                     "Invalid UTEKE_GRAPH_RERANK_ENABLED='{v}', ignoring (expected true/false)"
                 ),
+            }
+        }
+
+        // Vector engine override (#1168). Ignored when the requested engine
+        // is not compiled in (resolution falls back with a warning in core).
+        if let Ok(v) = std::env::var("UTEKE_VECTOR_BACKEND") {
+            if !v.is_empty() {
+                self.vector.backend = v;
             }
         }
 

@@ -672,6 +672,38 @@ impl Uteke {
         )
     }
 
+    /// Resolve the runtime vector-engine preference (#1168):
+    /// `UTEKE_VECTOR_BACKEND` env → caller-supplied (uteke.toml) → default.
+    /// Returns None when unset/empty/unknown (logged) or not compiled in.
+    fn resolve_vector_backend_pref(
+        config_pref: Option<&str>,
+    ) -> Option<memory::vector::VectorBackend> {
+        use memory::vector::VectorBackend;
+
+        let raw = std::env::var("UTEKE_VECTOR_BACKEND")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .or_else(|| config_pref.filter(|v| !v.is_empty()).map(|v| v.to_string()));
+
+        let raw = raw?;
+        match VectorBackend::parse(&raw) {
+            Some(b) if b.is_compiled_in() => Some(b),
+            Some(b) => {
+                tracing::warn!(
+                    "UTEKE_VECTOR_BACKEND='{}' requested engine '{b:?}' is not compiled in;                      falling back to the default engine",
+                    raw
+                );
+                None
+            }
+            None => {
+                tracing::warn!(
+                    "Invalid vector backend '{raw}' (expected 'usearch' or 'vecq');                      using the default engine"
+                );
+                None
+            }
+        }
+    }
+
     /// Open with an explicit embedder backend choice (#1166).
     ///
     /// `Some("onnx" | "openai" | "ollama")` selects the backend lazily, exactly
@@ -703,6 +735,7 @@ impl Uteke {
         tier_config: TierConfig,
         recall_config: RecallConfig,
         graph_rerank_config: graph_rerank::GraphRerankConfig,
+        vector_backend: Option<&str>,
     ) -> Result<Self, Error> {
         let (_db_str, store) = Self::open_store(path)?;
         Self::finish_open_full(
@@ -713,6 +746,7 @@ impl Uteke {
             recall_config,
             settings,
             graph_rerank_config,
+            vector_backend,
         )
     }
 
@@ -739,9 +773,11 @@ impl Uteke {
             recall_config,
             embedding_settings,
             graph_rerank::GraphRerankConfig::default(),
+            None,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finish_open_full(
         store: Store,
         embedder: Option<Box<dyn Embedder>>,
@@ -750,7 +786,11 @@ impl Uteke {
         recall_config: RecallConfig,
         embedding_settings: EmbeddingSettings,
         graph_rerank_config: graph_rerank::GraphRerankConfig,
+        vector_backend_pref: Option<&str>,
     ) -> Result<Self, Error> {
+        // Runtime engine selection (#1168): ENV > config > compiled-in default.
+        let vector_backend = Self::resolve_vector_backend_pref(vector_backend_pref)
+            .unwrap_or_else(memory::vector::VectorBackend::default_backend);
         // Determine index path: same directory as SQLite DB.
         // `:memory:` databases get an EPHEMERAL in-memory index instead:
         // persisting to `./uteke_index.usearch` in the CWD would make every
@@ -763,11 +803,15 @@ impl Uteke {
                 None
             } else {
                 let dir = p.parent().unwrap_or(Path::new("."));
-                // Backend-specific extension (#1112): a vecq build reads/writes
-                // `uteke_index.vecq`, a usearch build `uteke_index.usearch`.
-                // Cross-backend opens no longer parse (and re-save over) the
-                // other format's file.
-                Some(dir.join(format!("uteke_index.{}", crate::memory::vector::INDEX_EXT)))
+                // Engine-specific extension (#1112, #1168): the selected
+                // engine reads/writes its own file and never parses (nor
+                // re-saves over) the other engine's file. Switching engines
+                // leaves the old file in place; the new engine starts empty
+                // and the rebuild-from-SQLite path below repopulates it.
+                Some(dir.join(format!(
+                    "uteke_index.{}",
+                    memory::vector::index_ext_for(vector_backend)
+                )))
             }
         });
 
@@ -845,7 +889,7 @@ impl Uteke {
         };
 
         let mut index = match &index_path {
-            Some(path) => match VectorIndex::load_or_create(path, dims) {
+            Some(path) => match VectorIndex::load_or_create_for(path, dims, vector_backend) {
                 Ok(idx) => idx,
                 Err(e) => {
                     // Index file is corrupt (dim mismatch, truncated, etc).
@@ -2565,6 +2609,7 @@ mod tests {
             TierConfig::default(),
             RecallConfig::default(),
             graph_rerank::GraphRerankConfig::default(),
+            None,
         );
         let e = match r {
             Err(e) => e.to_string(),
@@ -2590,6 +2635,7 @@ mod tests {
                 TierConfig::default(),
                 RecallConfig::default(),
                 graph_rerank::GraphRerankConfig::default(),
+                None,
             );
             let e = match r {
                 Err(e) => e.to_string(),
@@ -2608,6 +2654,7 @@ mod tests {
             TierConfig::default(),
             RecallConfig::default(),
             graph_rerank::GraphRerankConfig::default(),
+            None,
         )
         .unwrap();
         let e = u.embed_text("x").unwrap_err().to_string();
@@ -2632,6 +2679,7 @@ mod tests {
             TierConfig::default(),
             RecallConfig::default(),
             graph_rerank::GraphRerankConfig::default(),
+            None,
         )
         .unwrap();
         let e1 = u.embed_text("x").unwrap_err().to_string();
@@ -2696,6 +2744,85 @@ mod tests {
             expected.exists(),
             "expected index file {expected:?} to exist after shutdown"
         );
+    }
+
+    /// #1168 (dual-engine builds): switching the engine via preference
+    /// rebuilds from SQLite and both per-engine index files coexist.
+    /// Uses remember_precomputed-equivalent raw inserts so no embedder is
+    /// needed (works on any feature set with both engines compiled in).
+    #[cfg(all(feature = "usearch", feature = "vecq"))]
+    #[test]
+    #[serial_test::serial]
+    fn vector_engine_switch_rebuilds_from_sqlite() {
+        use memory::vector::VectorBackend;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("uteke.db");
+
+        unsafe { std::env::set_var("UTEKE_VECTOR_BACKEND", "usearch") };
+        let u = Uteke::open(&db).unwrap();
+        u.remember_precomputed(
+            "engine switch probe",
+            &[],
+            None,
+            None,
+            "fact",
+            "text",
+            &vec![0.5f32; 768],
+        )
+        .unwrap();
+        u.shutdown().unwrap();
+        drop(u);
+        assert!(
+            dir.path().join("uteke_index.usearch").exists(),
+            "usearch index file must exist"
+        );
+        assert!(
+            !dir.path().join("uteke_index.vecq").exists(),
+            "vecq file must not exist yet"
+        );
+
+        // Switch to vecq: same store, engine preference flips.
+        unsafe { std::env::set_var("UTEKE_VECTOR_BACKEND", "vecq") };
+        let u2 = Uteke::open(&db).unwrap();
+        // finish_open_full auto-rebuilds the empty vecq index from SQLite.
+        let hits = u2
+            .search("engine switch", 5, None, None)
+            .unwrap_or_default();
+        assert!(
+            !hits.is_empty(),
+            "FTS5 must find the probe after engine switch"
+        );
+        u2.shutdown().unwrap();
+        drop(u2);
+        assert!(
+            dir.path().join("uteke_index.vecq").exists(),
+            "vecq index file must be written"
+        );
+        // The old engine's file is left untouched (both coexist).
+        assert!(
+            dir.path().join("uteke_index.usearch").exists(),
+            "usearch file must survive the switch"
+        );
+
+        // And back to usearch — the old file is picked up, no rebuild needed.
+        unsafe { std::env::set_var("UTEKE_VECTOR_BACKEND", "usearch") };
+        let u3 = Uteke::open(&db).unwrap();
+        u3.shutdown().unwrap();
+        drop(u3);
+
+        unsafe { std::env::remove_var("UTEKE_VECTOR_BACKEND") };
+    }
+
+    /// #1168: invalid / not-compiled-in UTEKE_VECTOR_BACKEND falls back to the
+    /// default engine without failing the open.
+    #[test]
+    #[serial_test::serial]
+    fn vector_engine_env_invalid_falls_back() {
+        unsafe { std::env::set_var("UTEKE_VECTOR_BACKEND", "bogus-engine") };
+        let u = Uteke::open(":memory:");
+        assert!(u.is_ok(), "invalid engine name must fall back, not fail");
+        unsafe { std::env::remove_var("UTEKE_VECTOR_BACKEND") };
     }
 
     use super::*;

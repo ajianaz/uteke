@@ -267,6 +267,7 @@ Resolution order (highest priority first):
 | `UTEKE_NAMESPACE` | `[store] namespace` | `default` | Default namespace (applied in CLI) |
 | `UTEKE_AUTH_TOKEN` | — | — | Server auth token (applied in server) |
 | `UTEKE_LOG_LEVEL` | `[logging] level` | `warn` | Log level (trace/debug/info/warn/error) |
+| `UTEKE_VECTOR_BACKEND` | `[vector] backend` | compiled-in default | Vector engine when both are compiled in: `usearch`, `vecq`. Ignored (with a warning) on single-engine builds or unknown values. Switching engines on an existing store auto-rebuilds the index from SQLite |
 | `UTEKE_SERVER_HOST` | `[server] host` | `127.0.0.1` | Server bind address |
 | `UTEKE_SERVER_PORT` | `[server] port` | `8767` | Server port |
 | `UTEKE_RECALL_MIN_SCORE` | `[recall] min_score` | `0.3` | Default similarity threshold |
