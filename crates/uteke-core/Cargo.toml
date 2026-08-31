@@ -11,7 +11,11 @@ categories = ["science", "data-structures"]
 readme = "../../README.md"
 
 [features]
-default = ["onnx", "usearch"]
+# Dual-engine default (#1168): official binaries ship BOTH engines so
+# UTEKE_VECTOR_BACKEND / [vector] backend can switch at runtime.
+# Slim builds: --no-default-features --features "onnx,vecq" (mobile, no C++)
+# or --features "onnx,usearch" (classic single-engine desktop).
+default = ["onnx", "usearch", "vecq"]
 onnx = ["dep:ort", "dep:ndarray", "dep:tokenizers"]
 # Default vector search backend (HNSW, C++ FFI).
 usearch = ["dep:usearch"]

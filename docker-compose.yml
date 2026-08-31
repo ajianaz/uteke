@@ -12,6 +12,10 @@ services:
     environment:
       # Auth (optional — set UTEKE_AUTH_TOKEN env var to enable)
       # - UTEKE_AUTH_TOKEN
+      # Vector engine (v0.17.0+): usearch (default) or vecq.
+      # Both engines ship in the image; switching rebuilds the index from
+      # SQLite on next start (data is never touched).
+      - UTEKE_VECTOR_BACKEND=${UTEKE_VECTOR_BACKEND:-usearch}
     restart: unless-stopped
     healthcheck:
       # curl is pre-installed in the uteke Docker image (Dockerfile runtime stage)
