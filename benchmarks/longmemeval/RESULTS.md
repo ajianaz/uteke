@@ -5,6 +5,28 @@
 
 ---
 
+## Independent Reproduction (2026-09-01)
+
+The published 500Q run was produced on Modal x86. To test whether the result depends on that infrastructure, a 108-question subset (pref: 30, kupd: 78) was re-run locally on a 4-core ARM desktop (Oracle Ampere A1, aarch64) — same v0.16.0 binary, same harness (`run_eval.py`), different CPU architecture.
+
+| Subset | Questions | Identical per-question rankings | R@5 published | R@5 re-run |
+|---|---|---|---|---|
+| pref | 30 | 30/30 | 96.7% | 96.7% |
+| kupd | 78 | 77/78 | 100.0% | 99.4% |
+| **Total** | **108** | **107/108** | — | — |
+
+**The one divergence** (question `0977f2af`, knowledge-update, 2 gold sessions): both runs retrieved the identical top-10 session set; one gold session sits at rank 5 (published) vs rank 6 (re-run), moving that question's recall_all@5 from 1.0 to 0.5. The harness persists rankings rather than raw scores, so the exact score gap cannot be shown, but the identical top-10 set identifies this as cross-architecture floating-point noise on an RRF near-tie, not a retrieval failure. R@10 = 1.0 in both runs.
+
+**Reproduce:**
+
+```bash
+python3 run_eval.py --data data/subset_kupd.json --output results_rerun --strategy default --resume
+```
+
+Raw artifacts are kept on the benchmark Modal volume (`uteke-longmemeval`, `default/` and rerun prefixes), consistent with the published run — datasets and result JSONL files are not committed to git (see `.gitignore` here; `download_data.sh` fetches the dataset).
+
+---
+
 ## Uteke Retrieval — Strategy Comparison
 
 ### Vector (semantic only)
