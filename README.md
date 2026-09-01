@@ -142,7 +142,13 @@ Every AI tool forgets. Context windows fill up, sessions end, and your AI starts
 | **Recall latency (10K memories)** | **42ms** P50, 50ms P95 | Flat from 100 to 10K memories (HNSW O(log N)) |
 | **Insert throughput** | 6-22 ops/s | CPU-bound (ONNX embedding inference) |
 | **Storage per memory** | ~10KB | SQLite + HNSW, scales linearly |
-| **LongMemEval Recall@5** | **0.946** | Full 500Q validation, zero-config fusion default (R@10 0.977), EmbeddingGemma Q4 |
+| **LongMemEval-S recall_any@5** | **98.2%** | Full 500Q validation, zero-config fusion default (v0.16.0) — the metric competitor benchmarks publish |
+| LongMemEval-S recall_all@10 | 95.4% | Strict: every gold session in top-10 |
+| LongMemEval-S strict recall_all@5 | 88.0% | Every gold session in top-5 (mathematical ceiling 99.4%) |
+
+![uteke vs published systems on LongMemEval-S](docs/assets/longmemeval-comparison.jpg)
+
+> **Don't trust our benchmark — run your own.** We re-ran 108 of the 500 published questions on a 4-core ARM desktop (different CPU architecture from the published Modal x86 run, same v0.16.0 binary and harness): **107/108 produced identical per-question rankings**. The single difference was an adjacent-rank near-tie, both runs retrieved the identical top-10 session set, one gold session swapped ranks 5-6. Details in [RESULTS.md](benchmarks/longmemeval/RESULTS.md).
 
 Full benchmarks: `uteke bench --counts 100,1000,10000 --json` · [Benchmark details](docs/benchmarks.md) · [LongMemEval results](benchmarks/longmemeval/RESULTS.md) — fusion default: R@5 0.946 / R@10 0.977 on the full 500Q validation set (v0.16.0)
 

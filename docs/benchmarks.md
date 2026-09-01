@@ -116,6 +116,10 @@ the same data.
 - The FTS5-only bar is an ablation of our own system, not a competitor.
 - Aggregate metrics + per-type breakdown: `benchmarks/longmemeval/RESULTS.md` in this repo. Raw per-question results are kept on the benchmark Modal volume (`uteke-longmemeval`, `default/` prefix), not committed here.
 
+### Reproducibility
+
+An independent local re-run (2026-09-01) of 108 of the 500 questions on a 4-core ARM desktop reproduced the published Modal x86 run: **107/108 questions produced identical per-question rankings**. The single difference was an adjacent-rank near-tie (identical top-10 set, one gold session swapped ranks 5-6) from cross-architecture floating-point noise. Aggregate R@5 on the subset: 96.7% / 99.4% (re-run) vs 96.7% / 100.0% (published). See the [Independent Reproduction section in RESULTS.md](../benchmarks/longmemeval/RESULTS.md) for the full table and reproduction command.
+
 ## Environment
 
 | Component | Details |
