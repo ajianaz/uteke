@@ -755,8 +755,19 @@ impl super::Store {
         Ok(Some(enriched))
     }
 
-    /// Delete a room and all its memory links (CASCADE).
-    pub fn delete_room(&self, room_id: &str) -> Result<(), Error> {
+    /// Delete a room (unlink-only).
+    ///
+    /// Removes the room row; the `room_memories` and `room_documents` links
+    /// are removed by `ON DELETE CASCADE`. The linked memories and documents
+    /// themselves are NOT deleted — they remain in their namespaces, now
+    /// orphaned from any room.
+    ///
+    /// Returns the number of memory links that were removed.
+    pub fn delete_room(&self, room_id: &str) -> Result<usize, Error> {
+        let memory_links = self
+            .get_room_memory_ids(room_id, None)
+            .map_err(|e| Error::db_msg(format!("failed to count room memories: {e}")))?
+            .len();
         let rows = self
             .conn
             .execute("DELETE FROM rooms WHERE id = ?1", params![room_id])
@@ -764,7 +775,7 @@ impl super::Store {
         if rows == 0 {
             return Err(Error::db_msg(format!("Room not found: {room_id}")));
         }
-        Ok(())
+        Ok(memory_links)
     }
 
     /// Generate a structured document from room memories, grouped by memory_type.
@@ -1160,7 +1171,8 @@ mod tests {
     fn delete_room_success() {
         let store = Store::open(":memory:").unwrap();
         store.create_room("del-me", None, "default").unwrap();
-        store.delete_room("del-me").unwrap();
+        let unlinked = store.delete_room("del-me").unwrap();
+        assert_eq!(unlinked, 0);
         assert!(store.get_room("del-me").unwrap().is_none());
     }
 
@@ -1186,7 +1198,8 @@ mod tests {
         let ids = store.get_room_memory_ids("cascade-room", None).unwrap();
         assert_eq!(ids.len(), 1);
 
-        store.delete_room("cascade-room").unwrap();
+        let unlinked = store.delete_room("cascade-room").unwrap();
+        assert_eq!(unlinked, 1);
         // Memory itself survives — only the room_memories link is cascade-deleted
         assert!(store.get_by_id("mem-1").unwrap().is_some());
         // Room is gone, so recall_room should return empty (room doesn't exist)

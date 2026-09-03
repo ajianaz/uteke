@@ -314,7 +314,7 @@ pub const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         method: "DELETE",
         path: "/room/delete",
-        description: "Delete a room and all its memories. Accepts `?room_id=...` query param.",
+        description: "Delete a room (unlink-only): room links are removed, memories and documents are preserved. Response: `{ deleted, unlinked_memories }`. Accepts `?room_id=...` query param.",
         request_type: None,
         response_type: None,
         excludes_deprecated: false,
