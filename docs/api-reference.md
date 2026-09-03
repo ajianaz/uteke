@@ -367,7 +367,7 @@ List all memories in a room (chronological). Accepts `?room_id=...` query param.
 
 #### 🔴 `DELETE` `/room/delete`
 
-Delete a room and all its memories. Accepts `?room_id=...` query param.
+Delete a room (unlink-only): room links are removed, memories and documents are preserved. Response: `{ deleted, unlinked_memories }`. Accepts `?room_id=...` query param.
 
 #### 🟡 `POST` `/room/document`
 

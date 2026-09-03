@@ -1856,14 +1856,18 @@ fn exec_room_list(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
 fn exec_room_delete(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
     let room_id = args["room_id"].as_str().ok_or("Missing 'room_id'")?;
 
-    uteke
+    let unlinked = uteke
         .delete_room(room_id)
         .map_err(|e| format!("Failed to delete room: {e}"))?;
+
+    let text = format!(
+        "Room '{room_id}' deleted. {unlinked} memory link(s) removed; the memories themselves are preserved in their namespaces (no longer linked to any room)."
+    );
 
     Ok(ToolResult {
         content: vec![McpContent::Text {
             r#type: "text".to_string(),
-            text: format!("Room deleted: {room_id}"),
+            text,
         }],
         is_error: false,
     })

@@ -184,9 +184,10 @@ impl crate::Uteke {
         Ok(results)
     }
 
-    /// Delete a room and all its memory links.
-    /// Note: memories themselves are NOT deleted — they remain in their namespaces.
-    pub fn delete_room(&self, room_id: &str) -> Result<(), Error> {
+    /// Delete a room (unlink-only).
+    /// Returns the number of memory links removed; memories and documents
+    /// themselves are NOT deleted — they remain in their namespaces.
+    pub fn delete_room(&self, room_id: &str) -> Result<usize, Error> {
         self.store.delete_room(room_id)
     }
 

@@ -1641,7 +1641,14 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                 }
             };
             match uteke.delete_room(&room_id) {
-                Ok(()) => ctx.ok_response_for(req, &serde_json::json!({"deleted": room_id})),
+                Ok(unlinked) => ctx.ok_response_for(
+                    req,
+                    &serde_json::json!({
+                        "deleted": room_id,
+                        "unlinked_memories": unlinked,
+                        "note": "memories and documents are preserved in their namespaces, no longer linked to any room"
+                    }),
+                ),
                 Err(e) => {
                     let msg = format!("{e}");
                     if msg.contains("not found") {
