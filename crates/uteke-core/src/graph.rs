@@ -297,6 +297,46 @@ impl<'a> GraphStore<'a> {
         Ok(id)
     }
 
+    /// Find the graph node representing a memory, if any (read-only).
+    ///
+    /// Resolution order (#1180):
+    /// 1. Node linked via `graph_nodes.memory_id` (authoritative).
+    /// 2. Node whose label equals the memory ID — legacy rows created by
+    ///    older servers that inserted the raw memory ID as `source`/`target`
+    ///    before the FK mismatch was fixed.
+    pub fn node_id_for_memory(&self, memory_id: &str) -> Result<Option<String>, Error> {
+        let linked: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT id FROM graph_nodes WHERE memory_id = ?1 LIMIT 1",
+                params![memory_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| Error::db("graph node lookup by memory", e))?;
+        if linked.is_some() {
+            return Ok(linked);
+        }
+        self.find_node(memory_id)?
+            .map(|node| Ok(node.id))
+            .transpose()
+    }
+
+    /// Find or create the graph node representing a memory. Returns node ID.
+    ///
+    /// Resolves via [`Self::node_id_for_memory`]; creates a node with
+    /// `label = memory_id`, `entity_type = "memory"`, and the `memory_id`
+    /// link set when none exists. This is what makes `POST /graph/edge`
+    /// work with plain memory IDs — `graph_edges.source_id/target_id` have
+    /// FKs to `graph_nodes(id)`, so memory IDs must be mapped to nodes
+    /// before insertion (#1180).
+    pub fn ensure_node_for_memory(&self, memory_id: &str) -> Result<String, Error> {
+        if let Some(id) = self.node_id_for_memory(memory_id)? {
+            return Ok(id);
+        }
+        self.upsert_node(memory_id, Some("memory"), Some(memory_id))
+    }
+
     /// Create an edge between two nodes. Ignores if edge already exists (INSERT OR IGNORE).
     pub fn add_edge(
         &self,
@@ -706,6 +746,70 @@ mod tests {
         let id1 = g.upsert_node("Alice", None, None).unwrap();
         let id2 = g.upsert_node("alice", None, None).unwrap();
         assert_eq!(id1, id2);
+    }
+
+    // ── Memory→node resolution (#1180) ─────────────────────────────────
+
+    #[test]
+    fn test_node_id_for_memory_prefers_linked_node() {
+        let conn = setup();
+        let g = GraphStore::new(&conn);
+        let mid = "01890a5d-ac96-774b-bcce-b30220900000";
+        let linked = g.upsert_node("Alice", Some("memory"), Some(mid)).unwrap();
+        assert_eq!(g.node_id_for_memory(mid).unwrap(), Some(linked));
+    }
+
+    #[test]
+    fn test_node_id_for_memory_falls_back_to_legacy_label() {
+        let conn = setup();
+        let g = GraphStore::new(&conn);
+        // Legacy rows from pre-#1180 servers carried the raw memory ID as
+        // source/target, so a node with label == memory ID may already exist.
+        let mid = "legacy-memory-id";
+        let legacy = g.upsert_node(mid, None, None).unwrap();
+        assert_eq!(g.node_id_for_memory(mid).unwrap(), Some(legacy));
+    }
+
+    #[test]
+    fn test_node_id_for_memory_none_when_absent() {
+        let conn = setup();
+        let g = GraphStore::new(&conn);
+        assert_eq!(g.node_id_for_memory("ghost-id").unwrap(), None);
+    }
+
+    #[test]
+    fn test_ensure_node_for_memory_creates_linked_node_idempotently() {
+        let conn = setup();
+        let g = GraphStore::new(&conn);
+        let mid = "01890a5d-ac96-774b-bcce-b30220900001";
+        let first = g.ensure_node_for_memory(mid).unwrap();
+        let second = g.ensure_node_for_memory(mid).unwrap();
+        assert_eq!(first, second, "ensure must be idempotent");
+        let node = g.get_node(&first).unwrap().expect("node must exist");
+        assert_eq!(node.label, mid);
+        assert_eq!(node.entity_type.as_deref(), Some("memory"));
+        assert_eq!(node.memory_id.as_deref(), Some(mid));
+    }
+
+    #[test]
+    fn test_ensure_node_for_memory_reuses_existing_linked_node() {
+        let conn = setup();
+        let g = GraphStore::new(&conn);
+        let mid = "mem-1";
+        let existing = g.upsert_node("Alice", Some("person"), Some(mid)).unwrap();
+        assert_eq!(g.ensure_node_for_memory(mid).unwrap(), existing);
+    }
+
+    #[test]
+    fn test_ensure_node_for_memory_edge_roundtrip() {
+        let conn = setup();
+        let g = GraphStore::new(&conn);
+        let a = g.ensure_node_for_memory("mem-a").unwrap();
+        let b = g.ensure_node_for_memory("mem-b").unwrap();
+        g.add_edge(&a, &b, "related", 1.0).unwrap();
+        let edges = g.neighbors(&a, 1).unwrap();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].target_id, b);
     }
 
     #[test]
