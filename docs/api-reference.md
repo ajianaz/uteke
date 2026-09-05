@@ -106,6 +106,20 @@ Full provenance report for a memory (#1172): author/source fields, trust tier, s
 
 *Related: `1172`*
 
+#### 🟢 `GET` `/contradictions`
+
+List superseded-but-not-restored memories (#1172) — the auditable contradiction resolution ledger (deprecated rows carrying a live superseded_by edge). Accepts `?namespace=...&limit=...`.
+
+*Related: `1172`*
+
+#### 🟡 `POST` `/contradictions/undo`
+
+Undo a contradiction resolution (#1172): restore the retired memory to active, remove the supersession pair, and record supersession_undone provenance events. Body: `{id}`.
+
+**Request body**: [`ContradictionUndoRequest`](#contradictionundorequest)
+
+*Related: `1172`*
+
 #### 🟡 `POST` `/lifecycle/cycle`
 
 Run lifecycle aging cycle: deprecate old memories, optionally prune expired ones.
