@@ -233,13 +233,17 @@ Get memories that reference a specific document.
 
 #### 🟡 `POST` `/graph/edge`
 
-Add a directed edge between two memories.
+Add a directed edge between two memories. Accepts memory IDs (a linked graph node is ensured automatically, #1180) or existing graph node IDs. Returns `{ok, source_node, target_node}`.
 
 **Request body**: [`GraphEdgeRequest`](#graphedgerequest)
 
+*Related: `1180`*
+
 #### 🔴 `DELETE` `/graph/edge`
 
-Remove an edge between two memories. Accepts `?from=...&to=...` query params.
+Remove an edge between two nodes. Accepts memory IDs or graph node IDs via `?source=...&target=...` query params (#1180).
+
+*Related: `1180`*
 
 #### 🟢 `GET` `/edges`
 

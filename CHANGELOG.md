@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **`POST /graph/edge` always returned 500 for valid memory IDs (#1180)** — the handler validated `source`/`target` as memory IDs but inserted them directly into `graph_edges`, whose foreign keys point at `graph_nodes(id)`. Memory IDs are now resolved to their linked graph node (or a node is ensured automatically) before insertion. `DELETE /graph/edge` accepts memory IDs or graph node IDs the same way, and its documented query params are corrected to `?source=...&target=...`. `POST /graph/edge` now responds with `{ok, source_node, target_node}` so clients can track the created nodes.
+
 ## [0.16.0] — 2026-08-28
 
 Minor release. One theme: retrieval quality that ships by default.

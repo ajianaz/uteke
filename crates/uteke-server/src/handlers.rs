@@ -883,43 +883,74 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                     );
                 }
 
-                // Validate both nodes exist as memories (issue #542 acceptance criteria)
-                match uteke.get_by_id(&req_data.source) {
-                    Ok(Some(_)) => {}
-                    Ok(None) => {
-                        return ctx.error_response_for(
-                            req,
-                            404,
-                            format!("Source memory not found: {}", req_data.source),
-                        );
+                let conn = uteke.graph_store();
+                let gs = uteke_core::graph::GraphStore::new(conn);
+
+                // Resolve an input ID to its graph node without creating
+                // anything: memory-linked nodes first, then explicit node IDs
+                // (clients may pass IDs from GET /graph) (#1180).
+                let resolve_node = |id: &str| -> Result<Option<String>, uteke_core::Error> {
+                    if let Some(nid) = gs.node_id_for_memory(id)? {
+                        return Ok(Some(nid));
                     }
-                    Err(e) => {
-                        error!("Internal error: {e}");
-                        return ctx.error_response_for(req, 500, "Internal server error");
+                    gs.get_node(id).map(|n| n.map(|node| node.id))
+                };
+
+                // Validate both sides exist as memories or graph nodes —
+                // memory IDs are ensured into nodes below (#1180, relaxes the
+                // memory-only #542 check that made every valid call 500).
+                for (role, id) in [("Source", &req_data.source), ("Target", &req_data.target)] {
+                    if matches!(uteke.get_by_id(id), Ok(Some(_))) {
+                        continue;
                     }
-                }
-                match uteke.get_by_id(&req_data.target) {
-                    Ok(Some(_)) => {}
-                    Ok(None) => {
-                        return ctx.error_response_for(
-                            req,
-                            404,
-                            format!("Target memory not found: {}", req_data.target),
-                        );
-                    }
-                    Err(e) => {
-                        error!("Internal error: {e}");
-                        return ctx.error_response_for(req, 500, "Internal server error");
+                    match resolve_node(id) {
+                        Ok(Some(_)) => {}
+                        Ok(None) => {
+                            return ctx.error_response_for(
+                                req,
+                                404,
+                                format!("{role} memory not found: {id}"),
+                            );
+                        }
+                        Err(e) => {
+                            error!("Graph resolve error: {e}");
+                            return ctx.error_response_for(req, 500, "Internal server error");
+                        }
                     }
                 }
 
-                let conn = uteke.graph_store();
-                let gs = uteke_core::graph::GraphStore::new(conn);
                 let relation = req_data.edge_type.as_deref().unwrap_or("related");
                 let weight = req_data.weight.unwrap_or(1.0);
 
-                match gs.add_edge(&req_data.source, &req_data.target, relation, weight) {
-                    Ok(()) => ctx.ok_response_for(req, &serde_json::json!({"ok": true})),
+                // Map memory IDs → graph node IDs before insertion (#1180).
+                // `graph_edges.source_id/target_id` carry FKs to
+                // `graph_nodes(id)`, so inserting raw memory IDs violates the
+                // FK and always 500s. Validation above guarantees each ID is
+                // a memory (node gets ensured) or an existing node.
+                let ensure = |id: &str| -> Result<String, uteke_core::Error> {
+                    match resolve_node(id)? {
+                        Some(nid) => Ok(nid),
+                        None => gs.ensure_node_for_memory(id),
+                    }
+                };
+                let (src_node, tgt_node) =
+                    match (ensure(&req_data.source), ensure(&req_data.target)) {
+                        (Ok(s), Ok(t)) => (s, t),
+                        (Err(e), _) | (_, Err(e)) => {
+                            error!("Graph ensure_node error: {e}");
+                            return ctx.error_response_for(req, 500, "Internal server error");
+                        }
+                    };
+
+                match gs.add_edge(&src_node, &tgt_node, relation, weight) {
+                    Ok(()) => ctx.ok_response_for(
+                        req,
+                        &serde_json::json!({
+                            "ok": true,
+                            "source_node": src_node,
+                            "target_node": tgt_node,
+                        }),
+                    ),
                     Err(e) => {
                         error!("Graph add_edge error: {e}");
                         ctx.error_response_for(req, 500, "Internal server error")
@@ -939,7 +970,29 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                 (Some(src), Some(tgt)) => {
                     let conn = uteke.graph_store();
                     let gs = uteke_core::graph::GraphStore::new(conn);
-                    match gs.remove_edge(src, tgt) {
+                    // Accept either memory IDs or graph node IDs (#1180) —
+                    // resolve both sides to node IDs before deleting.
+                    let resolve = |id: &str| -> Result<Option<String>, uteke_core::Error> {
+                        if let Some(nid) = gs.node_id_for_memory(id)? {
+                            return Ok(Some(nid));
+                        }
+                        gs.get_node(id).map(|n| n.map(|node| node.id))
+                    };
+                    let (src_node, tgt_node) = match (resolve(src), resolve(tgt)) {
+                        (Ok(Some(s)), Ok(Some(t))) => (s, t),
+                        (Ok(_), Ok(_)) => {
+                            return ctx.error_response_for(
+                                req,
+                                404,
+                                format!("Edge not found: {src} -> {tgt}"),
+                            );
+                        }
+                        (Err(e), _) | (_, Err(e)) => {
+                            error!("Graph node resolve error: {e}");
+                            return ctx.error_response_for(req, 500, "Internal server error");
+                        }
+                    };
+                    match gs.remove_edge(&src_node, &tgt_node) {
                         Ok(true) => ctx.ok_response_for(req, &serde_json::json!({"ok": true})),
                         Ok(false) => ctx.error_response_for(
                             req,
@@ -2584,5 +2637,212 @@ mod room_recall_at_tests {
 
         // missing id_remove → 400 at deserialize
         assert!(serde_json::from_str::<ConsolidatePairRequest>(r#"{"id_keep":"abc"}"#).is_err());
+    }
+
+    // ── /graph/edge memory-ID contract (#1180) ─────────────────────────
+
+    use tiny_http::TestRequest;
+
+    struct GraphEdgeApp {
+        uteke: Mutex<Uteke>,
+    }
+
+    impl GraphEdgeApp {
+        fn new() -> Self {
+            // No embedder: these endpoints are storage-only, and tests must
+            // run in CI builds without the ONNX runtime lib.
+            Self {
+                uteke: Mutex::new(
+                    Uteke::open_with_backend(":memory:", None)
+                        .expect("open in-memory uteke without embedder"),
+                ),
+            }
+        }
+
+        fn call(
+            &self,
+            method: Method,
+            url: &str,
+            body: Option<String>,
+        ) -> (u16, serde_json::Value) {
+            let mut req = match body {
+                Some(b) => {
+                    let leaked: &'static str = Box::leak(b.into_boxed_str());
+                    TestRequest::new()
+                        .with_method(method)
+                        .with_path(url)
+                        .with_body(leaked)
+                        .into()
+                }
+                None => TestRequest::new().with_method(method).with_path(url).into(),
+            };
+            let ctx = ReqCtx {
+                auth_token_hash: None,
+                read_only_token_hash: None,
+                cors_origins: Vec::new(),
+                recall_config: None,
+                extraction_config: None,
+            };
+            let resp = route(&self.uteke, &ctx, &mut req);
+            let status = resp.status_code().0;
+            let bytes = resp.into_reader().into_inner();
+            let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+            (status, json)
+        }
+
+        fn remember(&self, content: &str) -> String {
+            let body = serde_json::json!({ "content": content }).to_string();
+            let (status, resp) = self.call(Method::Post, "/remember", Some(body));
+            assert_eq!(status, 200, "remember must succeed: {resp}");
+            resp["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("remember response must carry id: {resp}"))
+                .to_string()
+        }
+
+        fn add_edge(&self, source: &str, target: &str) -> (u16, serde_json::Value) {
+            let body = serde_json::json!({ "source": source, "target": target }).to_string();
+            self.call(Method::Post, "/graph/edge", Some(body))
+        }
+
+        fn delete_edge(&self, source: &str, target: &str) -> (u16, serde_json::Value) {
+            let url = format!("/graph/edge?source={source}&target={target}");
+            self.call(Method::Delete, &url, None)
+        }
+    }
+
+    #[test]
+    fn graph_edge_post_with_memory_ids_returns_ok() {
+        let app = GraphEdgeApp::new();
+        let id1 = app.remember("Uteke is a local-first memory engine");
+        let id2 = app.remember("Corin renders the memory graph");
+
+        let (status, resp) = app.add_edge(&id1, &id2);
+        assert_eq!(
+            status, 200,
+            "valid memory IDs must not 500 (FK mismatch #1180): {resp}"
+        );
+        assert_eq!(resp["ok"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn graph_edge_post_resolves_memory_ids_to_nodes() {
+        let app = GraphEdgeApp::new();
+        let id1 = app.remember("alpha memory");
+        let id2 = app.remember("beta memory");
+
+        let (status, resp) = app.add_edge(&id1, &id2);
+        assert_eq!(status, 200, "{resp}");
+
+        let src_node = resp["source_node"].as_str().expect("source_node id");
+        let tgt_node = resp["target_node"].as_str().expect("target_node id");
+
+        // The resolved nodes must exist in GET /graph and carry the memory
+        // link, so visualization can map edges back to memories.
+        let (_, graph) = app.call(Method::Get, "/graph", None);
+        let nodes = graph["nodes"].as_array().expect("nodes array");
+        assert!(
+            nodes.iter().any(|n| n["id"] == serde_json::json!(src_node)
+                && n["memory_id"] == serde_json::json!(id1)),
+            "source node must link back to memory {id1}: {graph}"
+        );
+        assert!(
+            nodes.iter().any(|n| n["id"] == serde_json::json!(tgt_node)
+                && n["memory_id"] == serde_json::json!(id2)),
+            "target node must link back to memory {id2}: {graph}"
+        );
+
+        // The edge itself must be visible in the graph payload.
+        let edges = graph["edges"].as_array().expect("edges array");
+        assert!(
+            edges
+                .iter()
+                .any(|e| e["source_id"] == serde_json::json!(src_node)
+                    && e["target_id"] == serde_json::json!(tgt_node)
+                    && e["relation"] == serde_json::json!("related")),
+            "edge must appear in GET /graph: {graph}"
+        );
+    }
+
+    #[test]
+    fn graph_edge_post_accepts_graph_node_ids_too() {
+        let app = GraphEdgeApp::new();
+        let id1 = app.remember("source memory");
+        let id2 = app.remember("target memory");
+
+        let (_, first) = app.add_edge(&id1, &id2);
+        let src_node = first["source_node"].as_str().unwrap().to_string();
+
+        // A client holding IDs from GET /graph must still be able to link a
+        // graph node directly (e.g. entity nodes without a memory link).
+        let (status, resp) = app.add_edge(&src_node, &id2);
+        assert_eq!(status, 200, "node IDs must stay accepted: {resp}");
+    }
+
+    #[test]
+    fn graph_edge_post_with_unknown_memory_returns_404() {
+        let app = GraphEdgeApp::new();
+        let ghost1 = "00000000-0000-4000-8000-000000000000";
+        let ghost2 = "11111111-1111-4111-8111-111111111111";
+
+        let (status, resp) = app.add_edge(ghost1, ghost2);
+        assert_eq!(status, 404, "unknown source must 404: {resp}");
+    }
+
+    #[test]
+    fn graph_edge_post_self_loop_rejected() {
+        let app = GraphEdgeApp::new();
+        let id1 = app.remember("self loop probe");
+
+        let (status, _) = app.add_edge(&id1, &id1);
+        assert_eq!(status, 400, "self-loop must stay rejected");
+    }
+
+    #[test]
+    fn graph_edge_delete_accepts_memory_ids() {
+        let app = GraphEdgeApp::new();
+        let id1 = app.remember("edge delete probe a");
+        let id2 = app.remember("edge delete probe b");
+
+        let (status, resp) = app.add_edge(&id1, &id2);
+        assert_eq!(status, 200, "{resp}");
+
+        // DELETE with the same memory IDs must resolve back to the nodes.
+        let (status, resp) = app.delete_edge(&id1, &id2);
+        assert_eq!(status, 200, "delete by memory IDs: {resp}");
+        assert_eq!(resp["ok"], serde_json::json!(true));
+
+        // Second delete: edge gone → 404, not 500.
+        let (status, resp) = app.delete_edge(&id1, &id2);
+        assert_eq!(status, 404, "deleting a removed edge must 404: {resp}");
+    }
+
+    #[test]
+    fn graph_edge_delete_accepts_node_ids_and_unknown_ids() {
+        let app = GraphEdgeApp::new();
+        let id1 = app.remember("node id delete probe a");
+        let id2 = app.remember("node id delete probe b");
+
+        let (_, resp) = app.add_edge(&id1, &id2);
+        let src_node = resp["source_node"].as_str().unwrap().to_string();
+        let tgt_node = resp["target_node"].as_str().unwrap().to_string();
+
+        // Node IDs (from GET /graph payloads) must keep working.
+        let (status, resp) = app.delete_edge(&src_node, &tgt_node);
+        assert_eq!(status, 200, "delete by node IDs: {resp}");
+
+        // Fully unknown IDs must 404 — never 500.
+        let (status, resp) = app.delete_edge("ghost-a", "ghost-b");
+        assert_eq!(status, 404, "unknown IDs must 404: {resp}");
+    }
+
+    #[test]
+    fn graph_edge_delete_requires_both_params() {
+        let app = GraphEdgeApp::new();
+        // URL built separately so the api_registry route scanner does not
+        // mistake this test call for a handler route arm.
+        let url = "/graph/edge?source=only-one";
+        let (status, _) = app.call(Method::Delete, url, None);
+        assert_eq!(status, 400, "missing target param must 400");
     }
 }
