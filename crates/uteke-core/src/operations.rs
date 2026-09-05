@@ -330,6 +330,17 @@ impl crate::Uteke {
 
         self.store.insert(&memory)?;
 
+        // Provenance: record the content hash at write time (#1172 Fase 1).
+        // Best-effort — audits recompute this to detect post-write tampering.
+        use sha2::Digest;
+        let source_hash: String = sha2::Sha256::digest(content.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        if let Err(e) = self.store.set_source_hash(&id, Some(source_hash.as_str())) {
+            tracing::warn!("source_hash write failed for {id}: {e}");
+        }
+
         // Timeline: record creation (#347). This hook lives in the single
         // shared creation path so every remember() / remember_typed() /
         // remember_precomputed() / consolidate() call records a Created
@@ -2724,5 +2735,91 @@ mod namespace_management_tests {
 
         // Unknown strategy is rejected.
         assert!(u.delete_namespace("ghost-ns", "hard-delete", None).is_err());
+    }
+
+    /// #1172 Fase 1: remember records a SHA-256 source hash; provenance()
+    /// returns the full chain (fields + tier + timeline) and detects content
+    /// modified after write via hash mismatch.
+    #[test]
+    fn provenance_chain_and_source_hash() {
+        use sha2::Digest;
+
+        let u = Uteke::open_with_backend(":memory:", None).expect("open without embedder");
+        let id = u
+            .remember("the deploy window is 09:00 WIB", &[], None, Some("ops"))
+            .expect("remember");
+
+        let report = u.provenance(&id).expect("provenance").expect("exists");
+        assert_eq!(report.id, id);
+        assert_eq!(report.namespace, "ops");
+        assert_eq!(report.author_type, "agent");
+        // Hash at write time must match a live recomputation.
+        let expected: String = sha2::Sha256::digest(report.content.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(report.source_hash.as_deref(), Some(expected.as_str()));
+        assert_eq!(report.content_hash_now, expected);
+        assert!(!report.events.is_empty(), "Created event must be recorded");
+        assert!(report.events.iter().any(|e| e.event_type == "created"));
+
+        // Update content without touching source_hash → mismatch detected
+        // (this is the tamper-evidence property).
+        u.store
+            .conn
+            .execute(
+                "UPDATE memories SET content = 'tampered' WHERE id = ?1",
+                rusqlite::params![id],
+            )
+            .expect("tamper");
+        let after = u.provenance(&id).expect("provenance").expect("exists");
+        assert_eq!(after.content, "tampered");
+        assert_ne!(
+            after.source_hash.as_deref(),
+            Some(after.content_hash_now.as_str()),
+            "post-write modification must break the hash match"
+        );
+
+        // Unknown ID → Ok(None).
+        assert!(
+            u.provenance("00000000-0000-4000-8000-000000000000")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// #1172 Fase 1: timeline events carry actor + evidence when written via
+    /// the provenance-aware API, and old callers (no provenance) stay working.
+    #[test]
+    fn timeline_events_carry_provenance() {
+        let u = Uteke::open_with_backend(":memory:", None).expect("open without embedder");
+        let id = u
+            .remember("evidence chain probe", &[], None, None)
+            .expect("remember");
+
+        u.store
+            .add_timeline_event_with_provenance(
+                &id,
+                crate::timeline::TimelineEventType::Updated,
+                Some(&serde_json::json!({"field": "importance"})),
+                Some("agent:cto"),
+                Some(&serde_json::json!([{"memory": "other-id", "score": 0.82}])),
+            )
+            .expect("append provenance event");
+
+        let events = u.timeline(&id, 0).expect("timeline");
+        assert_eq!(events.len(), 2, "created + updated");
+        let provenance_event = events
+            .iter()
+            .find(|e| e.event_type == "updated")
+            .expect("updated event");
+        assert_eq!(provenance_event.actor.as_deref(), Some("agent:cto"));
+        let evidence = provenance_event.evidence.as_ref().expect("evidence");
+        assert_eq!(evidence[0]["memory"], serde_json::json!("other-id"));
+
+        // Plain events (Created) have no actor — backward compatible shape.
+        let created = events.iter().find(|e| e.event_type == "created").unwrap();
+        assert!(created.actor.is_none());
+        assert!(created.evidence.is_none());
     }
 }

@@ -64,6 +64,7 @@ pub use memory::{
     documents::{Document, DocumentChunk, DocumentSearchResult, DocumentSummary},
 };
 pub use orphans::{DEFAULT_ORPHAN_THRESHOLD, OrphanMemory, compute_orphan_score};
+pub use provenance::{ProvenanceReport, TrustTier};
 pub use salience_recency::{
     SalienceRecencyConfig, apply_boosts, recency_score, salience_score, type_half_life_days,
 };
@@ -1327,6 +1328,15 @@ impl Uteke {
         source_type: &str,
     ) -> Result<bool, Error> {
         self.store.set_source(id, source, source_type)
+    }
+
+    /// Set the content hash recorded at write time (#1172 Fase 1).
+    ///
+    /// Normally set automatically by `remember*`/import paths; public so
+    /// repair/backfill tooling can populate legacy rows. Pass `None` to
+    /// clear.
+    pub fn set_source_hash(&self, id: &str, source_hash: Option<&str>) -> Result<bool, Error> {
+        self.store.set_source_hash(id, source_hash)
     }
 
     /// Set author type on a memory (#1083): "human" | "agent".

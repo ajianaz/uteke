@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS memories (
     slug TEXT,
     source TEXT,
     source_type TEXT NOT NULL DEFAULT 'user',
-    author_type TEXT NOT NULL DEFAULT 'agent'
+    author_type TEXT NOT NULL DEFAULT 'agent',
+    source_hash TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_memories_tags ON memories(tags);
 CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
@@ -83,7 +84,9 @@ CREATE TABLE IF NOT EXISTS timeline_events (
     memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
     event_type TEXT NOT NULL,
     event_data TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    actor TEXT,
+    evidence_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_timeline_memory ON timeline_events(memory_id);
 CREATE INDEX IF NOT EXISTS idx_timeline_type ON timeline_events(event_type);
@@ -176,7 +179,7 @@ pub(super) const SCHEMA_INDEXES: &[&str] = &[
 ];
 
 /// Current schema version. Increment when adding migrations.
-pub(crate) const CURRENT_SCHEMA_VERSION: i32 = 17;
+pub(crate) const CURRENT_SCHEMA_VERSION: i32 = 18;
 
 /// Persistent SQLite store for memories.
 pub struct Store {
@@ -270,6 +273,34 @@ impl Store {
             )
             .map_err(|e| Error::db("set source", e))?;
         Ok(rows > 0)
+    }
+
+    /// Set the provenance content hash for a memory (#1172 Fase 1).
+    ///
+    /// `None` clears the hash (used by repair/backfill tooling). Returns
+    /// `false` when the memory does not exist.
+    pub fn set_source_hash(&self, id: &str, source_hash: Option<&str>) -> Result<bool, Error> {
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE memories SET source_hash = ?1 WHERE id = ?2",
+                rusqlite::params![source_hash, id],
+            )
+            .map_err(|e| Error::db("set source hash", e))?;
+        Ok(rows > 0)
+    }
+
+    /// Read the provenance content hash for a memory (#1172 Fase 1).
+    pub fn get_source_hash(&self, id: &str) -> Result<Option<String>, Error> {
+        use rusqlite::OptionalExtension;
+        self.conn
+            .query_row(
+                "SELECT source_hash FROM memories WHERE id = ?1",
+                rusqlite::params![id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| Error::db("get source hash", e))
     }
 
     /// Set author type on a memory (#1083): "human" or "agent".
@@ -702,7 +733,7 @@ mod tests {
             .conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 17, "schema should be upgraded to v17");
+        assert_eq!(version, 18, "schema should be upgraded to current (v18)");
 
         // Legacy row backfilled to 'agent'.
         let at: String = store
