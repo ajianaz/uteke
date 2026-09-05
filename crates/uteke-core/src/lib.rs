@@ -54,9 +54,9 @@ pub use graph_rerank::{GraphRerankConfig, GraphSignals, compute_graph_signals, r
 pub use memory::aging::DeprecatedMemoryInfo;
 pub use memory::types::{
     AgingStatus, BulkDeleteResult, CleanupResult, ConsolidationResult, ContradictionResult,
-    DEFAULT_NAMESPACE, ExportEntry, ImportResult, Memory, MemoryTier, MemoryType, PruneResult,
-    RecallStrategy, SearchResult, SearchResultType, SearchType, SimilarPair, StoreStats, TagInfo,
-    UnifiedSearchResult,
+    DEFAULT_NAMESPACE, ExportEntry, ImportResult, Memory, MemoryTier, MemoryType,
+    NamespaceDeleteResult, NamespaceRenameResult, PruneResult, RecallStrategy, SearchResult,
+    SearchResultType, SearchType, SimilarPair, StoreStats, TagInfo, UnifiedSearchResult,
 };
 pub use memory::{
     DocumentEntry, DocumentSection, Room, RoomDocument, RoomMemory, RoomStats, RoomSummary,

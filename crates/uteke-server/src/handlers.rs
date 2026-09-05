@@ -811,16 +811,26 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         (Method::Get, "/namespaces") => {
             let with_counts = path.contains("with_counts=true");
             if with_counts {
-                match uteke.list_namespaces_with_counts() {
+                match uteke.list_namespaces_with_lifecycle_counts() {
                     Ok(counts) => {
                         #[derive(serde::Serialize)]
                         struct NamespaceCount {
                             name: String,
                             count: usize,
+                            /// Memories not deprecated (#1181).
+                            active: usize,
+                            /// Deprecated memories — additive fields, `count` keeps
+                            /// the total so existing clients stay correct (#1181).
+                            deprecated: usize,
                         }
                         let result: Vec<NamespaceCount> = counts
                             .into_iter()
-                            .map(|(name, count)| NamespaceCount { name, count })
+                            .map(|(name, active, deprecated)| NamespaceCount {
+                                count: active + deprecated,
+                                name,
+                                active,
+                                deprecated,
+                            })
                             .collect();
                         ctx.ok_response_for(req, &result)
                     }
@@ -837,6 +847,53 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                         ctx.error_response_for(req, 500, "Internal server error")
                     }
                 }
+            }
+        }
+
+        // ── Namespace Rename/Merge (#1181) ──────────────────────────────
+        (Method::Post, "/namespaces/rename") => {
+            match read_body::<NamespaceRenameRequest>(req.as_reader()) {
+                Ok(req_data) => match uteke.rename_namespace(&req_data.from, &req_data.to) {
+                    Ok(result) => ctx.ok_response_for(req, &result),
+                    Err(uteke_core::Error::Validation(msg)) => {
+                        ctx.error_response_for(req, 400, msg)
+                    }
+                    Err(e) => {
+                        error!("Namespace rename error: {e}");
+                        ctx.error_response_for(req, 500, "Internal server error")
+                    }
+                },
+                Err(e) => ctx.error_response_for(req, 400, e),
+            }
+        }
+
+        // ── Namespace Delete with explicit strategy (#1181) ─────────────
+        (Method::Post, "/namespaces/delete") => {
+            match read_body::<NamespaceDeleteRequest>(req.as_reader()) {
+                Ok(req_data) => {
+                    match uteke.delete_namespace(
+                        &req_data.name,
+                        &req_data.strategy,
+                        req_data.target.as_deref(),
+                    ) {
+                        Ok(result) => ctx.ok_response_for(req, &result),
+                        Err(uteke_core::Error::Validation(msg)) => {
+                            // `refuse` on a non-empty namespace → 409 Conflict;
+                            // other validation failures → 400.
+                            let status = if req_data.strategy == "refuse" {
+                                409
+                            } else {
+                                400
+                            };
+                            ctx.error_response_for(req, status, msg)
+                        }
+                        Err(e) => {
+                            error!("Namespace delete error: {e}");
+                            ctx.error_response_for(req, 500, "Internal server error")
+                        }
+                    }
+                }
+                Err(e) => ctx.error_response_for(req, 400, e),
             }
         }
 
@@ -1318,11 +1375,12 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                     && req_data.importance.is_none()
                     && req_data.pinned.is_none()
                     && req_data.memory_type.is_none()
+                    && req_data.namespace.is_none()
                 {
                     return ctx.error_response_for(
                         req,
                         400,
-                        "No fields to update. Provide at least one of: content, tags, metadata, importance, pinned, memory_type",
+                        "No fields to update. Provide at least one of: content, tags, metadata, importance, pinned, memory_type, namespace",
                     );
                 }
                 let tag_refs: Option<Vec<String>> = req_data.tags;
@@ -1337,6 +1395,17 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                     req_data.memory_type.as_deref(),
                 ) {
                     Ok(true) => {
+                        // Namespace move (#1181): separate op after the field
+                        // update — plain column change, no re-embed needed.
+                        if let Some(ns) = req_data.namespace.as_deref() {
+                            if let Err(e) = uteke.move_memory(&req_data.id, ns) {
+                                let status = match e {
+                                    uteke_core::Error::Validation(_) => 400,
+                                    _ => 500,
+                                };
+                                return ctx.error_response_for(req, status, e.to_string());
+                            }
+                        }
                         ctx.ok_response_for(req, &serde_json::json!({"updated": req_data.id}))
                     }
                     Ok(false) => ctx.error_response_for(
@@ -2844,5 +2913,173 @@ mod room_recall_at_tests {
         let url = "/graph/edge?source=only-one";
         let (status, _) = app.call(Method::Delete, url, None);
         assert_eq!(status, 400, "missing target param must 400");
+    }
+
+    // ── Namespace management API (#1181) ───────────────────────────────
+
+    struct NamespaceApp {
+        uteke: Mutex<Uteke>,
+    }
+
+    impl NamespaceApp {
+        fn new() -> Self {
+            Self {
+                uteke: Mutex::new(
+                    Uteke::open_with_backend(":memory:", None)
+                        .expect("open in-memory uteke without embedder"),
+                ),
+            }
+        }
+
+        fn call(
+            &self,
+            method: Method,
+            url: &str,
+            body: Option<String>,
+        ) -> (u16, serde_json::Value) {
+            let mut req = match body {
+                Some(b) => {
+                    let leaked: &'static str = Box::leak(b.into_boxed_str());
+                    TestRequest::new()
+                        .with_method(method)
+                        .with_path(url)
+                        .with_body(leaked)
+                        .into()
+                }
+                None => TestRequest::new().with_method(method).with_path(url).into(),
+            };
+            let ctx = ReqCtx {
+                auth_token_hash: None,
+                read_only_token_hash: None,
+                cors_origins: Vec::new(),
+                recall_config: None,
+                extraction_config: None,
+            };
+            let resp = route(&self.uteke, &ctx, &mut req);
+            let status = resp.status_code().0;
+            let bytes = resp.into_reader().into_inner();
+            let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+            (status, json)
+        }
+
+        fn remember_in(&self, content: &str, namespace: &str) -> String {
+            let body =
+                serde_json::json!({ "content": content, "namespace": namespace }).to_string();
+            let (status, resp) = self.call(Method::Post, "/remember", Some(body));
+            assert_eq!(status, 200, "remember must succeed: {resp}");
+            resp["id"].as_str().expect("id").to_string()
+        }
+    }
+
+    #[test]
+    fn namespace_put_memory_moves_namespace() {
+        let app = NamespaceApp::new();
+        let id = app.remember_in("to be moved", "alpha");
+
+        let body = serde_json::json!({ "id": id, "namespace": "beta" }).to_string();
+        let (status, resp) = app.call(Method::Put, "/memory", Some(body));
+        assert_eq!(status, 200, "PUT with namespace must succeed: {resp}");
+
+        // The move is visible via GET /memory.
+        let get_url = format!("/memory?id={id}");
+        let (status, resp) = app.call(Method::Get, &get_url, None);
+        assert_eq!(status, 200);
+        assert_eq!(resp["namespace"], serde_json::json!("beta"));
+
+        // The old name vanishes from listings (derived view).
+        let (_, list) = app.call(Method::Get, "/namespaces", None);
+        let names: Vec<&str> = list
+            .as_array()
+            .expect("namespaces array")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(!names.contains(&"alpha"), "old namespace gone: {list:?}");
+        assert!(names.contains(&"beta"), "{list:?}");
+    }
+
+    #[test]
+    fn namespace_rename_and_merge_endpoint() {
+        let app = NamespaceApp::new();
+        app.remember_in("one", "old");
+        app.remember_in("two", "old");
+        app.remember_in("three", "existing");
+
+        let body = serde_json::json!({ "from": "old", "to": "existing" }).to_string();
+        let (status, resp) = app.call(Method::Post, "/namespaces/rename", Some(body));
+        assert_eq!(status, 200, "{resp}");
+        assert_eq!(resp["moved"], serde_json::json!(2));
+        assert_eq!(resp["target_existed"], serde_json::json!(true));
+        assert_eq!(resp["from"], serde_json::json!("old"));
+        assert_eq!(resp["to"], serde_json::json!("existing"));
+    }
+
+    #[test]
+    fn namespace_delete_refuse_returns_409() {
+        let app = NamespaceApp::new();
+        app.remember_in("keep me", "busy");
+
+        let body = serde_json::json!({ "name": "busy" }).to_string();
+        let (status, resp) = app.call(Method::Post, "/namespaces/delete", Some(body));
+        assert_eq!(
+            status, 409,
+            "refuse on non-empty namespace must 409: {resp}"
+        );
+        assert!(
+            resp["error"]
+                .as_str()
+                .unwrap_or_default()
+                .to_lowercase()
+                .contains("refus")
+        );
+    }
+
+    #[test]
+    fn namespace_delete_merge_removes_namespace() {
+        let app = NamespaceApp::new();
+        app.remember_in("m one", "doomed");
+        app.remember_in("m two", "doomed");
+
+        let body = serde_json::json!({ "name": "doomed", "strategy": "merge", "target": "safe" })
+            .to_string();
+        let (status, resp) = app.call(Method::Post, "/namespaces/delete", Some(body));
+        assert_eq!(status, 200, "{resp}");
+        assert_eq!(resp["affected"], serde_json::json!(2));
+        assert_eq!(resp["empty"], serde_json::json!(true));
+
+        let (_, list) = app.call(Method::Get, "/namespaces", None);
+        let names: Vec<&str> = list
+            .as_array()
+            .expect("namespaces array")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(!names.contains(&"doomed"), "{list:?}");
+        assert!(names.contains(&"safe"), "{list:?}");
+    }
+
+    #[test]
+    fn namespace_with_counts_reports_lifecycle_split() {
+        let app = NamespaceApp::new();
+        let id = app.remember_in("ghost food", "ghosted");
+        let _ = id;
+        let body = serde_json::json!({ "name": "ghosted", "strategy": "deprecate" }).to_string();
+        let (status, resp) = app.call(Method::Post, "/namespaces/delete", Some(body));
+        assert_eq!(status, 200, "{resp}");
+        assert_eq!(resp["affected"], serde_json::json!(1));
+        assert_eq!(resp["empty"], serde_json::json!(false));
+
+        // URL built separately so the api_registry route scanner does not
+        // mistake this test call for a handler route arm.
+        let counts_url = "/namespaces?with_counts=true";
+        let (_, counts) = app.call(Method::Get, counts_url, None);
+        let arr = counts.as_array().expect("counts array");
+        let ghost = arr
+            .iter()
+            .find(|n| n["name"] == serde_json::json!("ghosted"))
+            .expect("ghost namespace stays listed");
+        assert_eq!(ghost["active"], serde_json::json!(0));
+        assert_eq!(ghost["deprecated"], serde_json::json!(1));
+        assert_eq!(ghost["count"], serde_json::json!(1));
     }
 }

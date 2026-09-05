@@ -175,6 +175,8 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 tool_tags_list(),
                 tool_tags_rename(),
                 tool_tags_delete(),
+                tool_namespace_rename(),
+                tool_namespace_delete(),
                 tool_pin(),
                 tool_unpin(),
             ]
@@ -227,6 +229,8 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 "uteke_tags_list" => exec_tags_list(uteke, &arguments)?,
                 "uteke_tags_rename" => exec_tags_rename(uteke, &arguments)?,
                 "uteke_tags_delete" => exec_tags_delete(uteke, &arguments)?,
+                "uteke_namespace_rename" => exec_namespace_rename(uteke, &arguments)?,
+                "uteke_namespace_delete" => exec_namespace_delete(uteke, &arguments)?,
                 "uteke_pin" => exec_pin(uteke, &arguments)?,
                 "uteke_unpin" => exec_unpin(uteke, &arguments)?,
                 _ => return Err(format!("Unknown tool: {tool_name}")),
@@ -341,7 +345,8 @@ fn tool_update() -> Value {
                 "metadata": { "type": "object", "description": "Replacement metadata JSON" },
                 "importance": { "type": "number", "description": "0.0–1.0" },
                 "pinned": { "type": "boolean", "description": "Pin (never decays) or unpin" },
-                "memory_type": { "type": "string", "description": "fact | procedure | preference | decision | context | note | insight | reference | event" }
+                "memory_type": { "type": "string", "description": "fact | procedure | preference | decision | context | note | insight | reference | event" },
+                "namespace": { "type": "string", "description": "Move the memory to this namespace (#1181 — plain move, no re-embed)" }
             },
             "required": ["id"]
         }
@@ -762,6 +767,37 @@ fn tool_tags_delete() -> Value {
     })
 }
 
+fn tool_namespace_rename() -> Value {
+    serde_json::json!({
+        "name": "uteke_namespace_rename",
+        "description": "Rename a namespace, merging into the target when it already exists. Namespaces are a derived view — the old name vanishes when its last memory moved (#1181).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "from": { "type": "string", "description": "Current namespace name" },
+                "to": { "type": "string", "description": "New namespace name (existing name = merge)" }
+            },
+            "required": ["from", "to"]
+        }
+    })
+}
+
+fn tool_namespace_delete() -> Value {
+    serde_json::json!({
+        "name": "uteke_namespace_delete",
+        "description": "Delete a namespace with an explicit strategy for its memories: refuse (default — error while any memory uses the name), merge (move all memories to `target`), or deprecate (soft-delete — restorable via promote, never hard-deleted) (#1181).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": { "type": "string", "description": "Namespace to delete" },
+                "strategy": { "type": "string", "enum": ["refuse", "merge", "deprecate"], "description": "Default: refuse" },
+                "target": { "type": "string", "description": "Target namespace when strategy = merge" }
+            },
+            "required": ["name"]
+        }
+    })
+}
+
 fn tool_pin() -> Value {
     serde_json::json!({
         "name": "uteke_pin",
@@ -1137,6 +1173,22 @@ fn exec_update(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
             }],
             is_error: true,
         });
+    }
+
+    // Namespace move (#1181) — plain column update, no re-embed needed.
+    if let Some(ns) = args["namespace"].as_str() {
+        let moved = uteke
+            .move_memory(&id, ns)
+            .map_err(|e| format!("Failed: {e}"))?;
+        if !moved {
+            return Ok(ToolResult {
+                content: vec![McpContent::Text {
+                    r#type: "text".to_string(),
+                    text: format!("Memory not found: {id}"),
+                }],
+                is_error: true,
+            });
+        }
     }
 
     Ok(ToolResult {
@@ -2211,6 +2263,64 @@ fn exec_tags_delete(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
         content: vec![McpContent::Text {
             r#type: "text".to_string(),
             text: format!("Deleted tag '{}' ({} memories updated)", tag, count),
+        }],
+        is_error: false,
+    })
+}
+
+/// Rename a namespace, merging into an existing target (#1181).
+fn exec_namespace_rename(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let from = args["from"].as_str().ok_or("Missing 'from'")?;
+    let to = args["to"].as_str().ok_or("Missing 'to'")?;
+
+    let result = uteke
+        .rename_namespace(from, to)
+        .map_err(|e| format!("Failed: {e}"))?;
+
+    let kind = if result.target_existed {
+        "merged into existing"
+    } else {
+        "renamed to"
+    };
+    Ok(ToolResult {
+        content: vec![McpContent::Text {
+            r#type: "text".to_string(),
+            text: format!(
+                "✓ Namespace '{}' {} '{}' — {} memories moved",
+                result.from, kind, result.to, result.moved
+            ),
+        }],
+        is_error: false,
+    })
+}
+
+/// Delete a namespace with an explicit memory-fate strategy (#1181).
+fn exec_namespace_delete(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let name = args["name"].as_str().ok_or("Missing 'name'")?;
+    let strategy = args["strategy"].as_str().unwrap_or("refuse");
+    let target = args["target"].as_str();
+
+    let result = uteke
+        .delete_namespace(name, strategy, target)
+        .map_err(|e| format!("Failed: {e}"))?;
+
+    let text = match result.strategy.as_str() {
+        "merge" => format!(
+            "✓ Moved {} memories from '{}' to '{}' — namespace removed",
+            result.affected,
+            result.name,
+            result.target.as_deref().unwrap_or("?")
+        ),
+        "deprecate" => format!(
+            "✓ Soft-deleted {} memories in '{}' (restorable via promote; the name stays visible as deprecated-only)",
+            result.affected, result.name
+        ),
+        other => format!("✓ Namespace '{}' deleted (strategy={other})", result.name),
+    };
+    Ok(ToolResult {
+        content: vec![McpContent::Text {
+            r#type: "text".to_string(),
+            text,
         }],
         is_error: false,
     })

@@ -382,4 +382,139 @@ impl super::Store {
         }
         Ok(result)
     }
+
+    /// List namespaces with counts split by lifecycle state (#1181).
+    ///
+    /// Returns `[(namespace, active, deprecated)]`. Deprecated-only "ghost"
+    /// namespaces currently look identical to active ones in listings;
+    /// splitting the counts lets clients show honest breakdowns.
+    pub fn list_namespaces_with_lifecycle_counts(
+        &self,
+    ) -> Result<Vec<(String, usize, usize)>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT namespace, \
+                        SUM(CASE WHEN deprecated = 0 THEN 1 ELSE 0 END), \
+                        SUM(CASE WHEN deprecated = 1 THEN 1 ELSE 0 END) \
+                 FROM memories \
+                 GROUP BY namespace \
+                 ORDER BY namespace",
+            )
+            .map_err(|e| Error::db("database operation", e))?;
+
+        let rows = stmt
+            .query_map([], |row: &rusqlite::Row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?.max(0) as usize,
+                    row.get::<_, i64>(2)?.max(0) as usize,
+                ))
+            })
+            .map_err(|e| Error::db("database operation", e))?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row.map_err(|e| Error::db("database operation", e))?);
+        }
+        Ok(result)
+    }
+
+    /// Count a namespace's memories split by lifecycle state (#1181).
+    ///
+    /// Returns `(active, deprecated, total)` — `total` includes deprecated.
+    pub fn namespace_lifecycle_counts(&self, name: &str) -> Result<(usize, usize, usize), Error> {
+        self.conn
+            .query_row(
+                "SELECT \
+                    COALESCE(SUM(CASE WHEN deprecated = 0 THEN 1 ELSE 0 END), 0), \
+                    COALESCE(SUM(CASE WHEN deprecated = 1 THEN 1 ELSE 0 END), 0), \
+                    COUNT(*) \
+                 FROM memories WHERE namespace = ?1",
+                params![name],
+                |row: &rusqlite::Row| {
+                    Ok((
+                        row.get::<_, i64>(0)?.max(0) as usize,
+                        row.get::<_, i64>(1)?.max(0) as usize,
+                        row.get::<_, i64>(2)?.max(0) as usize,
+                    ))
+                },
+            )
+            .map_err(|e| Error::db("namespace lifecycle counts", e))
+    }
+
+    /// Move a single memory to another namespace (#1181).
+    ///
+    /// Returns `false` when the memory does not exist. Embeddings are
+    /// content-based, so no re-embed is needed — namespace is a plain column.
+    pub fn move_memory_namespace(
+        &self,
+        id: &str,
+        namespace: &str,
+        now: &str,
+    ) -> Result<bool, Error> {
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE memories SET namespace = ?1, updated_at = ?2 WHERE id = ?3",
+                params![namespace, now, id],
+            )
+            .map_err(|e| Error::db("move memory namespace", e))?;
+        Ok(rows > 0)
+    }
+
+    /// Atomically rename a namespace (merge when `to` already exists) (#1181).
+    ///
+    /// Returns the number of memories moved. The old name vanishes naturally:
+    /// namespaces are a derived view over the `memories.namespace` column.
+    pub fn rename_namespace(&self, from: &str, to: &str, now: &str) -> Result<usize, Error> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| Error::db("begin namespace rename", e))?;
+        let rows = tx
+            .execute(
+                "UPDATE memories SET namespace = ?1, updated_at = ?2 WHERE namespace = ?3",
+                params![to, now, from],
+            )
+            .map_err(|e| Error::db("rename namespace", e))?;
+        tx.commit()
+            .map_err(|e| Error::db("commit namespace rename", e))?;
+        Ok(rows)
+    }
+
+    /// All memory IDs in a namespace, including deprecated (#1181).
+    pub fn namespace_ids(&self, name: &str) -> Result<Vec<String>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM memories WHERE namespace = ?1")
+            .map_err(|e| Error::db("prepare namespace ids", e))?;
+        let rows = stmt
+            .query_map(params![name], |row: &rusqlite::Row| row.get::<_, String>(0))
+            .map_err(|e| Error::db("namespace ids", e))?;
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(row.map_err(|e| Error::db("namespace ids", e))?);
+        }
+        Ok(ids)
+    }
+
+    /// Soft-delete (deprecate) every active memory in a namespace (#1181).
+    ///
+    /// Never hard-deletes — deprecated memories stay restorable via
+    /// `promote()`, consistent with the lifecycle philosophy (#929).
+    /// Returns the number of newly deprecated rows.
+    pub fn deprecate_by_namespace(&self, name: &str, reason: &str) -> Result<usize, Error> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE memories SET deprecated = 1, valid_until = ?1, deprecate_reason = ?2, \
+                 updated_at = ?1, deprecated_at = ?1 \
+                 WHERE namespace = ?3 AND deprecated = 0",
+                params![now, reason, name],
+            )
+            .map_err(|e| Error::db("deprecate namespace", e))?;
+        Ok(rows)
+    }
 }

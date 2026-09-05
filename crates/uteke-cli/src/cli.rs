@@ -681,6 +681,34 @@ pub enum NamespaceCommands {
         /// Namespace name to set as default
         name: String,
     },
+    /// Move a memory to another namespace (#1181)
+    Move {
+        /// Memory ID
+        id: String,
+        /// Target namespace
+        namespace: String,
+    },
+    /// Rename a namespace — merges into the target when it already exists (#1181)
+    Rename {
+        /// Current namespace name
+        from: String,
+        /// New namespace name
+        to: String,
+    },
+    /// Delete a namespace with an explicit strategy for its memories (#1181)
+    Delete {
+        /// Namespace to delete
+        name: String,
+        /// What happens to its memories: refuse (default), merge, deprecate
+        #[arg(long, default_value = "refuse")]
+        strategy: String,
+        /// Target namespace when strategy = merge
+        #[arg(long)]
+        target: Option<String>,
+        /// Confirm the deletion (required)
+        #[arg(long)]
+        confirm: bool,
+    },
 }
 
 /// Feedback actions for trust scoring (#718).
