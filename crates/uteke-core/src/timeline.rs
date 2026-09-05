@@ -35,6 +35,11 @@ pub enum TimelineEventType {
     Tagged,
     /// Memory deleted.
     Forgot,
+    /// Superseded by a newer memory (#1172 Fase 2) — resolution recorded
+    /// with actor + evidence.
+    Superseded,
+    /// A supersession was undone (#1172 Fase 2) — memory restored.
+    SupersessionUndone,
 }
 
 impl TimelineEventType {
@@ -46,6 +51,8 @@ impl TimelineEventType {
             Self::Consolidated => "consolidated",
             Self::Tagged => "tagged",
             Self::Forgot => "forgot",
+            Self::Superseded => "superseded",
+            Self::SupersessionUndone => "supersession_undone",
         }
     }
 
@@ -57,6 +64,8 @@ impl TimelineEventType {
             "consolidated" => Some(Self::Consolidated),
             "tagged" => Some(Self::Tagged),
             "forgot" => Some(Self::Forgot),
+            "superseded" => Some(Self::Superseded),
+            "supersession_undone" => Some(Self::SupersessionUndone),
             _ => None,
         }
     }

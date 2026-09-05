@@ -2202,6 +2202,53 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
             }
         }
 
+        // ── Contradiction resolutions ledger (#1172) ────────────────────
+        (Method::Get, "/contradictions") => {
+            let query = path.split('?').nth(1).unwrap_or("");
+            let ns = parse_query_namespace(&path);
+            let limit = parse_query_param(query, "limit")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(50);
+            match uteke.contradiction_resolutions(ns.as_deref(), limit) {
+                Ok(resolutions) => ctx.ok_response_for(req, &resolutions),
+                Err(e) => {
+                    error!("Contradiction resolutions error: {e}");
+                    ctx.error_response_for(req, 500, "Internal server error")
+                }
+            }
+        }
+
+        // ── Undo a contradiction resolution (#1172) ─────────────────────
+        (Method::Post, "/contradictions/undo") => {
+            #[derive(Deserialize)]
+            struct ContradictionUndoRequest {
+                /// ID of the retired (superseded) memory to restore.
+                id: String,
+            }
+            match read_body::<ContradictionUndoRequest>(req.as_reader()) {
+                Ok(req_data) => match uteke.undo_supersession(&req_data.id) {
+                    Ok(Some(winner)) => ctx.ok_response_for(
+                        req,
+                        &serde_json::json!({
+                            "undone": true,
+                            "restored": req_data.id,
+                            "was_superseded_by": winner,
+                        }),
+                    ),
+                    Ok(None) => ctx.error_response_for(
+                        req,
+                        404,
+                        format!("No supersession found for memory: {}", req_data.id),
+                    ),
+                    Err(e) => {
+                        error!("Contradiction undo error: {e}");
+                        ctx.error_response_for(req, 500, "Internal server error")
+                    }
+                },
+                Err(e) => ctx.error_response_for(req, 400, e),
+            }
+        }
+
         // ── Timeline ─────────────────────────────────────────────────────
         (Method::Get, "/timeline") => {
             let query = path.split('?').nth(1).unwrap_or("");
@@ -3133,6 +3180,143 @@ mod room_recall_at_tests {
 
         // Missing param → 400.
         let (status, _) = app.call(Method::Get, "/provenance", None);
+        assert_eq!(status, 400);
+    }
+}
+
+// ── Contradiction ledger API (#1172 Fase 2) ─────────────────────────
+
+#[cfg(test)]
+mod contradiction_api_tests {
+    use super::*;
+    use tiny_http::TestRequest;
+
+    struct ContradictionApp {
+        uteke: Mutex<Uteke>,
+    }
+
+    impl ContradictionApp {
+        fn new() -> Self {
+            // No embedder: storage-only endpoints, CI-safe without ONNX.
+            Self {
+                uteke: Mutex::new(
+                    Uteke::open_with_backend(":memory:", None)
+                        .expect("open in-memory uteke without embedder"),
+                ),
+            }
+        }
+
+        fn call(
+            &self,
+            method: Method,
+            url: &str,
+            body: Option<String>,
+        ) -> (u16, serde_json::Value) {
+            let mut req = match body {
+                Some(b) => {
+                    let leaked: &'static str = Box::leak(b.into_boxed_str());
+                    TestRequest::new()
+                        .with_method(method)
+                        .with_path(url)
+                        .with_body(leaked)
+                        .into()
+                }
+                None => TestRequest::new().with_method(method).with_path(url).into(),
+            };
+            let ctx = ReqCtx {
+                auth_token_hash: None,
+                read_only_token_hash: None,
+                cors_origins: Vec::new(),
+                recall_config: None,
+                extraction_config: None,
+            };
+            let resp = route(&self.uteke, &ctx, &mut req);
+            let status = resp.status_code().0;
+            let bytes = resp.into_reader().into_inner();
+            let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+            (status, json)
+        }
+
+        fn remember_in(&self, content: &str, namespace: &str) -> String {
+            let body =
+                serde_json::json!({ "content": content, "namespace": namespace }).to_string();
+            let (status, resp) = self.call(Method::Post, "/remember", Some(body));
+            assert_eq!(status, 200, "remember must succeed: {resp}");
+            resp["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("remember response must carry id: {resp}"))
+                .to_string()
+        }
+
+        fn supersede(&self, old: &str, new: &str) {
+            // Setup via the core API — the server has no supersede route;
+            // the surfaces under test are the ledger + undo endpoints.
+            self.uteke
+                .lock()
+                .expect("poisoned mutex")
+                .supersede(old, new, None)
+                .expect("supersede must succeed");
+        }
+    }
+
+    #[test]
+    fn ledger_lists_superseded_and_undo_restores() {
+        let app = ContradictionApp::new();
+        let old = app.remember_in("deploy target is VM-1", "ops");
+        let new = app.remember_in("deploy target is VM-2", "ops");
+        app.supersede(&old, &new);
+
+        // URL built separately so the api_registry route scanner does not
+        // mistake this test call for a handler route arm.
+        let list_url = "/contradictions?namespace=ops";
+        let (status, ledger) = app.call(Method::Get, list_url, None);
+        assert_eq!(status, 200, "{ledger}");
+        let entries = ledger.as_array().expect("ledger array");
+        assert_eq!(
+            entries.len(),
+            1,
+            "one supersession must be listed: {ledger}"
+        );
+        assert_eq!(entries[0]["id"], serde_json::json!(old));
+        let reason = entries[0]["deprecate_reason"].as_str().unwrap_or("");
+        assert!(
+            reason.contains("superseded"),
+            "reason must mention superseded: {reason}"
+        );
+
+        // Undo via POST body.
+        let undo_body = serde_json::json!({ "id": old }).to_string();
+        let (status, resp) = app.call(Method::Post, "/contradictions/undo", Some(undo_body));
+        assert_eq!(status, 200, "{resp}");
+        assert_eq!(resp["undone"], serde_json::json!(true));
+        assert_eq!(resp["restored"], serde_json::json!(old));
+        assert_eq!(resp["was_superseded_by"], serde_json::json!(new));
+
+        // Ledger is clean after the undo.
+        let (status, ledger) = app.call(Method::Get, list_url, None);
+        assert_eq!(status, 200);
+        assert_eq!(
+            ledger.as_array().expect("ledger array").len(),
+            0,
+            "undo must clear the ledger: {ledger}"
+        );
+    }
+
+    #[test]
+    fn undo_unknown_supersession_is_404() {
+        let app = ContradictionApp::new();
+        let id = app.remember_in("never superseded", "ops");
+
+        let body = serde_json::json!({ "id": id }).to_string();
+        let (status, resp) = app.call(Method::Post, "/contradictions/undo", Some(body));
+        assert_eq!(status, 404, "undo without a supersession must 404: {resp}");
+
+        // Malformed body → 400.
+        let (status, _) = app.call(
+            Method::Post,
+            "/contradictions/undo",
+            Some("not-json".into()),
+        );
         assert_eq!(status, 400);
     }
 }

@@ -465,6 +465,11 @@ pub enum Commands {
         /// Memory ID (UUID)
         id: String,
     },
+    /// Inspect the contradiction resolution ledger (#1172)
+    Contradictions {
+        #[command(subcommand)]
+        command: ContradictionCommands,
+    },
     /// Document operations — wiki/knowledge base (#406, #411)
     Doc {
         #[command(subcommand)]
@@ -668,6 +673,25 @@ pub enum TagCommands {
         /// Skip confirmation prompt
         #[arg(long)]
         confirm: bool,
+    },
+}
+
+/// Subcommands for the contradiction resolution ledger (#1172).
+#[derive(Subcommand)]
+pub enum ContradictionCommands {
+    /// List superseded-but-not-restored memories (the resolution ledger)
+    List {
+        /// Filter by namespace
+        #[arg(long)]
+        namespace: Option<String>,
+        /// Maximum entries to show
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
+    /// Restore a superseded memory — undoes the supersession pair
+    Undo {
+        /// Memory ID (UUID) of the retired memory to restore
+        id: String,
     },
 }
 

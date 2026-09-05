@@ -2,6 +2,7 @@
 
 mod aging;
 pub(crate) mod bench;
+mod contradictions;
 mod doc;
 mod dream;
 mod edges;
@@ -383,6 +384,10 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
         Commands::Orphans { threshold, limit } => orphans::run(cli, uteke, ns, *threshold, *limit),
 
         Commands::Timeline { id, limit } => timeline::run(cli, uteke, id, *limit),
+
+        Commands::Contradictions { command } => {
+            crate::commands::contradictions::run(cli, uteke, command)
+        }
 
         Commands::Provenance { id } => {
             let report = uteke

@@ -145,6 +145,8 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 tool_list(),
                 tool_get(),
                 tool_provenance(),
+                tool_contradictions(),
+                tool_contradictions_undo(),
                 tool_supersede(),
                 tool_update(),
                 tool_forget(),
@@ -198,6 +200,8 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 "uteke_list" => exec_list(uteke, &arguments)?,
                 "uteke_get" => exec_get(uteke, &arguments)?,
                 "uteke_provenance" => exec_provenance(uteke, &arguments)?,
+                "uteke_contradictions" => exec_contradictions(uteke, &arguments)?,
+                "uteke_contradictions_undo" => exec_contradictions_undo(uteke, &arguments)?,
                 "uteke_supersede" => exec_supersede(uteke, &arguments)?,
                 "uteke_update" => exec_update(uteke, &arguments)?,
                 "uteke_forget" => exec_forget(uteke, &arguments)?,
@@ -350,6 +354,79 @@ fn exec_provenance(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
         }],
         is_error: false,
     })
+}
+
+fn tool_contradictions() -> Value {
+    serde_json::json!({
+        "name": "uteke_contradictions",
+        "description": "List the contradiction resolution ledger (#1172): memories that were superseded and soft-deprecated by conflict resolution, with winner, reason, and timestamp. Audit what the pipeline decided without digging through timeline events.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "namespace": { "type": "string", "description": "Filter by namespace" },
+                "limit": { "type": "integer", "description": "Max entries (default 50)" }
+            },
+            "required": []
+        }
+    })
+}
+
+fn tool_contradictions_undo() -> Value {
+    serde_json::json!({
+        "name": "uteke_contradictions_undo",
+        "description": "Undo a contradiction resolution (#1172): restore a superseded memory to active, remove the supersession edge pair, and record the undo in the audit trail. Use when a conflict resolution was wrong.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Full UUID or unambiguous prefix of the RETIRED memory to restore" }
+            },
+            "required": ["id"]
+        }
+    })
+}
+
+/// Contradiction resolution ledger (#1172 Fase 2).
+fn exec_contradictions(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let namespace = args["namespace"].as_str();
+    let limit = args["limit"].as_u64().unwrap_or(50) as usize;
+
+    let resolutions = uteke
+        .contradiction_resolutions(namespace, limit)
+        .map_err(|e| format!("Failed: {e}"))?;
+
+    let text = serde_json::to_string_pretty(&resolutions).unwrap_or_else(|_| "[]".to_string());
+    Ok(ToolResult {
+        content: vec![McpContent::Text {
+            r#type: "text".to_string(),
+            text,
+        }],
+        is_error: false,
+    })
+}
+
+/// Undo a contradiction resolution (#1172 Fase 2).
+fn exec_contradictions_undo(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let id_arg = args["id"].as_str().ok_or("Missing 'id'")?;
+    let id = resolve_id(uteke, id_arg)?;
+
+    match uteke
+        .undo_supersession(&id)
+        .map_err(|e| format!("Failed: {e}"))?
+    {
+        Some(winner) => {
+            let text = format!(
+                "\u{2713} Restored memory {id}\n  was superseded by {winner}\n  supersession edges removed \u{2014} the pair is no longer flagged"
+            );
+            Ok(ToolResult {
+                content: vec![McpContent::Text {
+                    r#type: "text".to_string(),
+                    text,
+                }],
+                is_error: false,
+            })
+        }
+        None => Err(format!("No supersession found for memory: {id}")),
+    }
 }
 
 fn tool_supersede() -> Value {
@@ -2632,6 +2709,100 @@ mod supersession_mcp_tests {
             &serde_json::json!({"old_id": &old_short, "new_id": &old_short}),
         );
         assert!(err.is_err());
+
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod contradiction_mcp_tests {
+    use super::*;
+    use uteke_core::Uteke;
+
+    #[test]
+    fn exec_contradictions_list_and_undo_roundtrip() {
+        let dir = std::env::temp_dir().join(format!(
+            "scmcp-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+
+        let mk = |content: &str| -> String {
+            use uteke_core::memory::types::Memory;
+            let id = uuid::Uuid::new_v4().to_string();
+            let m = Memory {
+                id: id.clone(),
+                content: content.to_string(),
+                embedding: vec![0.5; 768],
+                tags: vec![],
+                metadata: serde_json::json!({}),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                namespace: "scmcp-ns".to_string(),
+                access_count: 0,
+                last_accessed: None,
+                deprecated: false,
+                deprecated_at: None,
+                valid_from: None,
+                valid_until: None,
+                memory_type: "decision".to_string(),
+                importance: 0.5,
+                pinned: false,
+                content_type: "text".to_string(),
+                slug: None,
+                source: None,
+                source_type: "user".to_string(),
+                author_type: "agent".to_string(),
+            };
+            uteke.store().insert(&m).unwrap();
+            id
+        };
+        let old = mk("old decision");
+        let new = mk("new decision");
+        uteke.supersede(&old, &new, Some("pivot")).unwrap();
+
+        // Ledger lists the superseded memory.
+        let result = exec_contradictions(
+            &uteke,
+            &serde_json::json!({"namespace": "scmcp-ns", "limit": 50}),
+        )
+        .unwrap();
+        assert!(!result.is_error);
+        let text = match &result.content[0] {
+            McpContent::Text { text, .. } => text.clone(),
+            #[allow(unreachable_patterns)]
+            _ => panic!("expected text content"),
+        };
+        let ledger: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let entries = ledger.as_array().unwrap();
+        assert_eq!(entries.len(), 1, "one entry expected: {text}");
+        assert_eq!(entries[0]["id"], serde_json::json!(old));
+
+        // Undo via short id (resolution contract).
+        let old_short: String = old.chars().take(8).collect();
+        let undone =
+            exec_contradictions_undo(&uteke, &serde_json::json!({"id": old_short})).unwrap();
+        assert!(!undone.is_error);
+
+        // Ledger empty after undo; the memory is active again.
+        let result = exec_contradictions(&uteke, &serde_json::json!({})).unwrap();
+        let text = match &result.content[0] {
+            McpContent::Text { text, .. } => text.clone(),
+            #[allow(unreachable_patterns)]
+            _ => panic!("expected text content"),
+        };
+        assert_eq!(text.trim(), "[]", "ledger must be empty after undo: {text}");
+        assert!(!uteke.get_by_id(&old).unwrap().unwrap().deprecated);
+
+        // Undo again → loud error (no supersession left).
+        let err = exec_contradictions_undo(&uteke, &serde_json::json!({"id": &old}));
+        assert!(err.is_err(), "second undo must error loudly");
 
         drop(uteke);
         std::fs::remove_dir_all(&dir).ok();

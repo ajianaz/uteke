@@ -281,6 +281,25 @@ Hash verdicts: `✓ matches` (content unchanged since write), `✗ MISMATCH`
 (content modified after write — investigate), `—` (memory predates
 schema v18; hash will be recorded on next content update).
 
+## uteke contradictions
+
+Inspect the contradiction resolution ledger (#1172) — memories that were
+superseded by conflict resolution and are not restored.
+
+```bash
+# List the resolution ledger
+uteke contradictions list
+
+# Filter by namespace, cap entries
+uteke contradictions list --namespace ops --limit 20
+
+# JSON (for tooling)
+uteke contradictions list --json
+
+# Restore a superseded memory (full UUID or unambiguous prefix)
+uteke contradictions undo <memory-id>
+```
+
 ## uteke namespace
 
 Manage namespaces — list, inspect, switch defaults, and manage members (#1181).
