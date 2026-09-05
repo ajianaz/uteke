@@ -2617,7 +2617,7 @@ mod namespace_management_tests {
     /// the new namespace disappear/appear correctly in listings.
     #[test]
     fn move_memory_updates_namespace() {
-        let u = Uteke::open(":memory:").expect("open");
+        let u = Uteke::open_with_backend(":memory:", None).expect("open without embedder");
         let id = u
             .remember("move me", &[], None, Some("alpha"))
             .expect("remember");
@@ -2643,7 +2643,7 @@ mod namespace_management_tests {
     /// merges and reports `target_existed = true`.
     #[test]
     fn rename_namespace_moves_and_merges() {
-        let u = Uteke::open(":memory:").expect("open");
+        let u = Uteke::open_with_backend(":memory:", None).expect("open without embedder");
         u.remember("a one", &[], None, Some("old")).expect("a1");
         u.remember("a two", &[], None, Some("old")).expect("a2");
         u.remember("b one", &[], None, Some("new")).expect("b1");
@@ -2676,7 +2676,7 @@ mod namespace_management_tests {
     /// hard-deleting anything.
     #[test]
     fn delete_namespace_strategies() {
-        let u = Uteke::open(":memory:").expect("open");
+        let u = Uteke::open_with_backend(":memory:", None).expect("open without embedder");
         let id1 = u.remember("d one", &[], None, Some("temp-ns")).expect("d1");
         let id2 = u.remember("d two", &[], None, Some("temp-ns")).expect("d2");
 
