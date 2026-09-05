@@ -131,6 +131,70 @@ fn contains_hedge(lower: &str) -> bool {
     HEDGE_MARKERS.iter().any(|h| lower.contains(h))
 }
 
+// ── Provenance chain query (#1172 Fase 1) ──────────────────────────────────
+
+/// Full provenance view of a memory (#1172 Fase 1): identity + provenance
+/// fields + trust tier + content hash + the auditable event chain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvenanceReport {
+    pub id: String,
+    pub namespace: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub author_type: String,
+    pub source: Option<String>,
+    pub source_type: String,
+    /// SHA-256 of the content at the last write (schema v18+). `None` for
+    /// memories written before the column existed.
+    pub source_hash: Option<String>,
+    /// Content currently stored — lets an auditor recompute the hash and
+    /// verify tamper-evidence.
+    pub content: String,
+    /// Hash of the current content (computed live) — compare against
+    /// `source_hash` to detect post-write modifications.
+    pub content_hash_now: String,
+    pub trust_tier: TrustTier,
+    pub deprecated: bool,
+    /// Event chain, newest first, with actor + evidence when recorded.
+    pub events: Vec<crate::timeline::TimelineEvent>,
+}
+
+impl crate::Uteke {
+    /// Build the full provenance report for a memory (#1172 Fase 1).
+    ///
+    /// Returns `Ok(None)` when the memory does not exist.
+    pub fn provenance(&self, id: &str) -> Result<Option<ProvenanceReport>, crate::Error> {
+        use sha2::Digest;
+
+        let memory = match self.store.get_by_id(id)? {
+            Some(m) => m,
+            None => return Ok(None),
+        };
+        let source_hash = self.store.get_source_hash(id)?;
+        let content_hash_now: String = sha2::Sha256::digest(memory.content.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let events = self.store.list_timeline_events(id, 0)?;
+        let trust_tier = TrustTier::of(&memory);
+        Ok(Some(ProvenanceReport {
+            id: memory.id.clone(),
+            namespace: memory.namespace.clone(),
+            created_at: memory.created_at.to_rfc3339(),
+            updated_at: memory.updated_at.to_rfc3339(),
+            author_type: memory.author_type.clone(),
+            source: memory.source.clone(),
+            source_type: memory.source_type.clone(),
+            source_hash,
+            content: memory.content,
+            content_hash_now,
+            trust_tier,
+            deprecated: memory.deprecated,
+            events,
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

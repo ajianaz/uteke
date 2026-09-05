@@ -460,6 +460,11 @@ pub enum Commands {
         #[arg(long, default_value = "20")]
         limit: usize,
     },
+    /// Show the full provenance report for a memory (#1172)
+    Provenance {
+        /// Memory ID (UUID)
+        id: String,
+    },
     /// Document operations — wiki/knowledge base (#406, #411)
     Doc {
         #[command(subcommand)]

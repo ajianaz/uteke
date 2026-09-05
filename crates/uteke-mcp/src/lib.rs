@@ -144,6 +144,7 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 tool_search(),
                 tool_list(),
                 tool_get(),
+                tool_provenance(),
                 tool_supersede(),
                 tool_update(),
                 tool_forget(),
@@ -196,6 +197,7 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 "uteke_search" => exec_search(uteke, &arguments)?,
                 "uteke_list" => exec_list(uteke, &arguments)?,
                 "uteke_get" => exec_get(uteke, &arguments)?,
+                "uteke_provenance" => exec_provenance(uteke, &arguments)?,
                 "uteke_supersede" => exec_supersede(uteke, &arguments)?,
                 "uteke_update" => exec_update(uteke, &arguments)?,
                 "uteke_forget" => exec_forget(uteke, &arguments)?,
@@ -313,6 +315,40 @@ fn tool_get() -> Value {
             },
             "required": ["id"]
         }
+    })
+}
+
+fn tool_provenance() -> Value {
+    serde_json::json!({
+        "name": "uteke_provenance",
+        "description": "Full provenance report for a memory (#1172): author/source fields, trust tier, source hash at write vs live content hash (tamper evidence), and the full timeline event chain with actor + evidence. Use when auditing why a memory exists, who wrote it, and whether it changed after write.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Full UUID or unambiguous prefix" }
+            },
+            "required": ["id"]
+        }
+    })
+}
+
+/// Full provenance report for a memory (#1172 Fase 1).
+fn exec_provenance(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let id_arg = args["id"].as_str().ok_or("Missing 'id'")?;
+    let id = resolve_id(uteke, id_arg)?;
+
+    let report = uteke
+        .provenance(&id)
+        .map_err(|e| format!("Failed: {e}"))?
+        .ok_or_else(|| format!("Memory not found: {id}"))?;
+
+    let text = serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string());
+    Ok(ToolResult {
+        content: vec![McpContent::Text {
+            r#type: "text".to_string(),
+            text,
+        }],
+        is_error: false,
     })
 }
 
