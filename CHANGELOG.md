@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Namespace management API (#1181)** — namespaces are a derived view, now with sanctioned ops: `PUT /memory` accepts `namespace` (move a memory — plain column update, no re-embed), `POST /namespaces/rename` (`{from, to}`; existing target = merge, returns `{from, to, moved, target_existed}`), and `POST /namespaces/delete` with an explicit strategy for its memories: `refuse` (default — 409 while any memory references the name), `merge` (move all memories to `target`, the name vanishes), or `deprecate` (soft-delete — restorable via promote, never hard-deleted). `GET /namespaces?with_counts=true` now adds `active`/`deprecated` breakdown fields (`count` stays the total). CLI parity: `uteke namespace move|rename|delete` (delete requires `--confirm`). MCP parity: `uteke_namespace_rename`, `uteke_namespace_delete`, and `namespace` field on `uteke_update`.
+
 ### Fixed
 
 - **`POST /graph/edge` always returned 500 for valid memory IDs (#1180)** — the handler validated `source`/`target` as memory IDs but inserted them directly into `graph_edges`, whose foreign keys point at `graph_nodes(id)`. Memory IDs are now resolved to their linked graph node (or a node is ensured automatically) before insertion. `DELETE /graph/edge` accepts memory IDs or graph node IDs the same way, and its documented query params are corrected to `?source=...&target=...`. `POST /graph/edge` now responds with `{ok, source_node, target_node}` so clients can track the created nodes.

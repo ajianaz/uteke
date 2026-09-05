@@ -264,7 +264,7 @@ See [Configuration → Memory Lifecycle](/configuration#memory-lifecycle) for li
 
 ## uteke namespace
 
-Manage namespaces — list, inspect, and switch defaults.
+Manage namespaces — list, inspect, switch defaults, and manage members (#1181).
 
 ```bash
 # List all namespaces with counts
@@ -275,7 +275,22 @@ uteke namespace stats my-agent
 
 # Switch default namespace (saved to config)
 uteke namespace switch my-agent
+
+# Move a memory to another namespace (#1181 — no re-embed)
+uteke namespace move <memory-id> other-ns
+
+# Rename a namespace — merges into an existing target (#1181)
+uteke namespace rename old-ns new-ns
+
+# Delete a namespace with an explicit strategy for its memories (#1181)
+uteke namespace delete temp-ns --strategy merge --target archive --confirm
+uteke namespace delete ghost-ns --strategy deprecate --confirm
 ```
+
+Delete strategies: `refuse` (default — refuses while any memory references the
+name), `merge` (move all memories to `--target`, the name vanishes), or
+`deprecate` (soft-delete — restorable via `uteke lifecycle`/promote, never
+hard-deleted). `--confirm` is required for `delete`.
 
 Namespace resolution order: `--namespace flag` → `UTEKE_NAMESPACE` env → `uteke.toml` → `"default"`
 

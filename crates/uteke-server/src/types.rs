@@ -500,6 +500,39 @@ pub struct MemoryUpdateRequest {
     /// Set memory type (fact, procedure, preference, decision, context, note, insight, reference, event).
     #[serde(default)]
     pub memory_type: Option<String>,
+    /// Move the memory to this namespace (#1181). Plain column update — no re-embed.
+    #[serde(default)]
+    pub namespace: Option<String>,
+}
+
+// ── Namespace Management Types (#1181) ─────────────────────────────────────
+
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
+#[derive(Deserialize)]
+pub struct NamespaceRenameRequest {
+    /// Current namespace name.
+    pub from: String,
+    /// New namespace name. If it already exists, this is a merge.
+    pub to: String,
+}
+
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
+#[derive(Deserialize)]
+pub struct NamespaceDeleteRequest {
+    /// Namespace to delete.
+    pub name: String,
+    /// What happens to its memories: `refuse` (default — 409-style error while
+    /// any memory references the name), `merge` (move all memories to `target`),
+    /// or `deprecate` (soft-delete all memories — restorable, never hard-deleted).
+    #[serde(default = "default_namespace_delete_strategy")]
+    pub strategy: String,
+    /// Target namespace when strategy is `merge`.
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+fn default_namespace_delete_strategy() -> String {
+    "refuse".to_string()
 }
 
 // ── Pin Types ─────────────────────────────────────────────────────────────

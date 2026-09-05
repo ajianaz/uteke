@@ -52,7 +52,25 @@ Returns the agent-facing memory tools guide for system prompt injection (#1010).
 
 #### 🟢 `GET` `/namespaces`
 
-List all namespaces in the memory store
+List all namespaces in the memory store. `?with_counts=true` adds `count` (total) plus `active`/`deprecated` breakdown fields (#1181).
+
+*Related: `1181`*
+
+#### 🟡 `POST` `/namespaces/rename`
+
+Rename a namespace (`{from, to}`). When `to` already exists this is a merge; the old name vanishes (derived view). Returns `{from, to, moved, target_existed}` (#1181).
+
+**Request body**: [`NamespaceRenameRequest`](#namespacerenamerequest)
+
+*Related: `1181`*
+
+#### 🟡 `POST` `/namespaces/delete`
+
+Delete a namespace with an explicit strategy for its memories (`{name, strategy, target?}`): `refuse` (default — 409 while any memory references the name), `merge` (move all memories to `target`), or `deprecate` (soft-delete — restorable, never hard-deleted) (#1181).
+
+**Request body**: [`NamespaceDeleteRequest`](#namespacedeleterequest)
+
+*Related: `1181`*
 
 #### 🟢 `GET` `/stats`
 
@@ -611,6 +629,7 @@ Request for memory feedback / trust scoring (#718).
 | `importance` | any | No | Set importance score (0.0–1.0). |
 | `memory_type` | any | No | Set memory type (fact, procedure, preference, decision, context, note, insight, reference, event). |
 | `metadata` | any | No | Replace metadata entirely with this object. |
+| `namespace` | any | No | Move the memory to this namespace (#1181). Plain column update — no re-embed. |
 | `pinned` | any | No | Set pinned state. |
 | `tags` | any | No | Replace tags entirely with this list. |
 
