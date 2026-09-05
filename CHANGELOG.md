@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Provenance data model (#1172, phase 1)** — schema v18 (additive): `memories.source_hash` records the SHA-256 of content at write time (tamper evidence — audits recompute it against live content), and `timeline_events.actor`/`evidence_json` record who performed an event and what evidence supports it. New `Uteke::provenance(id)` returns the full report (provenance fields, trust tier, hash comparison, event chain) — exposed as `GET /provenance?id=`, `uteke provenance <id>`, and the `uteke_provenance` MCP tool.
+
 - **Namespace management API (#1181)** — namespaces are a derived view, now with sanctioned ops: `PUT /memory` accepts `namespace` (move a memory — plain column update, no re-embed), `POST /namespaces/rename` (`{from, to}`; existing target = merge, returns `{from, to, moved, target_existed}`), and `POST /namespaces/delete` with an explicit strategy for its memories: `refuse` (default — 409 while any memory references the name), `merge` (move all memories to `target`, the name vanishes), or `deprecate` (soft-delete — restorable via promote, never hard-deleted). `GET /namespaces?with_counts=true` now adds `active`/`deprecated` breakdown fields (`count` stays the total). CLI parity: `uteke namespace move|rename|delete` (delete requires `--confirm`). MCP parity: `uteke_namespace_rename`, `uteke_namespace_delete`, and `namespace` field on `uteke_update`.
 
 ### Fixed

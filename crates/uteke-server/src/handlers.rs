@@ -2185,6 +2185,23 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
             Err(e) => ctx.error_response_for(req, 400, e),
         },
 
+        // ── Provenance chain (#1172) ─────────────────────────────────────
+        (Method::Get, "/provenance") => {
+            let query = path.split('?').nth(1).unwrap_or("");
+            let id = match parse_query_param(query, "id") {
+                Some(id) => id,
+                None => return ctx.error_response_for(req, 400, "Missing 'id' query parameter"),
+            };
+            match uteke.provenance(&id) {
+                Ok(Some(report)) => ctx.ok_response_for(req, &report),
+                Ok(None) => ctx.error_response_for(req, 404, format!("Memory not found: {id}")),
+                Err(e) => {
+                    error!("Provenance error: {e}");
+                    ctx.error_response_for(req, 500, "Internal server error")
+                }
+            }
+        }
+
         // ── Timeline ─────────────────────────────────────────────────────
         (Method::Get, "/timeline") => {
             let query = path.split('?').nth(1).unwrap_or("");
@@ -3081,5 +3098,41 @@ mod room_recall_at_tests {
         assert_eq!(ghost["active"], serde_json::json!(0));
         assert_eq!(ghost["deprecated"], serde_json::json!(1));
         assert_eq!(ghost["count"], serde_json::json!(1));
+    }
+
+    // ── Provenance API (#1172) ─────────────────────────────────────────
+
+    #[test]
+    fn provenance_endpoint_reports_chain_and_hash() {
+        let app = NamespaceApp::new();
+        let id = app.remember_in("provenance surface probe", "audit");
+
+        let get_url = format!("/provenance?id={id}");
+        let (status, report) = app.call(Method::Get, &get_url, None);
+        assert_eq!(status, 200, "{report}");
+        assert_eq!(report["id"], serde_json::json!(id));
+        assert_eq!(report["namespace"], serde_json::json!("audit"));
+        assert_eq!(report["author_type"], serde_json::json!("agent"));
+        assert_eq!(report["trust_tier"], serde_json::json!("agent"));
+        assert_eq!(report["source_hash"], report["content_hash_now"]);
+        let events = report["events"].as_array().expect("events array");
+        assert!(
+            events
+                .iter()
+                .any(|e| e["event_type"] == serde_json::json!("created")),
+            "created event must be in the chain: {report}"
+        );
+
+        // Unknown ID → 404.
+        let (status, _) = app.call(
+            Method::Get,
+            "/provenance?id=00000000-0000-4000-8000-000000000000",
+            None,
+        );
+        assert_eq!(status, 404);
+
+        // Missing param → 400.
+        let (status, _) = app.call(Method::Get, "/provenance", None);
+        assert_eq!(status, 400);
     }
 }

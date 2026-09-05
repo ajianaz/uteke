@@ -100,6 +100,12 @@ Update an existing memory's content and/or metadata.
 
 Get graph edges for a memory. Accepts `?id=...` query param.
 
+#### 🟢 `GET` `/provenance`
+
+Full provenance report for a memory (#1172): author/source fields, trust tier, source hash at write vs live-recomputed content hash (tamper evidence), and the full timeline event chain with actor + evidence. Accepts `?id=...` query param.
+
+*Related: `1172`*
+
 #### 🟡 `POST` `/lifecycle/cycle`
 
 Run lifecycle aging cycle: deprecate old memories, optionally prune expired ones.

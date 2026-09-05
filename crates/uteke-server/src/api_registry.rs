@@ -497,6 +497,15 @@ pub const ENDPOINTS: &[Endpoint] = &[
     // ── Timeline ─────────────────────────────────────────────────────────
     Endpoint {
         method: "GET",
+        path: "/provenance",
+        description: "Full provenance report for a memory (#1172): author/source fields, trust tier, source hash at write vs live-recomputed content hash (tamper evidence), and the full timeline event chain with actor + evidence. Accepts `?id=...` query param.",
+        request_type: None,
+        response_type: None,
+        excludes_deprecated: false,
+        issues: &["1172"],
+    },
+    Endpoint {
+        method: "GET",
         path: "/timeline",
         description: "Get timeline of memory events for a memory. Accepts `?id=...` query param.",
         request_type: None,

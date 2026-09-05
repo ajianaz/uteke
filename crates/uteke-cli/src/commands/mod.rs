@@ -384,6 +384,59 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
 
         Commands::Timeline { id, limit } => timeline::run(cli, uteke, id, *limit),
 
+        Commands::Provenance { id } => {
+            let report = uteke
+                .provenance(id)
+                .map_err(|e| format!("Failed to read provenance: {e}"))?;
+            match report {
+                Some(report) if cli.json => crate::output::print_json(&report),
+                Some(report) => {
+                    println!("Provenance for memory {id}");
+                    println!("  Namespace:    {}", report.namespace);
+                    println!("  Author type:  {}", report.author_type);
+                    println!(
+                        "  Source:       {} ({})",
+                        report.source.as_deref().unwrap_or("—"),
+                        report.source_type
+                    );
+                    println!("  Trust tier:   {:?}", report.trust_tier);
+                    println!("  Created:      {}", report.created_at);
+                    println!("  Updated:      {}", report.updated_at);
+                    println!("  Deprecated:   {}", report.deprecated);
+                    match report.source_hash.as_deref() {
+                        Some(h) if h == report.content_hash_now => {
+                            println!("  Content hash: {h} ✓ (matches write-time hash)");
+                        }
+                        Some(h) => {
+                            println!(
+                                "  Content hash: {h} ✗ MISMATCH — content changed after write (now {})",
+                                report.content_hash_now
+                            );
+                        }
+                        None => {
+                            println!(
+                                "  Content hash: — (pre-v18 row; now {})",
+                                report.content_hash_now
+                            );
+                        }
+                    }
+                    println!("\n  Event chain ({} events):", report.events.len());
+                    for event in &report.events {
+                        let actor = event.actor.as_deref().unwrap_or("—");
+                        println!(
+                            "    • [{}] {} (actor: {actor})",
+                            event.created_at, event.event_type
+                        );
+                        if let Some(evidence) = &event.evidence {
+                            println!("      evidence: {evidence}");
+                        }
+                    }
+                }
+                None => return Err(format!("Memory not found: {id}")),
+            }
+            Ok(())
+        }
+
         Commands::Doc { command } => crate::commands::doc::run(cli, uteke, command, config),
 
         Commands::Upgrade { yes } => upgrade::run(*yes),

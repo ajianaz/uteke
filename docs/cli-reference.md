@@ -262,6 +262,25 @@ uteke lifecycle restore <memory-id>
 
 See [Configuration → Memory Lifecycle](/configuration#memory-lifecycle) for lifecycle config options.
 
+## uteke provenance
+
+Show the full provenance report for a memory (#1172) — who wrote it, from
+what source, its trust tier, whether the content still matches the hash
+recorded at write time, and the complete event chain with actor +
+evidence.
+
+```bash
+# Human-readable audit report
+uteke provenance <memory-id>
+
+# JSON (for tooling)
+uteke provenance <memory-id> --json
+```
+
+Hash verdicts: `✓ matches` (content unchanged since write), `✗ MISMATCH`
+(content modified after write — investigate), `—` (memory predates
+schema v18; hash will be recorded on next content update).
+
 ## uteke namespace
 
 Manage namespaces — list, inspect, switch defaults, and manage members (#1181).
