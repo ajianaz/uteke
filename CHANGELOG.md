@@ -1,11 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [0.17.0] — 2026-09-06
 
-### Fixed
-
-- **Graph data returned stale nodes (#1189)** — `GET /graph` without a namespace returned every `graph_nodes` row raw, including nodes whose parent memory had been forgotten or deprecated; with soft-delete the store accumulated stale nodes on every conflict resolution. Memory-linked nodes are now filtered by liveness (memory exists and `deprecated = 0`) in every `graph_data` path, edges touching removed nodes are dropped, and `stats` counts the filtered graph.
-- **Memory graph nodes labeled with raw UUIDs (#1187)** — `ensure_node_for_memory` now labels new memory nodes with a readable content preview (first 60 chars of the memory) instead of the raw memory UUID, and upgrades legacy UUID-labeled rows in place on next access. Entity nodes are unaffected.
+Minor release. Theme: **inspectable, trustworthy memory** — explain recall on
+every surface, auditable conflict resolution with a measurable payoff, honest
+graphs, pagination metadata, and a dual-engine vector layer.
 
 ### Added
 
@@ -18,6 +17,11 @@
 - **Contradiction resolution ledger + undo (#1172, phase 2)** — supersessions are now a first-class, auditable ledger instead of a side effect: `Uteke::contradiction_resolutions(namespace, limit)` lists superseded-but-not-restored memories (winner, reason, timestamp via the deprecation row), `Uteke::undo_supersession(id)` restores a retired memory, removes the supersession edge pair, and records a `supersession_undone` event on both sides (only memories carrying a live `superseded_by` edge can be undone — the undo is itself auditable). Ledger membership is edge-driven (deprecated row + `superseded_by` edge), the same predicate undo resolves against, and re-superseding an already-deprecated memory refreshes the stored reason/timestamp so the ledger always names the current winner. Surfaces: `GET /contradictions?namespace=&limit=`, `POST /contradictions/undo` (`{id}`; 404 when nothing to undo), `uteke contradictions list|undo`, and MCP `uteke_contradictions` / `uteke_contradictions_undo`. Fixed in the process: the no-namespace ledger query bound its limit parameter to a nonexistent placeholder (`?2`) and failed at runtime — caught by the new MCP roundtrip test.
 
 - **Provenance data model (#1172, phase 1)** — schema v18 (additive): `memories.source_hash` records the SHA-256 of content at write time (tamper evidence — audits recompute it against live content), and `timeline_events.actor`/`evidence_json` record who performed an event and what evidence supports it. New `Uteke::provenance(id)` returns the full report (provenance fields, trust tier, hash comparison, event chain) — exposed as `GET /provenance?id=`, `uteke provenance <id>`, and the `uteke_provenance` MCP tool.
+
+### Fixed
+
+- **Graph data returned stale nodes (#1189)** — `GET /graph` without a namespace returned every `graph_nodes` row raw, including nodes whose parent memory had been forgotten or deprecated; with soft-delete the store accumulated stale nodes on every conflict resolution. Memory-linked nodes are now filtered by liveness (memory exists and `deprecated = 0`) in every `graph_data` path, edges touching removed nodes are dropped, and `stats` counts the filtered graph.
+- **Memory graph nodes labeled with raw UUIDs (#1187)** — `ensure_node_for_memory` now labels new memory nodes with a readable content preview (first 60 chars of the memory) instead of the raw memory UUID, and upgrades legacy UUID-labeled rows in place on next access. Entity nodes are unaffected.
 
 - **Namespace management API (#1181)** — namespaces are a derived view, now with sanctioned ops: `PUT /memory` accepts `namespace` (move a memory — plain column update, no re-embed), `POST /namespaces/rename` (`{from, to}`; existing target = merge, returns `{from, to, moved, target_existed}`), and `POST /namespaces/delete` with an explicit strategy for its memories: `refuse` (default — 409 while any memory references the name), `merge` (move all memories to `target`, the name vanishes), or `deprecate` (soft-delete — restorable via promote, never hard-deleted). `GET /namespaces?with_counts=true` now adds `active`/`deprecated` breakdown fields (`count` stays the total). CLI parity: `uteke namespace move|rename|delete` (delete requires `--confirm`). MCP parity: `uteke_namespace_rename`, `uteke_namespace_delete`, and `namespace` field on `uteke_update`.
 
