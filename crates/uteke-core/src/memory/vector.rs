@@ -1,14 +1,26 @@
 //! Persistent vector index with pluggable backends.
 //!
-//! Two mutually exclusive backends, selected at compile time via cargo features:
+//! Backends are selected at RUNTIME (#1168) while remaining compile-time
+//! slim-buildable:
 //!
-//! - `usearch` (default): HNSW with disk persistence via C++ FFI.
-//! - `vecq`: training-free 4-bit vector quantization, pure Rust, no C++
-//!   toolchain (for mobile/FFI builds, #1098).
+//! - `usearch`: HNSW with disk persistence via C++ FFI.
+//! - `vecq`: training-free 4-bit + residual vector quantization, pure Rust,
+//!   no C++ toolchain (originally for mobile/FFI builds, #1098).
+//!
+//! A build may compile in one or both engines (cargo features `usearch` /
+//! `vecq`). Which engine a `VectorIndex` uses is decided when it is created:
+//! `UTEKE_VECTOR_BACKEND` env → explicit constructor argument (from
+//! `uteke.toml [vector] backend`) → compiled-in default. At least one engine
+//! feature must be enabled.
 //!
 //! The public API (`new`, `load_or_create`, `insert`, `remove`, `search`,
 //! `build`, `save`, `len`, `dims`, ...) is identical for both backends —
 //! callers never branch on the backend.
+//!
+//! Index files are per-engine: `uteke_index.usearch` vs `uteke_index.vecq`.
+//! Switching engines leaves the old file untouched; the new engine finds no
+//! index and the caller (lib.rs `finish_open_full`) rebuilds from SQLite,
+//! which remains the source of truth.
 //!
 //! Cross-process safety (#543): Each VectorIndex acquires an exclusive file
 //! lock (via fs2) on the index file during construction. The lock is held
@@ -23,17 +35,14 @@
 //! via Rust std::fs; load reads via Rust std::fs then deserializes from buffer.
 //!
 //! vecq format note: vecq has no incremental delete — removed rows are
-//! tombstoned (tracked via the `dead` bitmap) and filtered out of search
+//! tombstoned (the key vanishes from the key map) and filtered out of search
 //! results. Tombstones are derived from the key-mapping sidecar on load, so
 //! no extra on-disk state is needed.
 
-#[cfg(all(feature = "usearch", feature = "vecq"))]
-compile_error!(
-    "features `usearch` and `vecq` are mutually exclusive vector index backends; \
-     enable exactly one (default build uses `usearch`)"
-);
 #[cfg(not(any(feature = "usearch", feature = "vecq")))]
-compile_error!("uteke-core requires a vector index backend; enable `usearch` (default) or `vecq`");
+compile_error!(
+    "uteke-core requires a vector index backend; enable `usearch` (default) and/or `vecq`"
+);
 
 use crate::Error;
 use fs2::FileExt;
@@ -46,11 +55,12 @@ use usearch::{Index, IndexOptions, MetricKind, ScalarKind};
 #[cfg(feature = "vecq")]
 use vecq_core::VecqIndex;
 
-/// Extension for the on-disk index file.
+/// Extension for the on-disk index file of the compiled-in DEFAULT backend.
+///
+/// Prefer [`index_ext_for`] when a specific backend is selected at runtime.
 #[cfg(feature = "usearch")]
 pub const INDEX_EXT: &str = "usearch";
-/// Extension for the on-disk index file (vecq backend, #1098).
-#[cfg(feature = "vecq")]
+#[cfg(not(feature = "usearch"))]
 pub const INDEX_EXT: &str = "vecq";
 
 /// Default dimensions for EmbeddingGemma Q4 (768d).
@@ -61,11 +71,296 @@ const DEFAULT_DIMS: usize = 768;
 #[cfg(feature = "vecq")]
 const VECQ_SEED: u64 = 0x7574_656b; // "utek"
 
+/// Which vector engine a `VectorIndex` uses (#1168).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VectorBackend {
+    Usearch,
+    Vecq,
+}
+
+impl VectorBackend {
+    /// Parse a user-facing backend name (env var / toml value).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "usearch" => Some(VectorBackend::Usearch),
+            "vecq" => Some(VectorBackend::Vecq),
+            _ => None,
+        }
+    }
+
+    /// The compiled-in default engine: usearch when available (long-standing
+    /// desktop default, best query latency), else vecq (slim builds).
+    pub fn default_backend() -> Self {
+        default_backend()
+    }
+
+    /// Resolve a preferred backend against the engines compiled in.
+    ///
+    /// Returns `(resolved, honored)` where `honored` is false when the
+    /// preference had to fall back (engine not compiled in), or when the
+    /// preference was `None`.
+    pub fn resolve(preferred: Option<Self>) -> (Self, bool) {
+        let default = default_backend();
+        match preferred {
+            None => (default, false),
+            Some(p) if p.is_compiled_in() => (p, true),
+            Some(_p) => (default, false),
+        }
+    }
+
+    /// Whether this engine's cargo feature is compiled into the binary.
+    pub fn is_compiled_in(self) -> bool {
+        match self {
+            #[cfg(feature = "usearch")]
+            VectorBackend::Usearch => true,
+            #[cfg(not(feature = "usearch"))]
+            VectorBackend::Usearch => false,
+            #[cfg(feature = "vecq")]
+            VectorBackend::Vecq => true,
+            #[cfg(not(feature = "vecq"))]
+            VectorBackend::Vecq => false,
+        }
+    }
+}
+
+/// Compiled-in default engine (see [`VectorBackend::default_backend`]).
+pub fn default_backend() -> VectorBackend {
+    #[cfg(feature = "usearch")]
+    {
+        VectorBackend::Usearch
+    }
+    #[cfg(not(feature = "usearch"))]
+    {
+        VectorBackend::Vecq
+    }
+}
+
+/// On-disk index file extension for a backend.
+pub fn index_ext_for(backend: VectorBackend) -> &'static str {
+    match backend {
+        VectorBackend::Usearch => "usearch",
+        VectorBackend::Vecq => "vecq",
+    }
+}
+
+/// The concrete engine instance — one variant per compiled-in backend.
+#[allow(clippy::large_enum_variant)]
+enum Engine {
+    #[cfg(feature = "usearch")]
+    Usearch(Box<Index>),
+    #[cfg(feature = "vecq")]
+    Vecq(VecqIndex),
+}
+
+impl Engine {
+    /// Create an empty engine of `backend` for `dims`-dimensional vectors.
+    fn create(backend: VectorBackend, dims: usize) -> Result<Self, Error> {
+        match backend {
+            #[cfg(feature = "usearch")]
+            VectorBackend::Usearch => {
+                let options = IndexOptions {
+                    dimensions: dims,
+                    metric: MetricKind::Cos,
+                    quantization: ScalarKind::F32,
+                    ..Default::default()
+                };
+                let index = Index::new(&options).map_err(|e| {
+                    Error::embed_msg(format!(
+                        "Failed to create usearch index (dims={dims}): {e}. This is likely an out-of-memory condition."
+                    ))
+                })?;
+                Ok(Engine::Usearch(Box::new(index)))
+            }
+            #[cfg(not(feature = "usearch"))]
+            VectorBackend::Usearch => Err(Error::validation(
+                "usearch engine requested but not compiled in",
+            )),
+            #[cfg(feature = "vecq")]
+            VectorBackend::Vecq => Ok(Engine::Vecq(VecqIndex::with_residual(dims, VECQ_SEED))),
+            #[cfg(not(feature = "vecq"))]
+            VectorBackend::Vecq => Err(Error::validation(
+                "vecq engine requested but not compiled in",
+            )),
+        }
+    }
+
+    /// Restore an engine from a serialized buffer. The buffer must have been
+    /// written by the SAME engine (`Engine::to_bytes`).
+    fn from_bytes(backend: VectorBackend, buffer: &[u8]) -> Result<Self, Error> {
+        match backend {
+            #[cfg(feature = "usearch")]
+            VectorBackend::Usearch => {
+                let index = Index::restore_from_buffer(buffer)
+                    .map_err(|e| Error::embed("load vector index", e))?;
+                Ok(Engine::Usearch(Box::new(index)))
+            }
+            #[cfg(not(feature = "usearch"))]
+            VectorBackend::Usearch => Err(Error::validation(
+                "usearch engine requested but not compiled in",
+            )),
+            #[cfg(feature = "vecq")]
+            VectorBackend::Vecq => {
+                let index = VecqIndex::from_bytes(buffer)
+                    .map_err(|e| Error::embed("load vector index (vecq)", e))?;
+                Ok(Engine::Vecq(index))
+            }
+            #[cfg(not(feature = "vecq"))]
+            VectorBackend::Vecq => Err(Error::validation(
+                "vecq engine requested but not compiled in",
+            )),
+        }
+    }
+
+    /// Serialize to an in-memory buffer (see save() notes on buffer-based I/O).
+    fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+        match self {
+            #[cfg(feature = "usearch")]
+            Engine::Usearch(index) => {
+                let buf_len = index.serialized_length();
+                let mut buffer = vec![0u8; buf_len];
+                index
+                    .save_to_buffer(&mut buffer)
+                    .map_err(|e| Error::embed("save vector index to buffer", e))?;
+                Ok(buffer)
+            }
+            #[cfg(feature = "vecq")]
+            Engine::Vecq(index) => Ok(index.to_bytes()),
+        }
+    }
+
+    /// Number of physical rows/entries in the engine (including vecq
+    /// tombstoned rows; live count is the key map's length).
+    fn len(&self) -> usize {
+        match self {
+            #[cfg(feature = "usearch")]
+            Engine::Usearch(index) => index.size(),
+            #[cfg(feature = "vecq")]
+            Engine::Vecq(index) => index.len(),
+        }
+    }
+
+    /// Capacity (diagnostics).
+    fn capacity(&self) -> usize {
+        match self {
+            #[cfg(feature = "usearch")]
+            Engine::Usearch(index) => index.capacity(),
+            #[cfg(feature = "vecq")]
+            Engine::Vecq(index) => index.len(),
+        }
+    }
+
+    /// Embedding dimensionality.
+    fn dims(&self) -> usize {
+        match self {
+            #[cfg(feature = "usearch")]
+            Engine::Usearch(index) => index.dimensions(),
+            #[cfg(feature = "vecq")]
+            Engine::Vecq(index) => index.dim(),
+        }
+    }
+
+    /// Pre-reserve capacity for a bulk build (usearch only; vecq grows
+    /// organically).
+    fn reserve(&mut self, #[allow(unused_variables)] additional: usize) {
+        match self {
+            #[cfg(feature = "usearch")]
+            Engine::Usearch(index) => {
+                if let Err(e) = index.reserve(additional) {
+                    tracing::error!("Failed to reserve usearch capacity: {e}");
+                }
+            }
+            #[cfg(feature = "vecq")]
+            Engine::Vecq(_) => { /* vecq: no-op */ }
+        }
+    }
+
+    /// Auto-grow capacity when full (usearch only).
+    fn ensure_capacity(&mut self) -> Result<(), Error> {
+        match self {
+            #[cfg(feature = "usearch")]
+            Engine::Usearch(index) => {
+                if index.size() >= index.capacity() {
+                    // Auto-reserve using geometric growth to amortize reallocation cost.
+                    // Growth strategy: max(current * 2, current + 4096, 1024).
+                    let current = index.capacity();
+                    let new_cap = (current * 2).max(current + 4096).max(1024);
+                    index.reserve(new_cap).map_err(|e| {
+                        Error::embed_msg(format!("Failed to reserve usearch capacity: {e}"))
+                    })?;
+                }
+                Ok(())
+            }
+            #[cfg(feature = "vecq")]
+            Engine::Vecq(_) => Ok(()),
+        }
+    }
+
+    /// Insert a vector under `key`.
+    ///
+    /// usearch: keyed insert. vecq: append-only — the row index MUST equal
+    /// `key` (the caller maintains the row == key invariant by deriving keys
+    /// from `Engine::len()`), the key argument is ignored.
+    fn add(&mut self, #[allow(unused_variables)] key: u64, embedding: &[f32]) -> Result<(), Error> {
+        match self {
+            #[cfg(feature = "usearch")]
+            Engine::Usearch(index) => index
+                .add(key, embedding)
+                .map_err(|e| Error::embed_msg(format!("Failed to insert into usearch index: {e}"))),
+            #[cfg(feature = "vecq")]
+            Engine::Vecq(index) => {
+                index.add(embedding);
+                Ok(())
+            }
+        }
+    }
+
+    /// Remove a key (usearch). vecq has no incremental delete — the caller
+    /// tombstones via the key map instead.
+    fn remove(&mut self, #[allow(unused_variables)] key: u64) {
+        match self {
+            #[cfg(feature = "usearch")]
+            Engine::Usearch(index) => {
+                if let Err(e) = index.remove(key) {
+                    tracing::error!("Failed to remove from usearch index: {e}");
+                }
+            }
+            #[cfg(feature = "vecq")]
+            Engine::Vecq(_) => { /* tombstone via key map (see remove()) */ }
+        }
+    }
+
+    /// Top-`k` search. Returns `(key, cosine_distance)` pairs sorted by
+    /// distance ascending, engine-agnostic (vecq rows ARE keys).
+    fn search(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
+        match self {
+            #[cfg(feature = "usearch")]
+            Engine::Usearch(index) => match index.search(query, k) {
+                Ok(r) => r
+                    .keys
+                    .iter()
+                    .copied()
+                    .zip(r.distances.iter().copied())
+                    .collect(),
+                Err(e) => {
+                    tracing::error!("usearch search failed: {e}");
+                    Vec::new()
+                }
+            },
+            #[cfg(feature = "vecq")]
+            Engine::Vecq(index) => index
+                .search(query, k)
+                .into_iter()
+                .map(|(row, sim)| (row as u64, 1.0 - sim))
+                .collect(),
+        }
+    }
+}
+
 /// Persistent vector index.
 ///
 /// - **Startup**: loads from disk (~5ms), no rebuild needed
 /// - **Insert**: incremental, no rebuild
-/// - **Delete**: incremental, no rebuild
+/// - **Delete**: incremental, no rebuild (vecq: tombstone)
 /// - **Save**: persists to disk after mutations
 ///
 /// **Cross-process safety (#543):** An exclusive file lock on the index
@@ -73,10 +368,11 @@ const VECQ_SEED: u64 = 0x7574_656b; // "utek"
 /// held for the lifetime of the VectorIndex. In-process thread safety uses
 /// `RwLock` in `Uteke`.
 pub struct VectorIndex {
-    #[cfg(feature = "usearch")]
-    index: Index,
-    #[cfg(feature = "vecq")]
-    index: VecqIndex,
+    /// Active engine (runtime-selected, #1168).
+    engine: Engine,
+    /// Which backend `engine` is (mirrors the enum variant; kept separately
+    /// for cheap comparisons without matching).
+    backend: VectorBackend,
     /// Maps integer key (u64) → memory UUID string.
     key_to_id: HashMap<u64, String>,
     /// Maps memory UUID → integer key.
@@ -93,11 +389,22 @@ pub struct VectorIndex {
 }
 
 impl VectorIndex {
-    /// Create a new empty vector index.
+    /// The engine this index runs on (#1168).
+    pub fn backend(&self) -> VectorBackend {
+        self.backend
+    }
+
+    /// Create a new empty vector index using the compiled-in default engine.
     pub fn new(dims: usize) -> Result<Self, Error> {
-        let index = Self::create_index(dims)?;
+        Self::with_backend(default_backend(), dims)
+    }
+
+    /// Create a new empty vector index for an explicit engine (#1168).
+    pub fn with_backend(backend: VectorBackend, dims: usize) -> Result<Self, Error> {
+        let engine = Engine::create(backend, dims)?;
         Ok(Self {
-            index,
+            engine,
+            backend,
             key_to_id: HashMap::new(),
             id_to_key: HashMap::new(),
             next_key: 0,
@@ -108,7 +415,8 @@ impl VectorIndex {
     }
 
     /// Load index from disk, or create empty if file doesn't exist.
-    /// `path` is the path to the index file.
+    /// `path` is the path to the index file. The engine is inferred from the
+    /// file extension (`uteke_index.usearch` / `uteke_index.vecq`).
     ///
     /// Acquires an **exclusive file lock** on the index file to prevent
     /// cross-process race conditions (e.g., `xargs -P5 uteke remember`).
@@ -119,6 +427,22 @@ impl VectorIndex {
     /// identical — `save_to_buffer` and `restore_from_buffer` produce/consume
     /// the same byte stream as the native file-based methods.
     pub fn load_or_create(path: &Path, dims: usize) -> Result<Self, Error> {
+        // The extension determines which engine reads the file (#1112 kept
+        // per-engine extensions for exactly this purpose).
+        let backend = match path.extension().and_then(|e| e.to_str()) {
+            Some("vecq") => VectorBackend::Vecq,
+            _ => VectorBackend::Usearch,
+        };
+        Self::load_or_create_for(path, dims, backend)
+    }
+
+    /// [`load_or_create`] with an explicit engine (#1168). Use when the path
+    /// may not carry a backend-specific extension.
+    pub fn load_or_create_for(
+        path: &Path,
+        dims: usize,
+        backend: VectorBackend,
+    ) -> Result<Self, Error> {
         // Atomically create the file if it doesn't exist (avoids TOCTOU race
         // where another process creates the file between our exists() and write()).
         // O_CREAT | O_EXCL ensures only one writer wins; failure is harmless.
@@ -133,9 +457,9 @@ impl VectorIndex {
             .len()
             == 0
         {
-            Self::new(dims)?
+            Self::with_backend(backend, dims)?
         } else {
-            Self::load_from_file(&mut lock_file, path)?
+            Self::load_from_file_for(&mut lock_file, path, backend)?
         };
         idx.path = Some(path.to_path_buf());
         idx._lock_file = Some(lock_file);
@@ -148,6 +472,19 @@ impl VectorIndex {
     /// file is locked exclusively by the same process (#732), since we read
     /// directly from the locked handle instead of opening a second one.
     pub fn load_from_file(file: &mut File, path: &Path) -> Result<Self, Error> {
+        let backend = match path.extension().and_then(|e| e.to_str()) {
+            Some("vecq") => VectorBackend::Vecq,
+            _ => VectorBackend::Usearch,
+        };
+        Self::load_from_file_for(file, path, backend)
+    }
+
+    /// [`load_from_file`] with an explicit engine (#1168).
+    pub fn load_from_file_for(
+        file: &mut File,
+        path: &Path,
+        backend: VectorBackend,
+    ) -> Result<Self, Error> {
         use std::io::{Read, Seek, SeekFrom};
 
         file.seek(SeekFrom::Start(0))
@@ -157,15 +494,17 @@ impl VectorIndex {
         file.read_to_end(&mut buffer)
             .map_err(|e| Error::embed("read index file from locked handle", e))?;
 
-        #[cfg(feature = "usearch")]
-        let index = Index::restore_from_buffer(&buffer)
-            .map_err(|e| Error::embed("load vector index", e))?;
-        #[cfg(feature = "usearch")]
-        let _ = index.size();
-
-        #[cfg(feature = "vecq")]
-        let index = VecqIndex::from_bytes(&buffer)
-            .map_err(|e| Error::embed("load vector index (vecq)", e))?;
+        let engine = Engine::from_bytes(backend, &buffer)?;
+        // Legacy usearch-only builds: touch size() to validate the restored
+        // handle (kept from the pre-#1168 load path). On builds with both
+        // engines the validation already happened inside from_bytes.
+        #[cfg(all(feature = "usearch", not(feature = "vecq")))]
+        let engine = match engine {
+            Engine::Usearch(idx) => {
+                let _ = idx.size();
+                Engine::Usearch(idx)
+            }
+        };
 
         // Rebuild key mappings from the sidecar file
         let mut key_to_id = HashMap::new();
@@ -196,7 +535,8 @@ impl VectorIndex {
         }
 
         Ok(Self {
-            index,
+            engine,
+            backend,
             key_to_id,
             id_to_key,
             next_key,
@@ -226,7 +566,7 @@ impl VectorIndex {
     /// This bypasses usearch's C++ `fopen("wb")` file I/O which has known
     /// issues on Windows:
     /// - `fopen` fails silently on paths > 260 chars (MAX_PATH)
-    /// - `fopen("wb")` exclusive access conflicts with `fs2` exclusive lock
+    /// - `fopen("wb")` exclusive access conflicts with fs2 exclusive lock
     /// - Windows Defender can intercept `fwrite` calls
     ///
     /// The in-memory buffer approach is safe because:
@@ -235,20 +575,10 @@ impl VectorIndex {
     pub fn save(&mut self) -> Result<(), Error> {
         if let Some(ref path) = self.path {
             // Serialize index to in-memory buffer, bypassing C++ file I/O (#647)
-            #[cfg(feature = "usearch")]
-            let buffer: Vec<u8> = {
-                let buf_len = self.index.serialized_length();
-                let mut buffer = vec![0u8; buf_len];
-                self.index
-                    .save_to_buffer(&mut buffer)
-                    .map_err(|e| Error::embed("save vector index to buffer", e))?;
-                buffer
-            };
-            #[cfg(feature = "vecq")]
-            let buffer: Vec<u8> = self.index.to_bytes();
+            let buffer = self.engine.to_bytes()?;
 
             // Write buffer to disk via atomic write (temp file + rename)
-            let tmp_path = path.with_extension(format!("{INDEX_EXT}.tmp"));
+            let tmp_path = path.with_extension(format!("{}.tmp", index_ext_for(self.backend)));
             std::fs::write(&tmp_path, &buffer)
                 .map_err(|e| Error::embed("write temp index file", e))?;
 
@@ -322,13 +652,13 @@ impl VectorIndex {
     /// Build the index from a list of (id, embedding) pairs.
     /// Used for migration from old HNSW or full rebuild.
     pub fn build(&mut self, items: &[(String, Vec<f32>)]) -> Result<(), Error> {
-        // Reset
+        // Reset (same engine, fresh instance)
         let dims = if items.is_empty() {
             DEFAULT_DIMS
         } else {
             items[0].1.len()
         };
-        self.index = Self::create_index(dims)?;
+        self.engine = Engine::create(self.backend, dims)?;
         self.key_to_id.clear();
         self.id_to_key.clear();
         self.next_key = 0;
@@ -343,10 +673,7 @@ impl VectorIndex {
                     )));
                 }
             }
-            #[cfg(feature = "usearch")]
-            if let Err(e) = self.index.reserve(items.len()) {
-                tracing::error!("Failed to reserve usearch capacity: {e}");
-            }
+            self.engine.reserve(items.len());
         }
 
         for (id, embedding) in items {
@@ -361,12 +688,11 @@ impl VectorIndex {
     pub fn insert(&mut self, id: &str, embedding: &[f32]) -> Result<(), Error> {
         // Validate dimensions up front, before any map mutation, so error
         // paths leave the key maps consistent with the physical index.
-        #[cfg(feature = "vecq")]
-        if embedding.len() != self.index.dim() {
+        if embedding.len() != self.engine.dims() {
             return Err(Error::validation(format!(
                 "embedding dimension mismatch: got {}, expected {}",
                 embedding.len(),
-                self.index.dim()
+                self.engine.dims()
             )));
         }
 
@@ -374,67 +700,43 @@ impl VectorIndex {
         if let Some(old_key) = self.id_to_key.get(id) {
             let old_key = *old_key;
             self.key_to_id.remove(&old_key);
-            #[cfg(feature = "usearch")]
-            self.index.remove(old_key).map_err(|e| {
-                Error::embed_msg(format!(
-                    "Failed to remove old entry for duplicate ID {id}: {e}"
-                ))
-            })?;
+            self.engine.remove(old_key);
             // vecq has no incremental delete — the dead row is filtered out of
             // search via the key map (key_to_id no longer contains old_key).
         }
 
-        #[cfg(feature = "vecq")]
-        {
+        let key = if self.backend == VectorBackend::Vecq {
             // vecq rows are append-only: the new entry lands at physical row
-            // `index.len()`, and search maps rows back via key_to_id — so the
+            // `len()`, and search maps rows back via key_to_id — so the
             // key MUST equal that row exactly (no gaps).
             //
             // Crash window: save() writes the index file and the `.keys`
             // sidecar as two separate atomic writes. If the process dies after
             // the sidecar but before the index, the reloaded sidecar can hold
-            // keys ≥ index.len() ("phantom" keys pointing at rows that were
+            // keys ≥ len() ("phantom" keys pointing at rows that were
             // never written). Overwriting such a phantom key here is correct:
             // its row never existed, so nothing live can be shadowed.
-            let key = self.index.len() as u64;
+            let key = self.engine.len() as u64;
             if let Some(phantom_id) = self.key_to_id.remove(&key) {
                 tracing::warn!(
                     "overwriting phantom key {key} (id '{phantom_id}' had no row in the vecq index — likely a crash between sidecar and index writes)"
                 );
                 self.id_to_key.remove(&phantom_id);
             }
-            self.next_key = key.saturating_add(1);
-
-            self.key_to_id.insert(key, id.to_string());
-            self.id_to_key.insert(id.to_string(), key);
-        }
-        #[cfg(feature = "usearch")]
-        {
+            key
+        } else {
             let key = self.next_key;
             self.next_key = self.next_key.saturating_add(1);
+            // Auto-grow usearch capacity when full.
+            self.engine.ensure_capacity()?;
+            key
+        };
 
-            self.key_to_id.insert(key, id.to_string());
-            self.id_to_key.insert(id.to_string(), key);
+        self.key_to_id.insert(key, id.to_string());
+        self.id_to_key.insert(id.to_string(), key);
 
-            // Auto-reserve if at capacity using geometric growth to amortize reallocation cost.
-            // Growth strategy: max(current * 2, current + 4096, 1024).
-            // Doubling amortizes to O(1) per insertion; +4096 floor avoids tiny allocs at small scale.
-            if self.index.size() >= self.index.capacity() {
-                let current = self.index.capacity();
-                let new_cap = (current * 2).max(current + 4096).max(1024);
-                self.index.reserve(new_cap).map_err(|e| {
-                    Error::embed_msg(format!("Failed to reserve usearch capacity: {e}"))
-                })?;
-            }
-
-            self.index.add(key, embedding).map_err(|e| {
-                Error::embed_msg(format!("Failed to insert into usearch index: {e}"))
-            })?;
-        }
-        // vecq assigns rows sequentially; row == key by construction
-        // (key was derived from `index.len()` above; dims validated up front).
-        #[cfg(feature = "vecq")]
-        self.index.add(embedding);
+        // vecq assigns rows sequentially; row == key by construction.
+        self.engine.add(key, embedding)?;
 
         self.dirty = true;
         Ok(())
@@ -444,10 +746,7 @@ impl VectorIndex {
     pub fn remove(&mut self, id: &str) -> bool {
         if let Some(key) = self.id_to_key.remove(id) {
             self.key_to_id.remove(&key);
-            #[cfg(feature = "usearch")]
-            if let Err(e) = self.index.remove(key) {
-                tracing::error!("Failed to remove from usearch index: {e}");
-            }
+            self.engine.remove(key);
             // vecq: tombstone is implicit — the key vanishes from the map, so
             // search results referencing that row are filtered out below.
             self.dirty = true;
@@ -468,65 +767,38 @@ impl VectorIndex {
 
         let count = k.max(1);
 
-        #[cfg(feature = "usearch")]
-        let results = match self.index.search(query, count) {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!("usearch search failed: {e}");
-                return Vec::new();
-            }
-        };
-        #[cfg(feature = "usearch")]
-        return results
-            .keys
-            .iter()
-            .zip(results.distances.iter())
-            .filter_map(|(key, dist)| self.key_to_id.get(key).map(|id| (id.clone(), *dist)))
+        // vecq: tombstoned rows (physically present but absent from the key
+        // map) are filtered out below — over-fetch by the exact dead-row
+        // count so we still return up to `k` live results. usearch: len() ==
+        // live size, dead = 0.
+        let dead = self.engine.len().saturating_sub(self.key_to_id.len());
+        let results: Vec<(String, f32)> = self
+            .engine
+            .search(query, count + dead)
+            .into_iter()
+            .filter_map(|(key, dist)| self.key_to_id.get(&key).map(|id| (id.clone(), dist)))
             .collect();
-
-        // vecq backend (#1098): brute-force top-k over quantized codes,
-        // returns (row, cosine similarity). Rows not present in key_to_id are
-        // tombstoned and filtered out. Convert similarity → cosine distance
-        // (1 - sim) so downstream scoring matches the usearch backend.
-        #[cfg(feature = "vecq")]
-        {
-            // Tombstoned rows (physically present in the index but absent
-            // from the key map) are filtered out below — over-fetch by the
-            // exact dead-row count so we still return up to `k` live results.
-            let dead = self.index.len().saturating_sub(self.key_to_id.len());
-            let mut results: Vec<(String, f32)> = self
-                .index
-                .search(query, count + dead)
-                .into_iter()
-                .filter_map(|(row, sim)| {
-                    self.key_to_id
-                        .get(&(row as u64))
-                        .map(|id| (id.clone(), 1.0 - sim))
-                })
-                .collect();
-            // Tombstones may shrink results below k; over-fetch above mitigates
-            // this. Cap at k and keep ascending-distance order.
-            results.truncate(count);
-            results
-        }
+        // Tombstones may shrink results below k; over-fetch above mitigates
+        // this. Cap at k and keep ascending-distance order.
+        let mut results = results;
+        results.truncate(count);
+        results
     }
 
     /// Number of live (non-tombstoned) items in the index.
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
         #[cfg(feature = "usearch")]
-        return self.key_to_id.len().max(self.index.size());
-        #[cfg(feature = "vecq")]
-        return self.key_to_id.len();
+        if self.backend == VectorBackend::Usearch {
+            return self.key_to_id.len().max(self.engine.len());
+        }
+        self.key_to_id.len()
     }
 
     /// Capacity of the underlying index (diagnostics).
     #[allow(dead_code)]
     pub fn capacity(&self) -> usize {
-        #[cfg(feature = "usearch")]
-        return self.index.capacity();
-        #[cfg(feature = "vecq")]
-        return self.index.len();
+        self.engine.capacity()
     }
 
     /// Embedding dimensionality of this index.
@@ -534,10 +806,7 @@ impl VectorIndex {
     /// Used by backend dispatch to detect dim mismatch when the user swaps
     /// embedding backends on an existing store (#337).
     pub fn dims(&self) -> usize {
-        #[cfg(feature = "usearch")]
-        return self.index.dimensions();
-        #[cfg(feature = "vecq")]
-        return self.index.dim();
+        self.engine.dims()
     }
 
     /// Check if the index is empty.
@@ -549,27 +818,6 @@ impl VectorIndex {
     /// Whether the index has unsaved changes.
     pub fn is_dirty(&self) -> bool {
         self.dirty
-    }
-
-    #[cfg(feature = "usearch")]
-    fn create_index(dims: usize) -> Result<Index, Error> {
-        let options = IndexOptions {
-            dimensions: dims,
-            metric: MetricKind::Cos,
-            quantization: ScalarKind::F32,
-            ..Default::default()
-        };
-
-        Index::new(&options).map_err(|e| {
-            Error::embed_msg(format!(
-                "Failed to create usearch index (dims={dims}): {e}. This is likely an out-of-memory condition."
-            ))
-        })
-    }
-
-    #[cfg(feature = "vecq")]
-    fn create_index(dims: usize) -> Result<VecqIndex, Error> {
-        Ok(VecqIndex::new(dims, VECQ_SEED))
     }
 }
 
@@ -790,7 +1038,7 @@ mod tests {
         // Verify the saved file is loadable by the backend's buffer API
         let buffer = std::fs::read(&path).unwrap();
         #[cfg(feature = "usearch")]
-        {
+        if idx.backend() == VectorBackend::Usearch {
             let raw_index = usearch::Index::restore_from_buffer(&buffer);
             assert!(
                 raw_index.is_ok(),
@@ -799,7 +1047,7 @@ mod tests {
             assert_eq!(raw_index.unwrap().size(), 1);
         }
         #[cfg(feature = "vecq")]
-        {
+        if idx.backend() == VectorBackend::Vecq {
             let raw_index = VecqIndex::from_bytes(&buffer);
             assert!(
                 raw_index.is_ok(),
@@ -834,7 +1082,7 @@ mod tests {
     fn test_vecq_tombstones_filter_removed_rows() {
         // Removed IDs must never appear in search results (vecq has no
         // incremental delete — rows are tombstoned via the key map, #1098).
-        let mut idx = VectorIndex::new(64).unwrap();
+        let mut idx = VectorIndex::with_backend(VectorBackend::Vecq, 64).unwrap();
         let v1 = make_vec(64, 0);
         let v2 = make_vec(64, 1);
 
@@ -845,5 +1093,73 @@ mod tests {
         let results = idx.search(&v2, 2, 50);
         assert!(results.iter().all(|(id, _)| id != "dead"));
         assert!(results.iter().any(|(id, _)| id == "alive"));
+    }
+
+    /// #1168: runtime selection metadata.
+    #[test]
+    fn test_backend_selection_metadata() {
+        // default_backend is one of the compiled-in engines
+        assert!(VectorBackend::default_backend().is_compiled_in());
+
+        // resolve: None → default, not honored
+        let (resolved, honored) = VectorBackend::resolve(None);
+        assert_eq!(resolved, VectorBackend::default_backend());
+        assert!(!honored);
+
+        // resolve: compiled-in preference honored
+        if VectorBackend::Vecq.is_compiled_in() {
+            let (resolved, honored) = VectorBackend::resolve(Some(VectorBackend::Vecq));
+            assert_eq!(resolved, VectorBackend::Vecq);
+            assert!(honored);
+        }
+        if VectorBackend::Usearch.is_compiled_in() {
+            let (resolved, honored) = VectorBackend::resolve(Some(VectorBackend::Usearch));
+            assert_eq!(resolved, VectorBackend::Usearch);
+            assert!(honored);
+        }
+
+        // parse: case-insensitive, whitespace tolerant
+        assert_eq!(VectorBackend::parse(" vecq "), Some(VectorBackend::Vecq));
+        assert_eq!(
+            VectorBackend::parse("USEARCH"),
+            Some(VectorBackend::Usearch)
+        );
+        assert_eq!(VectorBackend::parse("bogus"), None);
+    }
+
+    /// #1168: with_backend creates the requested engine (when compiled in).
+    #[test]
+    fn test_with_backend_creates_requested_engine() {
+        if VectorBackend::Vecq.is_compiled_in() {
+            let idx = VectorIndex::with_backend(VectorBackend::Vecq, 768).unwrap();
+            assert_eq!(idx.backend(), VectorBackend::Vecq);
+        }
+        if VectorBackend::Usearch.is_compiled_in() {
+            let idx = VectorIndex::with_backend(VectorBackend::Usearch, 768).unwrap();
+            assert_eq!(idx.backend(), VectorBackend::Usearch);
+        }
+    }
+
+    /// #1168 (dual-engine builds): each engine round-trips through its own
+    /// per-extension file, and both files can coexist independently.
+    #[cfg(all(feature = "usearch", feature = "vecq"))]
+    #[test]
+    fn test_dual_engine_roundtrip_per_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let v = make_vec(64, 3);
+
+        for backend in [VectorBackend::Usearch, VectorBackend::Vecq] {
+            let path = dir.path().join(format!("idx.{}", index_ext_for(backend)));
+            let mut idx = VectorIndex::with_backend(backend, 64).unwrap();
+            idx.path = Some(path.clone());
+            idx.insert(&format!("mem-{backend:?}"), &v).unwrap();
+            idx.save().unwrap();
+
+            let loaded = VectorIndex::load(&path).unwrap();
+            assert_eq!(loaded.backend(), backend, "ext must select the engine");
+            assert_eq!(loaded.len(), 1);
+            let results = loaded.search(&v, 1, 50);
+            assert_eq!(results.len(), 1);
+        }
     }
 }

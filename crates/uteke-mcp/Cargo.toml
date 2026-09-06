@@ -21,14 +21,15 @@ name = "uteke_mcp"
 path = "src/lib.rs"
 
 [features]
-default = ["usearch"]
-# Vector index backend forwarded to uteke-core. Exactly one must be enabled;
-# default is usearch (HNSW C++ FFI). vecq = pure-Rust 4-bit quantization (#1098).
+# Dual-engine default (#1168): ship BOTH engines, runtime-selectable via
+# UTEKE_VECTOR_BACKEND / [vector] backend. Slim builds: --no-default-features
+# --features vecq (mobile, pure Rust) or --features usearch (classic).
+default = ["usearch", "vecq"]
 usearch = ["uteke-core/usearch"]
 vecq = ["uteke-core/vecq"]
 
 [dependencies]
-uteke-core = { path = "../uteke-core", version = "0.16.0", default-features = false, features = ["onnx"] }
+uteke-core = { path = "../uteke-core", version = "0.17.0", default-features = false, features = ["onnx"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"

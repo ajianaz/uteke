@@ -50,5 +50,79 @@ pub(crate) fn run(cli: &Cli, uteke: &Uteke, command: &NamespaceCommands) -> Resu
             }
             Ok(())
         }
+        NamespaceCommands::Move { id, namespace } => {
+            tracing::info!("Moving memory {id} to namespace '{namespace}'");
+            let moved = uteke
+                .move_memory(id, namespace)
+                .map_err(|e| format!("Failed to move memory: {e}"))?;
+            if !moved {
+                return Err(format!("Memory not found: {id}"));
+            }
+            if cli.json {
+                output::print_json(&serde_json::json!({
+                    "moved": true,
+                    "id": id,
+                    "namespace": namespace,
+                }));
+            } else {
+                println!("\u{2713} Moved memory {id} to namespace '{namespace}'");
+            }
+            Ok(())
+        }
+        NamespaceCommands::Rename { from, to } => {
+            tracing::info!("Renaming namespace '{from}' to '{to}'");
+            let result = uteke
+                .rename_namespace(from, to)
+                .map_err(|e| format!("Failed to rename namespace: {e}"))?;
+            if cli.json {
+                output::print_json(&result);
+            } else {
+                let kind = if result.target_existed {
+                    "merged into existing"
+                } else {
+                    "renamed to"
+                };
+                println!(
+                    "\u{2713} Namespace '{from}' {kind} '{to}' — {} memories moved",
+                    result.moved
+                );
+            }
+            Ok(())
+        }
+        NamespaceCommands::Delete {
+            name,
+            strategy,
+            target,
+            confirm,
+        } => {
+            if !confirm {
+                return Err(
+                    "Refusing to delete a namespace without --confirm (this affects its memories)"
+                        .to_string(),
+                );
+            }
+            tracing::info!("Deleting namespace '{name}' (strategy={strategy})");
+            let result = uteke
+                .delete_namespace(name, strategy, target.as_deref())
+                .map_err(|e| format!("Failed to delete namespace: {e}"))?;
+            if cli.json {
+                output::print_json(&result);
+            } else {
+                match result.strategy.as_str() {
+                    "merge" => println!(
+                        "\u{2713} Moved {} memories from '{}' to '{}' — namespace removed",
+                        result.affected,
+                        result.name,
+                        result.target.as_deref().unwrap_or("?")
+                    ),
+                    "deprecate" => println!(
+                        "\u{2713} Soft-deleted {} memories in '{}' (restorable via promote; the name stays visible as deprecated-only)",
+                        result.affected, result.name
+                    ),
+                    _ => println!("\u{2713} Namespace '{}' deleted", result.name),
+                }
+            }
+            Ok(())
+        }
     }
 }

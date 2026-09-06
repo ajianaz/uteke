@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.17.0] — 2026-09-06
+
+Minor release. Theme: **inspectable, trustworthy memory** — explain recall on
+every surface, auditable conflict resolution with a measurable payoff, honest
+graphs, pagination metadata, and a dual-engine vector layer.
+
+### Added
+
+- **Contradiction benchmark segment (#1172, phase 3)** — `benchmarks/longmemeval/contradiction_segment.py`: 40-topic active-store segment measuring conflict-resolution quality end-to-end. Baseline (both facts active) vs resolved (superseded): fusion winner@1 0.975 → 1.000, stale@5 0.825 → 0.000. Published in `benchmarks/longmemeval/RESULTS.md`. Also adds `uteke supersede <old> <new> [--reason]` — CLI surface parity for supersession (previously MCP/HTTP only).
+
+- **`/list` pagination metadata (#1188)** — `POST /list` accepts `"include_meta": true` to respond with an envelope `{memories, total, has_more, next_offset}` (`next_offset` is `null` on the last page) so clients no longer blind-paginate with 100-row guesses. The default response is unchanged (bare array) — existing clients are untouched; `include_meta` is ignored in `at` (point-in-time) mode, which stays a bare array.
+
+- **Explain recall (#1160)** — `explain` mode on every recall surface shows WHY each memory ranked where it did: vector similarity and rank, FTS rank, RRF score with per-channel fusion contributions, and jaccard/salience/recency/graph boost deltas. Surfaces: `uteke recall "…" --explain` (human-readable, combine with `--json` for machine output), `POST /recall` with `"explain": true` (memory-only — combined with `search_type`/`at`/`before`/`after` returns 400), and the `explain` flag on the MCP `uteke_recall` tool. The explanation path replays the active strategy's exact pipeline (same channel depths, RRF constants, and boost order) while bypassing the recall cache, so the explanation always matches the returned results; fts5 explanation works without an embedder, other strategies embed the query once (~50 ms, same as a cold recall).
+
+- **Contradiction resolution ledger + undo (#1172, phase 2)** — supersessions are now a first-class, auditable ledger instead of a side effect: `Uteke::contradiction_resolutions(namespace, limit)` lists superseded-but-not-restored memories (winner, reason, timestamp via the deprecation row), `Uteke::undo_supersession(id)` restores a retired memory, removes the supersession edge pair, and records a `supersession_undone` event on both sides (only memories carrying a live `superseded_by` edge can be undone — the undo is itself auditable). Ledger membership is edge-driven (deprecated row + `superseded_by` edge), the same predicate undo resolves against, and re-superseding an already-deprecated memory refreshes the stored reason/timestamp so the ledger always names the current winner. Surfaces: `GET /contradictions?namespace=&limit=`, `POST /contradictions/undo` (`{id}`; 404 when nothing to undo), `uteke contradictions list|undo`, and MCP `uteke_contradictions` / `uteke_contradictions_undo`. Fixed in the process: the no-namespace ledger query bound its limit parameter to a nonexistent placeholder (`?2`) and failed at runtime — caught by the new MCP roundtrip test.
+
+- **Provenance data model (#1172, phase 1)** — schema v18 (additive): `memories.source_hash` records the SHA-256 of content at write time (tamper evidence — audits recompute it against live content), and `timeline_events.actor`/`evidence_json` record who performed an event and what evidence supports it. New `Uteke::provenance(id)` returns the full report (provenance fields, trust tier, hash comparison, event chain) — exposed as `GET /provenance?id=`, `uteke provenance <id>`, and the `uteke_provenance` MCP tool.
+
+### Fixed
+
+- **Graph data returned stale nodes (#1189)** — `GET /graph` without a namespace returned every `graph_nodes` row raw, including nodes whose parent memory had been forgotten or deprecated; with soft-delete the store accumulated stale nodes on every conflict resolution. Memory-linked nodes are now filtered by liveness (memory exists and `deprecated = 0`) in every `graph_data` path, edges touching removed nodes are dropped, and `stats` counts the filtered graph.
+- **Memory graph nodes labeled with raw UUIDs (#1187)** — `ensure_node_for_memory` now labels new memory nodes with a readable content preview (first 60 chars of the memory) instead of the raw memory UUID, and upgrades legacy UUID-labeled rows in place on next access. Entity nodes are unaffected.
+
+- **Namespace management API (#1181)** — namespaces are a derived view, now with sanctioned ops: `PUT /memory` accepts `namespace` (move a memory — plain column update, no re-embed), `POST /namespaces/rename` (`{from, to}`; existing target = merge, returns `{from, to, moved, target_existed}`), and `POST /namespaces/delete` with an explicit strategy for its memories: `refuse` (default — 409 while any memory references the name), `merge` (move all memories to `target`, the name vanishes), or `deprecate` (soft-delete — restorable via promote, never hard-deleted). `GET /namespaces?with_counts=true` now adds `active`/`deprecated` breakdown fields (`count` stays the total). CLI parity: `uteke namespace move|rename|delete` (delete requires `--confirm`). MCP parity: `uteke_namespace_rename`, `uteke_namespace_delete`, and `namespace` field on `uteke_update`.
+
+### Fixed
+
+- **`POST /graph/edge` always returned 500 for valid memory IDs (#1180)** — the handler validated `source`/`target` as memory IDs but inserted them directly into `graph_edges`, whose foreign keys point at `graph_nodes(id)`. Memory IDs are now resolved to their linked graph node (or a node is ensured automatically) before insertion. `DELETE /graph/edge` accepts memory IDs or graph node IDs the same way, and its documented query params are corrected to `?source=...&target=...`. `POST /graph/edge` now responds with `{ok, source_node, target_node}` so clients can track the created nodes.
+
 ## [0.16.0] — 2026-08-28
 
 Minor release. One theme: retrieval quality that ships by default.

@@ -35,6 +35,11 @@ pub enum TimelineEventType {
     Tagged,
     /// Memory deleted.
     Forgot,
+    /// Superseded by a newer memory (#1172 Fase 2) — resolution recorded
+    /// with actor + evidence.
+    Superseded,
+    /// A supersession was undone (#1172 Fase 2) — memory restored.
+    SupersessionUndone,
 }
 
 impl TimelineEventType {
@@ -46,6 +51,8 @@ impl TimelineEventType {
             Self::Consolidated => "consolidated",
             Self::Tagged => "tagged",
             Self::Forgot => "forgot",
+            Self::Superseded => "superseded",
+            Self::SupersessionUndone => "supersession_undone",
         }
     }
 
@@ -57,6 +64,8 @@ impl TimelineEventType {
             "consolidated" => Some(Self::Consolidated),
             "tagged" => Some(Self::Tagged),
             "forgot" => Some(Self::Forgot),
+            "superseded" => Some(Self::Superseded),
+            "supersession_undone" => Some(Self::SupersessionUndone),
             _ => None,
         }
     }
@@ -71,6 +80,15 @@ pub struct TimelineEvent {
     /// Optional JSON payload describing what changed.
     pub event_data: Option<String>,
     pub created_at: String,
+    /// Who performed the event (#1172): agent id, "user", or "system".
+    /// `None` for events written before schema v18.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<String>,
+    /// JSON array of related memory IDs / scores supporting the event
+    /// (#1172) — e.g. contradiction-resolution evidence. `None` for events
+    /// written before schema v18.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<serde_json::Value>,
 }
 
 impl Store {
@@ -82,6 +100,23 @@ impl Store {
         event_type: TimelineEventType,
         event_data: Option<&serde_json::Value>,
     ) -> Result<(), Error> {
+        self.add_timeline_event_with_provenance(memory_id, event_type, event_data, None, None)
+    }
+
+    /// Append a timeline event with provenance attribution (#1172 Fase 1).
+    ///
+    /// `actor` = who performed the event (agent id, "user", "system");
+    /// `evidence` = JSON array of related memory IDs / scores supporting the
+    /// event. Both optional; stored as `NULL` when absent. Best-effort like
+    /// [`Self::add_timeline_event`].
+    pub fn add_timeline_event_with_provenance(
+        &self,
+        memory_id: &str,
+        event_type: TimelineEventType,
+        event_data: Option<&serde_json::Value>,
+        actor: Option<&str>,
+        evidence: Option<&serde_json::Value>,
+    ) -> Result<(), Error> {
         let data_str = event_data.map(|v| match serde_json::to_string(v) {
             Ok(s) => s,
             Err(e) => {
@@ -91,15 +126,24 @@ impl Store {
                 "null".to_string()
             }
         });
+        let evidence_str = evidence.map(|v| match serde_json::to_string(v) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("timeline: failed to serialize event evidence: {e}");
+                "null".to_string()
+            }
+        });
         self.conn
             .execute(
-                "INSERT INTO timeline_events (memory_id, event_type, event_data, created_at)
-                 VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO timeline_events (memory_id, event_type, event_data, created_at, actor, evidence_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     memory_id,
                     event_type.as_str(),
                     data_str,
                     chrono::Utc::now().to_rfc3339(),
+                    actor,
+                    evidence_str,
                 ],
             )
             .map_err(|e| Error::db("add timeline event", e))?;
@@ -115,10 +159,12 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<TimelineEvent>, Error> {
         let sql = if limit == 0 {
-            "SELECT id, memory_id, event_type, event_data, created_at FROM timeline_events
+            "SELECT id, memory_id, event_type, event_data, created_at, actor, evidence_json
+             FROM timeline_events
              WHERE memory_id = ?1 ORDER BY created_at DESC, id DESC"
         } else {
-            "SELECT id, memory_id, event_type, event_data, created_at FROM timeline_events
+            "SELECT id, memory_id, event_type, event_data, created_at, actor, evidence_json
+             FROM timeline_events
              WHERE memory_id = ?1 ORDER BY created_at DESC, id DESC LIMIT ?2"
         };
         let mut stmt = self
@@ -154,12 +200,25 @@ impl Store {
 }
 
 fn map_timeline_row(r: &rusqlite::Row) -> rusqlite::Result<TimelineEvent> {
+    let evidence_str: Option<String> = r.get(6)?;
+    let evidence =
+        evidence_str
+            .as_deref()
+            .and_then(|s| match serde_json::from_str::<serde_json::Value>(s) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!("timeline: corrupted evidence JSON (will use null): {e}");
+                    None
+                }
+            });
     Ok(TimelineEvent {
         id: r.get(0)?,
         memory_id: r.get(1)?,
         event_type: r.get(2)?,
         event_data: r.get(3)?,
         created_at: r.get(4)?,
+        actor: r.get(5)?,
+        evidence,
     })
 }
 

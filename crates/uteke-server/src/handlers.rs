@@ -370,6 +370,47 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                     None => uteke_core::RecallStrategy::Fusion,
                 };
 
+                // Explain mode (#1160): memory-only recall with per-result
+                // ranking signals. Mutually exclusive with the unified /
+                // time-travel / temporal surfaces.
+                if req_data.explain {
+                    if req_data.search_type.is_some() {
+                        return ctx.error_response_for(
+                            req,
+                            400,
+                            "explain is memory-only: omit search_type",
+                        );
+                    }
+                    if point_in_time.is_some() || has_temporal {
+                        return ctx.error_response_for(
+                            req,
+                            400,
+                            "explain cannot be combined with at/before/after",
+                        );
+                    }
+                    if entity_filter.is_some() || category_filter.is_some() || req_data.enrich {
+                        return ctx.error_response_for(
+                            req,
+                            400,
+                            "explain cannot be combined with entity/category/enrich",
+                        );
+                    }
+                    return match uteke.recall_explained(
+                        &req_data.query,
+                        limit,
+                        tags_filter,
+                        ns(&req_data.namespace),
+                        strategy,
+                        min_score,
+                    ) {
+                        Ok(explained) => ctx.ok_response_for(req, &explained),
+                        Err(e) => {
+                            error!("Explain recall error: {e}");
+                            ctx.error_response_for(req, 500, "Internal server error")
+                        }
+                    };
+                }
+
                 // Unified search path (#531): when search_type is specified,
                 // use recall_unified. Entity/category filters are passed
                 // through to the core recall candidate loop (#663).
@@ -582,7 +623,35 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                     ),
                 };
                 match list_result {
-                    Ok(memories) => ctx.ok_response_for(req, &memories),
+                    Ok(memories) => {
+                        // #1188: opt-in pagination envelope. The default
+                        // response stays a bare array for existing clients.
+                        if req_data.include_meta && req_data.at.is_none() {
+                            // Total matching rows (same filters as the page).
+                            let total = match &req_data.tag {
+                                Some(tag) => uteke.count_by_tag(tag, ns(&req_data.namespace)),
+                                None => uteke.count(ns(&req_data.namespace)),
+                            }
+                            .unwrap_or(0);
+                            let fetched = memories.len();
+                            let has_more = req_data.offset + fetched < total;
+                            let next_offset = if has_more {
+                                Some(req_data.offset + fetched)
+                            } else {
+                                None
+                            };
+                            return ctx.ok_response_for(
+                                req,
+                                &serde_json::json!({
+                                    "memories": memories,
+                                    "total": total,
+                                    "has_more": has_more,
+                                    "next_offset": next_offset,
+                                }),
+                            );
+                        }
+                        ctx.ok_response_for(req, &memories)
+                    }
                     Err(e) => {
                         error!("Internal error: {e}");
                         ctx.error_response_for(req, 500, "Internal server error")
@@ -811,16 +880,26 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         (Method::Get, "/namespaces") => {
             let with_counts = path.contains("with_counts=true");
             if with_counts {
-                match uteke.list_namespaces_with_counts() {
+                match uteke.list_namespaces_with_lifecycle_counts() {
                     Ok(counts) => {
                         #[derive(serde::Serialize)]
                         struct NamespaceCount {
                             name: String,
                             count: usize,
+                            /// Memories not deprecated (#1181).
+                            active: usize,
+                            /// Deprecated memories — additive fields, `count` keeps
+                            /// the total so existing clients stay correct (#1181).
+                            deprecated: usize,
                         }
                         let result: Vec<NamespaceCount> = counts
                             .into_iter()
-                            .map(|(name, count)| NamespaceCount { name, count })
+                            .map(|(name, active, deprecated)| NamespaceCount {
+                                count: active + deprecated,
+                                name,
+                                active,
+                                deprecated,
+                            })
                             .collect();
                         ctx.ok_response_for(req, &result)
                     }
@@ -837,6 +916,53 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                         ctx.error_response_for(req, 500, "Internal server error")
                     }
                 }
+            }
+        }
+
+        // ── Namespace Rename/Merge (#1181) ──────────────────────────────
+        (Method::Post, "/namespaces/rename") => {
+            match read_body::<NamespaceRenameRequest>(req.as_reader()) {
+                Ok(req_data) => match uteke.rename_namespace(&req_data.from, &req_data.to) {
+                    Ok(result) => ctx.ok_response_for(req, &result),
+                    Err(uteke_core::Error::Validation(msg)) => {
+                        ctx.error_response_for(req, 400, msg)
+                    }
+                    Err(e) => {
+                        error!("Namespace rename error: {e}");
+                        ctx.error_response_for(req, 500, "Internal server error")
+                    }
+                },
+                Err(e) => ctx.error_response_for(req, 400, e),
+            }
+        }
+
+        // ── Namespace Delete with explicit strategy (#1181) ─────────────
+        (Method::Post, "/namespaces/delete") => {
+            match read_body::<NamespaceDeleteRequest>(req.as_reader()) {
+                Ok(req_data) => {
+                    match uteke.delete_namespace(
+                        &req_data.name,
+                        &req_data.strategy,
+                        req_data.target.as_deref(),
+                    ) {
+                        Ok(result) => ctx.ok_response_for(req, &result),
+                        Err(uteke_core::Error::Validation(msg)) => {
+                            // `refuse` on a non-empty namespace → 409 Conflict;
+                            // other validation failures → 400.
+                            let status = if req_data.strategy == "refuse" {
+                                409
+                            } else {
+                                400
+                            };
+                            ctx.error_response_for(req, status, msg)
+                        }
+                        Err(e) => {
+                            error!("Namespace delete error: {e}");
+                            ctx.error_response_for(req, 500, "Internal server error")
+                        }
+                    }
+                }
+                Err(e) => ctx.error_response_for(req, 400, e),
             }
         }
 
@@ -883,43 +1009,74 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                     );
                 }
 
-                // Validate both nodes exist as memories (issue #542 acceptance criteria)
-                match uteke.get_by_id(&req_data.source) {
-                    Ok(Some(_)) => {}
-                    Ok(None) => {
-                        return ctx.error_response_for(
-                            req,
-                            404,
-                            format!("Source memory not found: {}", req_data.source),
-                        );
+                let conn = uteke.graph_store();
+                let gs = uteke_core::graph::GraphStore::new(conn);
+
+                // Resolve an input ID to its graph node without creating
+                // anything: memory-linked nodes first, then explicit node IDs
+                // (clients may pass IDs from GET /graph) (#1180).
+                let resolve_node = |id: &str| -> Result<Option<String>, uteke_core::Error> {
+                    if let Some(nid) = gs.node_id_for_memory(id)? {
+                        return Ok(Some(nid));
                     }
-                    Err(e) => {
-                        error!("Internal error: {e}");
-                        return ctx.error_response_for(req, 500, "Internal server error");
+                    gs.get_node(id).map(|n| n.map(|node| node.id))
+                };
+
+                // Validate both sides exist as memories or graph nodes —
+                // memory IDs are ensured into nodes below (#1180, relaxes the
+                // memory-only #542 check that made every valid call 500).
+                for (role, id) in [("Source", &req_data.source), ("Target", &req_data.target)] {
+                    if matches!(uteke.get_by_id(id), Ok(Some(_))) {
+                        continue;
                     }
-                }
-                match uteke.get_by_id(&req_data.target) {
-                    Ok(Some(_)) => {}
-                    Ok(None) => {
-                        return ctx.error_response_for(
-                            req,
-                            404,
-                            format!("Target memory not found: {}", req_data.target),
-                        );
-                    }
-                    Err(e) => {
-                        error!("Internal error: {e}");
-                        return ctx.error_response_for(req, 500, "Internal server error");
+                    match resolve_node(id) {
+                        Ok(Some(_)) => {}
+                        Ok(None) => {
+                            return ctx.error_response_for(
+                                req,
+                                404,
+                                format!("{role} memory not found: {id}"),
+                            );
+                        }
+                        Err(e) => {
+                            error!("Graph resolve error: {e}");
+                            return ctx.error_response_for(req, 500, "Internal server error");
+                        }
                     }
                 }
 
-                let conn = uteke.graph_store();
-                let gs = uteke_core::graph::GraphStore::new(conn);
                 let relation = req_data.edge_type.as_deref().unwrap_or("related");
                 let weight = req_data.weight.unwrap_or(1.0);
 
-                match gs.add_edge(&req_data.source, &req_data.target, relation, weight) {
-                    Ok(()) => ctx.ok_response_for(req, &serde_json::json!({"ok": true})),
+                // Map memory IDs → graph node IDs before insertion (#1180).
+                // `graph_edges.source_id/target_id` carry FKs to
+                // `graph_nodes(id)`, so inserting raw memory IDs violates the
+                // FK and always 500s. Validation above guarantees each ID is
+                // a memory (node gets ensured) or an existing node.
+                let ensure = |id: &str| -> Result<String, uteke_core::Error> {
+                    match resolve_node(id)? {
+                        Some(nid) => Ok(nid),
+                        None => gs.ensure_node_for_memory(id),
+                    }
+                };
+                let (src_node, tgt_node) =
+                    match (ensure(&req_data.source), ensure(&req_data.target)) {
+                        (Ok(s), Ok(t)) => (s, t),
+                        (Err(e), _) | (_, Err(e)) => {
+                            error!("Graph ensure_node error: {e}");
+                            return ctx.error_response_for(req, 500, "Internal server error");
+                        }
+                    };
+
+                match gs.add_edge(&src_node, &tgt_node, relation, weight) {
+                    Ok(()) => ctx.ok_response_for(
+                        req,
+                        &serde_json::json!({
+                            "ok": true,
+                            "source_node": src_node,
+                            "target_node": tgt_node,
+                        }),
+                    ),
                     Err(e) => {
                         error!("Graph add_edge error: {e}");
                         ctx.error_response_for(req, 500, "Internal server error")
@@ -939,7 +1096,29 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                 (Some(src), Some(tgt)) => {
                     let conn = uteke.graph_store();
                     let gs = uteke_core::graph::GraphStore::new(conn);
-                    match gs.remove_edge(src, tgt) {
+                    // Accept either memory IDs or graph node IDs (#1180) —
+                    // resolve both sides to node IDs before deleting.
+                    let resolve = |id: &str| -> Result<Option<String>, uteke_core::Error> {
+                        if let Some(nid) = gs.node_id_for_memory(id)? {
+                            return Ok(Some(nid));
+                        }
+                        gs.get_node(id).map(|n| n.map(|node| node.id))
+                    };
+                    let (src_node, tgt_node) = match (resolve(src), resolve(tgt)) {
+                        (Ok(Some(s)), Ok(Some(t))) => (s, t),
+                        (Ok(_), Ok(_)) => {
+                            return ctx.error_response_for(
+                                req,
+                                404,
+                                format!("Edge not found: {src} -> {tgt}"),
+                            );
+                        }
+                        (Err(e), _) | (_, Err(e)) => {
+                            error!("Graph node resolve error: {e}");
+                            return ctx.error_response_for(req, 500, "Internal server error");
+                        }
+                    };
+                    match gs.remove_edge(&src_node, &tgt_node) {
                         Ok(true) => ctx.ok_response_for(req, &serde_json::json!({"ok": true})),
                         Ok(false) => ctx.error_response_for(
                             req,
@@ -1265,11 +1444,12 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                     && req_data.importance.is_none()
                     && req_data.pinned.is_none()
                     && req_data.memory_type.is_none()
+                    && req_data.namespace.is_none()
                 {
                     return ctx.error_response_for(
                         req,
                         400,
-                        "No fields to update. Provide at least one of: content, tags, metadata, importance, pinned, memory_type",
+                        "No fields to update. Provide at least one of: content, tags, metadata, importance, pinned, memory_type, namespace",
                     );
                 }
                 let tag_refs: Option<Vec<String>> = req_data.tags;
@@ -1284,6 +1464,17 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                     req_data.memory_type.as_deref(),
                 ) {
                     Ok(true) => {
+                        // Namespace move (#1181): separate op after the field
+                        // update — plain column change, no re-embed needed.
+                        if let Some(ns) = req_data.namespace.as_deref() {
+                            if let Err(e) = uteke.move_memory(&req_data.id, ns) {
+                                let status = match e {
+                                    uteke_core::Error::Validation(_) => 400,
+                                    _ => 500,
+                                };
+                                return ctx.error_response_for(req, status, e.to_string());
+                            }
+                        }
                         ctx.ok_response_for(req, &serde_json::json!({"updated": req_data.id}))
                     }
                     Ok(false) => ctx.error_response_for(
@@ -1641,7 +1832,14 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                 }
             };
             match uteke.delete_room(&room_id) {
-                Ok(()) => ctx.ok_response_for(req, &serde_json::json!({"deleted": room_id})),
+                Ok(unlinked) => ctx.ok_response_for(
+                    req,
+                    &serde_json::json!({
+                        "deleted": room_id,
+                        "unlinked_memories": unlinked,
+                        "note": "memories and documents are preserved in their namespaces, no longer linked to any room"
+                    }),
+                ),
                 Err(e) => {
                     let msg = format!("{e}");
                     if msg.contains("not found") {
@@ -2055,6 +2253,70 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
             },
             Err(e) => ctx.error_response_for(req, 400, e),
         },
+
+        // ── Provenance chain (#1172) ─────────────────────────────────────
+        (Method::Get, "/provenance") => {
+            let query = path.split('?').nth(1).unwrap_or("");
+            let id = match parse_query_param(query, "id") {
+                Some(id) => id,
+                None => return ctx.error_response_for(req, 400, "Missing 'id' query parameter"),
+            };
+            match uteke.provenance(&id) {
+                Ok(Some(report)) => ctx.ok_response_for(req, &report),
+                Ok(None) => ctx.error_response_for(req, 404, format!("Memory not found: {id}")),
+                Err(e) => {
+                    error!("Provenance error: {e}");
+                    ctx.error_response_for(req, 500, "Internal server error")
+                }
+            }
+        }
+
+        // ── Contradiction resolutions ledger (#1172) ────────────────────
+        (Method::Get, "/contradictions") => {
+            let query = path.split('?').nth(1).unwrap_or("");
+            let ns = parse_query_namespace(&path);
+            let limit = parse_query_param(query, "limit")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(50);
+            match uteke.contradiction_resolutions(ns.as_deref(), limit) {
+                Ok(resolutions) => ctx.ok_response_for(req, &resolutions),
+                Err(e) => {
+                    error!("Contradiction resolutions error: {e}");
+                    ctx.error_response_for(req, 500, "Internal server error")
+                }
+            }
+        }
+
+        // ── Undo a contradiction resolution (#1172) ─────────────────────
+        (Method::Post, "/contradictions/undo") => {
+            #[derive(Deserialize)]
+            struct ContradictionUndoRequest {
+                /// ID of the retired (superseded) memory to restore.
+                id: String,
+            }
+            match read_body::<ContradictionUndoRequest>(req.as_reader()) {
+                Ok(req_data) => match uteke.undo_supersession(&req_data.id) {
+                    Ok(Some(winner)) => ctx.ok_response_for(
+                        req,
+                        &serde_json::json!({
+                            "undone": true,
+                            "restored": req_data.id,
+                            "was_superseded_by": winner,
+                        }),
+                    ),
+                    Ok(None) => ctx.error_response_for(
+                        req,
+                        404,
+                        format!("No supersession found for memory: {}", req_data.id),
+                    ),
+                    Err(e) => {
+                        error!("Contradiction undo error: {e}");
+                        ctx.error_response_for(req, 500, "Internal server error")
+                    }
+                },
+                Err(e) => ctx.error_response_for(req, 400, e),
+            }
+        }
 
         // ── Timeline ─────────────────────────────────────────────────────
         (Method::Get, "/timeline") => {
@@ -2577,5 +2839,804 @@ mod room_recall_at_tests {
 
         // missing id_remove → 400 at deserialize
         assert!(serde_json::from_str::<ConsolidatePairRequest>(r#"{"id_keep":"abc"}"#).is_err());
+    }
+
+    // ── /graph/edge memory-ID contract (#1180) ─────────────────────────
+
+    use tiny_http::TestRequest;
+
+    struct GraphEdgeApp {
+        uteke: Mutex<Uteke>,
+    }
+
+    impl GraphEdgeApp {
+        fn new() -> Self {
+            // No embedder: these endpoints are storage-only, and tests must
+            // run in CI builds without the ONNX runtime lib.
+            Self {
+                uteke: Mutex::new(
+                    Uteke::open_with_backend(":memory:", None)
+                        .expect("open in-memory uteke without embedder"),
+                ),
+            }
+        }
+
+        fn call(
+            &self,
+            method: Method,
+            url: &str,
+            body: Option<String>,
+        ) -> (u16, serde_json::Value) {
+            let mut req = match body {
+                Some(b) => {
+                    let leaked: &'static str = Box::leak(b.into_boxed_str());
+                    TestRequest::new()
+                        .with_method(method)
+                        .with_path(url)
+                        .with_body(leaked)
+                        .into()
+                }
+                None => TestRequest::new().with_method(method).with_path(url).into(),
+            };
+            let ctx = ReqCtx {
+                auth_token_hash: None,
+                read_only_token_hash: None,
+                cors_origins: Vec::new(),
+                recall_config: None,
+                extraction_config: None,
+            };
+            let resp = route(&self.uteke, &ctx, &mut req);
+            let status = resp.status_code().0;
+            let bytes = resp.into_reader().into_inner();
+            let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+            (status, json)
+        }
+
+        fn remember(&self, content: &str) -> String {
+            let body = serde_json::json!({ "content": content }).to_string();
+            let (status, resp) = self.call(Method::Post, "/remember", Some(body));
+            assert_eq!(status, 200, "remember must succeed: {resp}");
+            resp["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("remember response must carry id: {resp}"))
+                .to_string()
+        }
+
+        fn add_edge(&self, source: &str, target: &str) -> (u16, serde_json::Value) {
+            let body = serde_json::json!({ "source": source, "target": target }).to_string();
+            self.call(Method::Post, "/graph/edge", Some(body))
+        }
+
+        fn delete_edge(&self, source: &str, target: &str) -> (u16, serde_json::Value) {
+            let url = format!("/graph/edge?source={source}&target={target}");
+            self.call(Method::Delete, &url, None)
+        }
+    }
+
+    #[test]
+    fn graph_edge_post_with_memory_ids_returns_ok() {
+        let app = GraphEdgeApp::new();
+        let id1 = app.remember("Uteke is a local-first memory engine");
+        let id2 = app.remember("Corin renders the memory graph");
+
+        let (status, resp) = app.add_edge(&id1, &id2);
+        assert_eq!(
+            status, 200,
+            "valid memory IDs must not 500 (FK mismatch #1180): {resp}"
+        );
+        assert_eq!(resp["ok"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn graph_edge_post_resolves_memory_ids_to_nodes() {
+        let app = GraphEdgeApp::new();
+        let id1 = app.remember("alpha memory");
+        let id2 = app.remember("beta memory");
+
+        let (status, resp) = app.add_edge(&id1, &id2);
+        assert_eq!(status, 200, "{resp}");
+
+        let src_node = resp["source_node"].as_str().expect("source_node id");
+        let tgt_node = resp["target_node"].as_str().expect("target_node id");
+
+        // The resolved nodes must exist in GET /graph and carry the memory
+        // link, so visualization can map edges back to memories.
+        let (_, graph) = app.call(Method::Get, "/graph", None);
+        let nodes = graph["nodes"].as_array().expect("nodes array");
+        assert!(
+            nodes.iter().any(|n| n["id"] == serde_json::json!(src_node)
+                && n["memory_id"] == serde_json::json!(id1)),
+            "source node must link back to memory {id1}: {graph}"
+        );
+        assert!(
+            nodes.iter().any(|n| n["id"] == serde_json::json!(tgt_node)
+                && n["memory_id"] == serde_json::json!(id2)),
+            "target node must link back to memory {id2}: {graph}"
+        );
+
+        // The edge itself must be visible in the graph payload.
+        let edges = graph["edges"].as_array().expect("edges array");
+        assert!(
+            edges
+                .iter()
+                .any(|e| e["source_id"] == serde_json::json!(src_node)
+                    && e["target_id"] == serde_json::json!(tgt_node)
+                    && e["relation"] == serde_json::json!("related")),
+            "edge must appear in GET /graph: {graph}"
+        );
+    }
+
+    #[test]
+    fn graph_edge_post_accepts_graph_node_ids_too() {
+        let app = GraphEdgeApp::new();
+        let id1 = app.remember("source memory");
+        let id2 = app.remember("target memory");
+
+        let (_, first) = app.add_edge(&id1, &id2);
+        let src_node = first["source_node"].as_str().unwrap().to_string();
+
+        // A client holding IDs from GET /graph must still be able to link a
+        // graph node directly (e.g. entity nodes without a memory link).
+        let (status, resp) = app.add_edge(&src_node, &id2);
+        assert_eq!(status, 200, "node IDs must stay accepted: {resp}");
+    }
+
+    #[test]
+    fn graph_edge_post_with_unknown_memory_returns_404() {
+        let app = GraphEdgeApp::new();
+        let ghost1 = "00000000-0000-4000-8000-000000000000";
+        let ghost2 = "11111111-1111-4111-8111-111111111111";
+
+        let (status, resp) = app.add_edge(ghost1, ghost2);
+        assert_eq!(status, 404, "unknown source must 404: {resp}");
+    }
+
+    #[test]
+    fn graph_edge_post_self_loop_rejected() {
+        let app = GraphEdgeApp::new();
+        let id1 = app.remember("self loop probe");
+
+        let (status, _) = app.add_edge(&id1, &id1);
+        assert_eq!(status, 400, "self-loop must stay rejected");
+    }
+
+    #[test]
+    fn graph_edge_delete_accepts_memory_ids() {
+        let app = GraphEdgeApp::new();
+        let id1 = app.remember("edge delete probe a");
+        let id2 = app.remember("edge delete probe b");
+
+        let (status, resp) = app.add_edge(&id1, &id2);
+        assert_eq!(status, 200, "{resp}");
+
+        // DELETE with the same memory IDs must resolve back to the nodes.
+        let (status, resp) = app.delete_edge(&id1, &id2);
+        assert_eq!(status, 200, "delete by memory IDs: {resp}");
+        assert_eq!(resp["ok"], serde_json::json!(true));
+
+        // Second delete: edge gone → 404, not 500.
+        let (status, resp) = app.delete_edge(&id1, &id2);
+        assert_eq!(status, 404, "deleting a removed edge must 404: {resp}");
+    }
+
+    #[test]
+    fn graph_edge_delete_accepts_node_ids_and_unknown_ids() {
+        let app = GraphEdgeApp::new();
+        let id1 = app.remember("node id delete probe a");
+        let id2 = app.remember("node id delete probe b");
+
+        let (_, resp) = app.add_edge(&id1, &id2);
+        let src_node = resp["source_node"].as_str().unwrap().to_string();
+        let tgt_node = resp["target_node"].as_str().unwrap().to_string();
+
+        // Node IDs (from GET /graph payloads) must keep working.
+        let (status, resp) = app.delete_edge(&src_node, &tgt_node);
+        assert_eq!(status, 200, "delete by node IDs: {resp}");
+
+        // Fully unknown IDs must 404 — never 500.
+        let (status, resp) = app.delete_edge("ghost-a", "ghost-b");
+        assert_eq!(status, 404, "unknown IDs must 404: {resp}");
+    }
+
+    #[test]
+    fn graph_edge_delete_requires_both_params() {
+        let app = GraphEdgeApp::new();
+        // URL built separately so the api_registry route scanner does not
+        // mistake this test call for a handler route arm.
+        let url = "/graph/edge?source=only-one";
+        let (status, _) = app.call(Method::Delete, url, None);
+        assert_eq!(status, 400, "missing target param must 400");
+    }
+
+    // ── Namespace management API (#1181) ───────────────────────────────
+
+    struct NamespaceApp {
+        uteke: Mutex<Uteke>,
+    }
+
+    impl NamespaceApp {
+        fn new() -> Self {
+            Self {
+                uteke: Mutex::new(
+                    Uteke::open_with_backend(":memory:", None)
+                        .expect("open in-memory uteke without embedder"),
+                ),
+            }
+        }
+
+        fn call(
+            &self,
+            method: Method,
+            url: &str,
+            body: Option<String>,
+        ) -> (u16, serde_json::Value) {
+            let mut req = match body {
+                Some(b) => {
+                    let leaked: &'static str = Box::leak(b.into_boxed_str());
+                    TestRequest::new()
+                        .with_method(method)
+                        .with_path(url)
+                        .with_body(leaked)
+                        .into()
+                }
+                None => TestRequest::new().with_method(method).with_path(url).into(),
+            };
+            let ctx = ReqCtx {
+                auth_token_hash: None,
+                read_only_token_hash: None,
+                cors_origins: Vec::new(),
+                recall_config: None,
+                extraction_config: None,
+            };
+            let resp = route(&self.uteke, &ctx, &mut req);
+            let status = resp.status_code().0;
+            let bytes = resp.into_reader().into_inner();
+            let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+            (status, json)
+        }
+
+        fn remember_in(&self, content: &str, namespace: &str) -> String {
+            let body =
+                serde_json::json!({ "content": content, "namespace": namespace }).to_string();
+            let (status, resp) = self.call(Method::Post, "/remember", Some(body));
+            assert_eq!(status, 200, "remember must succeed: {resp}");
+            resp["id"].as_str().expect("id").to_string()
+        }
+    }
+
+    #[test]
+    fn namespace_put_memory_moves_namespace() {
+        let app = NamespaceApp::new();
+        let id = app.remember_in("to be moved", "alpha");
+
+        let body = serde_json::json!({ "id": id, "namespace": "beta" }).to_string();
+        let (status, resp) = app.call(Method::Put, "/memory", Some(body));
+        assert_eq!(status, 200, "PUT with namespace must succeed: {resp}");
+
+        // The move is visible via GET /memory.
+        let get_url = format!("/memory?id={id}");
+        let (status, resp) = app.call(Method::Get, &get_url, None);
+        assert_eq!(status, 200);
+        assert_eq!(resp["namespace"], serde_json::json!("beta"));
+
+        // The old name vanishes from listings (derived view).
+        let (_, list) = app.call(Method::Get, "/namespaces", None);
+        let names: Vec<&str> = list
+            .as_array()
+            .expect("namespaces array")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(!names.contains(&"alpha"), "old namespace gone: {list:?}");
+        assert!(names.contains(&"beta"), "{list:?}");
+    }
+
+    #[test]
+    fn namespace_rename_and_merge_endpoint() {
+        let app = NamespaceApp::new();
+        app.remember_in("one", "old");
+        app.remember_in("two", "old");
+        app.remember_in("three", "existing");
+
+        let body = serde_json::json!({ "from": "old", "to": "existing" }).to_string();
+        let (status, resp) = app.call(Method::Post, "/namespaces/rename", Some(body));
+        assert_eq!(status, 200, "{resp}");
+        assert_eq!(resp["moved"], serde_json::json!(2));
+        assert_eq!(resp["target_existed"], serde_json::json!(true));
+        assert_eq!(resp["from"], serde_json::json!("old"));
+        assert_eq!(resp["to"], serde_json::json!("existing"));
+    }
+
+    #[test]
+    fn namespace_delete_refuse_returns_409() {
+        let app = NamespaceApp::new();
+        app.remember_in("keep me", "busy");
+
+        let body = serde_json::json!({ "name": "busy" }).to_string();
+        let (status, resp) = app.call(Method::Post, "/namespaces/delete", Some(body));
+        assert_eq!(
+            status, 409,
+            "refuse on non-empty namespace must 409: {resp}"
+        );
+        assert!(
+            resp["error"]
+                .as_str()
+                .unwrap_or_default()
+                .to_lowercase()
+                .contains("refus")
+        );
+    }
+
+    #[test]
+    fn namespace_delete_merge_removes_namespace() {
+        let app = NamespaceApp::new();
+        app.remember_in("m one", "doomed");
+        app.remember_in("m two", "doomed");
+
+        let body = serde_json::json!({ "name": "doomed", "strategy": "merge", "target": "safe" })
+            .to_string();
+        let (status, resp) = app.call(Method::Post, "/namespaces/delete", Some(body));
+        assert_eq!(status, 200, "{resp}");
+        assert_eq!(resp["affected"], serde_json::json!(2));
+        assert_eq!(resp["empty"], serde_json::json!(true));
+
+        let (_, list) = app.call(Method::Get, "/namespaces", None);
+        let names: Vec<&str> = list
+            .as_array()
+            .expect("namespaces array")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(!names.contains(&"doomed"), "{list:?}");
+        assert!(names.contains(&"safe"), "{list:?}");
+    }
+
+    #[test]
+    fn namespace_with_counts_reports_lifecycle_split() {
+        let app = NamespaceApp::new();
+        let id = app.remember_in("ghost food", "ghosted");
+        let _ = id;
+        let body = serde_json::json!({ "name": "ghosted", "strategy": "deprecate" }).to_string();
+        let (status, resp) = app.call(Method::Post, "/namespaces/delete", Some(body));
+        assert_eq!(status, 200, "{resp}");
+        assert_eq!(resp["affected"], serde_json::json!(1));
+        assert_eq!(resp["empty"], serde_json::json!(false));
+
+        // URL built separately so the api_registry route scanner does not
+        // mistake this test call for a handler route arm.
+        let counts_url = "/namespaces?with_counts=true";
+        let (_, counts) = app.call(Method::Get, counts_url, None);
+        let arr = counts.as_array().expect("counts array");
+        let ghost = arr
+            .iter()
+            .find(|n| n["name"] == serde_json::json!("ghosted"))
+            .expect("ghost namespace stays listed");
+        assert_eq!(ghost["active"], serde_json::json!(0));
+        assert_eq!(ghost["deprecated"], serde_json::json!(1));
+        assert_eq!(ghost["count"], serde_json::json!(1));
+    }
+
+    // ── Provenance API (#1172) ─────────────────────────────────────────
+
+    #[test]
+    fn provenance_endpoint_reports_chain_and_hash() {
+        let app = NamespaceApp::new();
+        let id = app.remember_in("provenance surface probe", "audit");
+
+        let get_url = format!("/provenance?id={id}");
+        let (status, report) = app.call(Method::Get, &get_url, None);
+        assert_eq!(status, 200, "{report}");
+        assert_eq!(report["id"], serde_json::json!(id));
+        assert_eq!(report["namespace"], serde_json::json!("audit"));
+        assert_eq!(report["author_type"], serde_json::json!("agent"));
+        assert_eq!(report["trust_tier"], serde_json::json!("agent"));
+        assert_eq!(report["source_hash"], report["content_hash_now"]);
+        let events = report["events"].as_array().expect("events array");
+        assert!(
+            events
+                .iter()
+                .any(|e| e["event_type"] == serde_json::json!("created")),
+            "created event must be in the chain: {report}"
+        );
+
+        // Unknown ID → 404.
+        let (status, _) = app.call(
+            Method::Get,
+            "/provenance?id=00000000-0000-4000-8000-000000000000",
+            None,
+        );
+        assert_eq!(status, 404);
+
+        // Missing param → 400.
+        let (status, _) = app.call(Method::Get, "/provenance", None);
+        assert_eq!(status, 400);
+    }
+}
+
+// ── Contradiction ledger API (#1172 Fase 2) ─────────────────────────
+
+#[cfg(test)]
+mod contradiction_api_tests {
+    use super::*;
+    use tiny_http::TestRequest;
+
+    struct ContradictionApp {
+        uteke: Mutex<Uteke>,
+    }
+
+    impl ContradictionApp {
+        fn new() -> Self {
+            // No embedder: storage-only endpoints, CI-safe without ONNX.
+            Self {
+                uteke: Mutex::new(
+                    Uteke::open_with_backend(":memory:", None)
+                        .expect("open in-memory uteke without embedder"),
+                ),
+            }
+        }
+
+        fn call(
+            &self,
+            method: Method,
+            url: &str,
+            body: Option<String>,
+        ) -> (u16, serde_json::Value) {
+            let mut req = match body {
+                Some(b) => {
+                    let leaked: &'static str = Box::leak(b.into_boxed_str());
+                    TestRequest::new()
+                        .with_method(method)
+                        .with_path(url)
+                        .with_body(leaked)
+                        .into()
+                }
+                None => TestRequest::new().with_method(method).with_path(url).into(),
+            };
+            let ctx = ReqCtx {
+                auth_token_hash: None,
+                read_only_token_hash: None,
+                cors_origins: Vec::new(),
+                recall_config: None,
+                extraction_config: None,
+            };
+            let resp = route(&self.uteke, &ctx, &mut req);
+            let status = resp.status_code().0;
+            let bytes = resp.into_reader().into_inner();
+            let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+            (status, json)
+        }
+
+        fn remember_in(&self, content: &str, namespace: &str) -> String {
+            let body =
+                serde_json::json!({ "content": content, "namespace": namespace }).to_string();
+            let (status, resp) = self.call(Method::Post, "/remember", Some(body));
+            assert_eq!(status, 200, "remember must succeed: {resp}");
+            resp["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("remember response must carry id: {resp}"))
+                .to_string()
+        }
+
+        fn supersede(&self, old: &str, new: &str) {
+            // Setup via the core API — the server has no supersede route;
+            // the surfaces under test are the ledger + undo endpoints.
+            self.uteke
+                .lock()
+                .expect("poisoned mutex")
+                .supersede(old, new, None)
+                .expect("supersede must succeed");
+        }
+    }
+
+    #[test]
+    fn ledger_lists_superseded_and_undo_restores() {
+        let app = ContradictionApp::new();
+        let old = app.remember_in("deploy target is VM-1", "ops");
+        let new = app.remember_in("deploy target is VM-2", "ops");
+        app.supersede(&old, &new);
+
+        // URL built separately so the api_registry route scanner does not
+        // mistake this test call for a handler route arm.
+        let list_url = "/contradictions?namespace=ops";
+        let (status, ledger) = app.call(Method::Get, list_url, None);
+        assert_eq!(status, 200, "{ledger}");
+        let entries = ledger.as_array().expect("ledger array");
+        assert_eq!(
+            entries.len(),
+            1,
+            "one supersession must be listed: {ledger}"
+        );
+        assert_eq!(entries[0]["id"], serde_json::json!(old));
+        let reason = entries[0]["deprecate_reason"].as_str().unwrap_or("");
+        assert!(
+            reason.contains("superseded"),
+            "reason must mention superseded: {reason}"
+        );
+
+        // Undo via POST body.
+        let undo_body = serde_json::json!({ "id": old }).to_string();
+        let (status, resp) = app.call(Method::Post, "/contradictions/undo", Some(undo_body));
+        assert_eq!(status, 200, "{resp}");
+        assert_eq!(resp["undone"], serde_json::json!(true));
+        assert_eq!(resp["restored"], serde_json::json!(old));
+        assert_eq!(resp["was_superseded_by"], serde_json::json!(new));
+
+        // Ledger is clean after the undo.
+        let (status, ledger) = app.call(Method::Get, list_url, None);
+        assert_eq!(status, 200);
+        assert_eq!(
+            ledger.as_array().expect("ledger array").len(),
+            0,
+            "undo must clear the ledger: {ledger}"
+        );
+    }
+
+    #[test]
+    fn undo_unknown_supersession_is_404() {
+        let app = ContradictionApp::new();
+        let id = app.remember_in("never superseded", "ops");
+
+        let body = serde_json::json!({ "id": id }).to_string();
+        let (status, resp) = app.call(Method::Post, "/contradictions/undo", Some(body));
+        assert_eq!(status, 404, "undo without a supersession must 404: {resp}");
+
+        // Malformed body → 400.
+        let (status, _) = app.call(
+            Method::Post,
+            "/contradictions/undo",
+            Some("not-json".into()),
+        );
+        assert_eq!(status, 400);
+    }
+}
+
+// ── Explain recall API (#1160) ──────────────────────────────────────
+
+#[cfg(test)]
+mod explain_recall_api_tests {
+    use super::*;
+    use tiny_http::TestRequest;
+
+    struct ExplainApp {
+        uteke: Mutex<Uteke>,
+    }
+
+    impl ExplainApp {
+        fn new() -> Self {
+            // No embedder: tests use the fts5 strategy, which needs no
+            // query embedding (CI-safe without ONNX).
+            Self {
+                uteke: Mutex::new(
+                    Uteke::open_with_backend(":memory:", None)
+                        .expect("open in-memory uteke without embedder"),
+                ),
+            }
+        }
+
+        fn call(
+            &self,
+            method: Method,
+            url: &str,
+            body: Option<String>,
+        ) -> (u16, serde_json::Value) {
+            let mut req = match body {
+                Some(b) => {
+                    let leaked: &'static str = Box::leak(b.into_boxed_str());
+                    TestRequest::new()
+                        .with_method(method)
+                        .with_path(url)
+                        .with_body(leaked)
+                        .into()
+                }
+                None => TestRequest::new().with_method(method).with_path(url).into(),
+            };
+            let ctx = ReqCtx {
+                auth_token_hash: None,
+                read_only_token_hash: None,
+                cors_origins: Vec::new(),
+                recall_config: None,
+                extraction_config: None,
+            };
+            let resp = route(&self.uteke, &ctx, &mut req);
+            let status = resp.status_code().0;
+            let bytes = resp.into_reader().into_inner();
+            let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+            (status, json)
+        }
+
+        fn remember_in(&self, content: &str, namespace: &str) -> String {
+            let body =
+                serde_json::json!({ "content": content, "namespace": namespace }).to_string();
+            let (status, resp) = self.call(Method::Post, "/remember", Some(body));
+            assert_eq!(status, 200, "remember must succeed: {resp}");
+            resp["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("remember response must carry id: {resp}"))
+                .to_string()
+        }
+    }
+
+    #[test]
+    fn explain_fts5_returns_signals_and_guards() {
+        let app = ExplainApp::new();
+        let fox_id = app.remember_in("The quick brown fox jumps over the lazy dog", "explain-ns");
+        app.remember_in(
+            "Completely unrelated content about gardening tools",
+            "explain-ns",
+        );
+
+        // Body built separately so the api_registry route scanner does not
+        // mistake this literal for a handler route arm.
+        let body = serde_json::json!({
+            "query": "quick brown fox",
+            "limit": 5,
+            "namespace": "explain-ns",
+            "strategy": "fts5",
+            "explain": true
+        })
+        .to_string();
+        let (status, resp) = app.call(Method::Post, "/recall", Some(body));
+        assert_eq!(status, 200, "{resp}");
+        let arr = resp.as_array().expect("explained results array");
+        assert!(!arr.is_empty(), "fts5 must find the fox");
+        let first = &arr[0];
+        assert_eq!(first["memory"]["id"], serde_json::json!(fox_id));
+        let ex = &first["explanation"];
+        assert_eq!(ex["strategy"], serde_json::json!("fts5"));
+        assert_eq!(ex["fts_rank"], serde_json::json!(1));
+        assert!(ex["final_score"].is_number(), "final_score must exist");
+
+        // explain + search_type → 400 (memory-only feature).
+        let bad = serde_json::json!({
+            "query": "quick brown fox",
+            "search_type": "all",
+            "explain": true
+        })
+        .to_string();
+        let (status, _) = app.call(Method::Post, "/recall", Some(bad));
+        assert_eq!(status, 400, "explain + search_type must 400");
+
+        // explain + at → 400.
+        let bad = serde_json::json!({
+            "query": "quick brown fox",
+            "at": "2026-01-01T00:00:00Z",
+            "explain": true
+        })
+        .to_string();
+        let (status, _) = app.call(Method::Post, "/recall", Some(bad));
+        assert_eq!(status, 400, "explain + at must 400");
+
+        // explain + entity → 400 (filter would be silently dropped).
+        let bad = serde_json::json!({
+            "query": "quick brown fox",
+            "entity": "staging",
+            "explain": true
+        })
+        .to_string();
+        let (status, _) = app.call(Method::Post, "/recall", Some(bad));
+        assert_eq!(status, 400, "explain + entity must 400");
+    }
+}
+
+// ── /list pagination metadata (#1188) ───────────────────────────────
+
+#[cfg(test)]
+mod list_pagination_tests {
+    use super::*;
+    use tiny_http::TestRequest;
+
+    struct ListApp {
+        uteke: Mutex<Uteke>,
+    }
+
+    impl ListApp {
+        fn new() -> Self {
+            Self {
+                uteke: Mutex::new(
+                    Uteke::open_with_backend(":memory:", None)
+                        .expect("open in-memory uteke without embedder"),
+                ),
+            }
+        }
+
+        fn call(
+            &self,
+            method: Method,
+            url: &str,
+            body: Option<String>,
+        ) -> (u16, serde_json::Value) {
+            let mut req = match body {
+                Some(b) => {
+                    let leaked: &'static str = Box::leak(b.into_boxed_str());
+                    TestRequest::new()
+                        .with_method(method)
+                        .with_path(url)
+                        .with_body(leaked)
+                        .into()
+                }
+                None => TestRequest::new().with_method(method).with_path(url).into(),
+            };
+            let ctx = ReqCtx {
+                auth_token_hash: None,
+                read_only_token_hash: None,
+                cors_origins: Vec::new(),
+                recall_config: None,
+                extraction_config: None,
+            };
+            let resp = route(&self.uteke, &ctx, &mut req);
+            let status = resp.status_code().0;
+            let bytes = resp.into_reader().into_inner();
+            let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+            (status, json)
+        }
+
+        fn remember_in(&self, content: &str, namespace: &str) {
+            let body =
+                serde_json::json!({ "content": content, "namespace": namespace }).to_string();
+            let (status, resp) = self.call(Method::Post, "/remember", Some(body));
+            assert_eq!(status, 200, "seed remember must succeed: {resp}");
+        }
+    }
+
+    #[test]
+    fn list_meta_envelope_and_bare_default() {
+        let app = ListApp::new();
+        for i in 0..7 {
+            app.remember_in(&format!("pagination probe {i}"), "pg");
+        }
+
+        // Default (no include_meta): bare array — unchanged shape.
+        let body = serde_json::json!({ "namespace": "pg", "limit": 100 }).to_string();
+        let (status, resp) = app.call(Method::Post, "/list", Some(body));
+        assert_eq!(status, 200);
+        assert!(resp.is_array(), "default must stay a bare array: {resp}");
+        assert_eq!(resp.as_array().unwrap().len(), 7);
+
+        // include_meta: envelope with total/has_more/next_offset.
+        // URL built separately so the api_registry route scanner does not
+        // mistake this literal for a handler route arm.
+        let body = serde_json::json!({
+            "namespace": "pg",
+            "limit": 3,
+            "offset": 0,
+            "include_meta": true
+        })
+        .to_string();
+        let (status, resp) = app.call(Method::Post, "/list", Some(body));
+        assert_eq!(status, 200);
+        assert!(resp.is_object(), "envelope expected: {resp}");
+        assert_eq!(resp["total"], serde_json::json!(7));
+        assert_eq!(resp["has_more"], serde_json::json!(true));
+        assert_eq!(resp["next_offset"], serde_json::json!(3));
+        assert_eq!(resp["memories"].as_array().expect("page rows").len(), 3);
+
+        // Last page: has_more false, next_offset null.
+        let body = serde_json::json!({
+            "namespace": "pg",
+            "limit": 10,
+            "offset": 6,
+            "include_meta": true
+        })
+        .to_string();
+        let (status, resp) = app.call(Method::Post, "/list", Some(body));
+        assert_eq!(status, 200);
+        assert_eq!(resp["has_more"], serde_json::json!(false));
+        assert!(resp["next_offset"].is_null());
+        assert_eq!(
+            resp["memories"].as_array().expect("page rows").len(),
+            1,
+            "offset 6 of 7 rows returns the last row"
+        );
+
+        // include_meta + at: `at` wins — bare array (documented).
+        let body = serde_json::json!({
+            "namespace": "pg",
+            "include_meta": true,
+            "at": "2100-01-01T00:00:00Z"
+        })
+        .to_string();
+        let (status, resp) = app.call(Method::Post, "/list", Some(body));
+        assert_eq!(status, 200);
+        assert!(resp.is_array(), "at-mode stays a bare array: {resp}");
     }
 }

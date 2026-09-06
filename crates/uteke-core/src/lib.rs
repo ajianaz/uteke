@@ -31,6 +31,7 @@ mod operations;
 mod orphans;
 pub mod provenance;
 mod recall_cache;
+pub mod recall_explain;
 mod rooms;
 pub mod rooms_segments;
 pub mod salience_recency;
@@ -54,9 +55,9 @@ pub use graph_rerank::{GraphRerankConfig, GraphSignals, compute_graph_signals, r
 pub use memory::aging::DeprecatedMemoryInfo;
 pub use memory::types::{
     AgingStatus, BulkDeleteResult, CleanupResult, ConsolidationResult, ContradictionResult,
-    DEFAULT_NAMESPACE, ExportEntry, ImportResult, Memory, MemoryTier, MemoryType, PruneResult,
-    RecallStrategy, SearchResult, SearchResultType, SearchType, SimilarPair, StoreStats, TagInfo,
-    UnifiedSearchResult,
+    DEFAULT_NAMESPACE, ExportEntry, ImportResult, Memory, MemoryTier, MemoryType,
+    NamespaceDeleteResult, NamespaceRenameResult, PruneResult, RecallStrategy, SearchResult,
+    SearchResultType, SearchType, SimilarPair, StoreStats, TagInfo, UnifiedSearchResult,
 };
 pub use memory::{
     DocumentEntry, DocumentSection, Room, RoomDocument, RoomMemory, RoomStats, RoomSummary,
@@ -64,6 +65,7 @@ pub use memory::{
     documents::{Document, DocumentChunk, DocumentSearchResult, DocumentSummary},
 };
 pub use orphans::{DEFAULT_ORPHAN_THRESHOLD, OrphanMemory, compute_orphan_score};
+pub use provenance::{ProvenanceReport, TrustTier};
 pub use salience_recency::{
     SalienceRecencyConfig, apply_boosts, recency_score, salience_score, type_half_life_days,
 };
@@ -583,6 +585,23 @@ pub struct Uteke {
     embed_cache_path: Option<std::path::PathBuf>,
 }
 
+/// Canonical uteke embedding width (EmbeddingGemma ONNX, 768).
+///
+/// Last-resort fallback when opening a store with no embedder, no
+/// UTEKE_EMBEDDING_DIMS, and no persisted embeddings (#1166).
+const DEFAULT_EMBEDDING_DIMS: usize = 768;
+
+/// Default embedder backend for `Uteke::open` (#1166).
+///
+/// Feature-aware: a build compiled without the `onnx` feature can never
+/// initialize the onnx backend, so the default falls back to `""` (no
+/// embedder configured; lazy init is skipped until an embedding arrives
+/// via the injected-embedding path). With `onnx` compiled in, the default
+/// stays `"onnx"` as before.
+fn default_embedder_backend() -> &'static str {
+    if cfg!(feature = "onnx") { "onnx" } else { "" }
+}
+
 impl Uteke {
     /// Borrow the underlying store (for CLI/advanced use).
     pub fn store(&self) -> &Store {
@@ -648,7 +667,60 @@ impl Uteke {
         Self::finish_open(
             store,
             None,
-            "onnx".to_string(),
+            default_embedder_backend().to_string(),
+            TierConfig::default(),
+            RecallConfig::default(),
+            EmbeddingSettings::default(),
+        )
+    }
+
+    /// Resolve the runtime vector-engine preference (#1168):
+    /// `UTEKE_VECTOR_BACKEND` env → caller-supplied (uteke.toml) → default.
+    /// Returns None when unset/empty/unknown (logged) or not compiled in.
+    fn resolve_vector_backend_pref(
+        config_pref: Option<&str>,
+    ) -> Option<memory::vector::VectorBackend> {
+        use memory::vector::VectorBackend;
+
+        let raw = std::env::var("UTEKE_VECTOR_BACKEND")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .or_else(|| config_pref.filter(|v| !v.is_empty()).map(|v| v.to_string()));
+
+        let raw = raw?;
+        match VectorBackend::parse(&raw) {
+            Some(b) if b.is_compiled_in() => Some(b),
+            Some(b) => {
+                tracing::warn!(
+                    "UTEKE_VECTOR_BACKEND='{}' requested engine '{b:?}' is not compiled in;                      falling back to the default engine",
+                    raw
+                );
+                None
+            }
+            None => {
+                tracing::warn!(
+                    "Invalid vector backend '{raw}' (expected 'usearch' or 'vecq');                      using the default engine"
+                );
+                None
+            }
+        }
+    }
+
+    /// Open with an explicit embedder backend choice (#1166).
+    ///
+    /// `Some("onnx" | "openai" | "ollama")` selects the backend lazily, exactly
+    /// like `open_with_embedding_and_graph`. `None` opens the store **without
+    /// an embedder**: FTS5 keyword recall works, and embeddings can be
+    /// supplied per-write by hosts that embed externally (mobile profiles,
+    /// injected-embedding pipelines). Useful for builds compiled without the
+    /// `onnx` feature, where the old `open()` default requested a backend
+    /// that could never initialize.
+    pub fn open_with_backend(path: impl AsRef<Path>, backend: Option<&str>) -> Result<Self, Error> {
+        let (_db_str, store) = Self::open_store(path)?;
+        Self::finish_open(
+            store,
+            None,
+            backend.unwrap_or("").to_string(),
             TierConfig::default(),
             RecallConfig::default(),
             EmbeddingSettings::default(),
@@ -665,6 +737,7 @@ impl Uteke {
         tier_config: TierConfig,
         recall_config: RecallConfig,
         graph_rerank_config: graph_rerank::GraphRerankConfig,
+        vector_backend: Option<&str>,
     ) -> Result<Self, Error> {
         let (_db_str, store) = Self::open_store(path)?;
         Self::finish_open_full(
@@ -675,6 +748,7 @@ impl Uteke {
             recall_config,
             settings,
             graph_rerank_config,
+            vector_backend,
         )
     }
 
@@ -701,9 +775,11 @@ impl Uteke {
             recall_config,
             embedding_settings,
             graph_rerank::GraphRerankConfig::default(),
+            None,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finish_open_full(
         store: Store,
         embedder: Option<Box<dyn Embedder>>,
@@ -712,7 +788,11 @@ impl Uteke {
         recall_config: RecallConfig,
         embedding_settings: EmbeddingSettings,
         graph_rerank_config: graph_rerank::GraphRerankConfig,
+        vector_backend_pref: Option<&str>,
     ) -> Result<Self, Error> {
+        // Runtime engine selection (#1168): ENV > config > compiled-in default.
+        let vector_backend = Self::resolve_vector_backend_pref(vector_backend_pref)
+            .unwrap_or_else(memory::vector::VectorBackend::default_backend);
         // Determine index path: same directory as SQLite DB.
         // `:memory:` databases get an EPHEMERAL in-memory index instead:
         // persisting to `./uteke_index.usearch` in the CWD would make every
@@ -725,11 +805,15 @@ impl Uteke {
                 None
             } else {
                 let dir = p.parent().unwrap_or(Path::new("."));
-                // Backend-specific extension (#1112): a vecq build reads/writes
-                // `uteke_index.vecq`, a usearch build `uteke_index.usearch`.
-                // Cross-backend opens no longer parse (and re-save over) the
-                // other format's file.
-                Some(dir.join(format!("uteke_index.{}", crate::memory::vector::INDEX_EXT)))
+                // Engine-specific extension (#1112, #1168): the selected
+                // engine reads/writes its own file and never parses (nor
+                // re-saves over) the other engine's file. Switching engines
+                // leaves the old file in place; the new engine starts empty
+                // and the rebuild-from-SQLite path below repopulates it.
+                Some(dir.join(format!(
+                    "uteke_index.{}",
+                    memory::vector::index_ext_for(vector_backend)
+                )))
             }
         });
 
@@ -740,6 +824,12 @@ impl Uteke {
             None => match embedder_backend.as_str() {
                 #[cfg(feature = "onnx")]
                 "onnx" | "" | "custom" => crate::embed::OnnxEmbedder::dims(),
+                // No embedder configured (open_with_backend(.., None)) on a
+                // build without the onnx feature (#1166): dims stay unknown
+                // until the first externally-supplied embedding lands. The
+                // index starts empty and accepts the first injected dims.
+                #[cfg(not(feature = "onnx"))]
+                "" => 0,
                 "openai" => {
                     // User-configurable via uteke.toml or UTEKE_EMBEDDING_DIMS.
                     // Default 1536 (text-embedding-3-small).
@@ -766,8 +856,42 @@ impl Uteke {
             },
         };
 
+        // #1166: dims == 0 means "unknown yet" (open_with_backend(.., None) on
+        // a build without onnx). The vector index cannot be created at dims 0,
+        // so resolve from, in order: explicit UTEKE_EMBEDDING_DIMS, then
+        // embeddings already persisted in the store. Only if both are empty
+        // (fresh store, no embedder) fail with a clear error instead of a
+        // vecq/usearch panic on dims 0.
+        let dims = if dims == 0 {
+            let cfg = EmbeddingSettings::resolve_with_defaults(&embedding_settings);
+            if cfg.dims > 0 {
+                cfg.dims
+            } else if let Some(inferred) = store.infer_embedding_dims() {
+                tracing::debug!(
+                    dims = inferred,
+                    "Inferred embedding dims from existing store"
+                );
+                inferred
+            } else {
+                // Nothing else is known: assume the canonical uteke dims
+                // (EmbeddingGemma ONNX, 768). This keeps plain open() working
+                // on builds compiled without the onnx feature (#1166) — the
+                // mobile/FFI profile embeds externally at 768 anyway. A host
+                // injecting embeddings of a different width gets a clear
+                // dimension-mismatch error at insert time and can rebuild the
+                // index via uteke repair.
+                tracing::warn!(
+                    dims = DEFAULT_EMBEDDING_DIMS,
+                    "No embedder, no UTEKE_EMBEDDING_DIMS, no existing embeddings; assuming canonical dims"
+                );
+                DEFAULT_EMBEDDING_DIMS
+            }
+        } else {
+            dims
+        };
+
         let mut index = match &index_path {
-            Some(path) => match VectorIndex::load_or_create(path, dims) {
+            Some(path) => match VectorIndex::load_or_create_for(path, dims, vector_backend) {
                 Ok(idx) => idx,
                 Err(e) => {
                     // Index file is corrupt (dim mismatch, truncated, etc).
@@ -1207,6 +1331,15 @@ impl Uteke {
         self.store.set_source(id, source, source_type)
     }
 
+    /// Set the content hash recorded at write time (#1172 Fase 1).
+    ///
+    /// Normally set automatically by `remember*`/import paths; public so
+    /// repair/backfill tooling can populate legacy rows. Pass `None` to
+    /// clear.
+    pub fn set_source_hash(&self, id: &str, source_hash: Option<&str>) -> Result<bool, Error> {
+        self.store.set_source_hash(id, source_hash)
+    }
+
     /// Set author type on a memory (#1083): "human" | "agent".
     /// Invalid values return a Validation error.
     pub fn set_author_type(&self, id: &str, author_type: &str) -> Result<bool, Error> {
@@ -1231,18 +1364,34 @@ impl Uteke {
     /// Get graph nodes + edges for visualization (#408).
     ///
     /// Returns all nodes and edges in the knowledge graph, optionally
-    /// limited by namespace.
+    /// limited by namespace. Stale memory nodes are excluded in every
+    /// path (#1189): the namespace path matches `namespace AND
+    /// deprecated = 0`; the no-namespace path drops nodes whose parent
+    /// memory is missing (hard-deleted) or deprecated — so the graph
+    /// does not grow stale nodes on every forget/deprecate.
     pub fn graph_data(&self, namespace: Option<&str>) -> Result<GraphData, Error> {
         let gs = GraphStore::new(&self.store.conn);
         let nodes = gs.all_nodes()?;
         let edges = gs.all_edges()?;
         let stats = gs.stats()?;
 
+        // Liveness set: memories that may appear in the graph — existing
+        // AND not deprecated (#1189). Legacy graph_rows whose memory was
+        // hard-deleted drop out here too (orphaned nodes).
+        let live_memory_ids: std::collections::HashSet<String> = self
+            .store
+            .conn
+            .prepare("SELECT id FROM memories WHERE deprecated = 0")
+            .map_err(|e| Error::db("Failed to prepare liveness query", e))?
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| Error::db("Failed to query live memories", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+
         // Filter by namespace if specified.
         // Memory-linked nodes are filtered by their parent memory's namespace.
         // Entity nodes (no memory_id) are always included (shared across namespaces).
         let (nodes, edges) = if let Some(ns) = namespace {
-            // Build a set of memory IDs that belong to this namespace.
             let ns_memory_ids: std::collections::HashSet<String> = self
                 .store
                 .conn
@@ -1278,7 +1427,33 @@ impl Uteke {
 
             (filtered_nodes, filtered_edges)
         } else {
-            (nodes, edges)
+            // #1189: no namespace → still drop nodes whose memory is gone
+            // or deprecated (the bug: this path returned all_nodes() raw).
+            let filtered_nodes: Vec<GraphNode> = nodes
+                .into_iter()
+                .filter(|n| match &n.memory_id {
+                    None => true,
+                    Some(mid) => live_memory_ids.contains(mid),
+                })
+                .collect();
+            let node_ids: std::collections::HashSet<&str> =
+                filtered_nodes.iter().map(|n| n.id.as_str()).collect();
+            let filtered_edges: Vec<GraphEdge> = edges
+                .into_iter()
+                .filter(|e| {
+                    node_ids.contains(e.source_id.as_str())
+                        && node_ids.contains(e.target_id.as_str())
+                })
+                .collect();
+            (filtered_nodes, filtered_edges)
+        };
+
+        // Stats count the FILTERED graph, not the raw tables (#1189) —
+        // otherwise GET /graph reported node counts that included stale rows.
+        let stats = crate::graph::GraphStats {
+            node_count: nodes.len(),
+            edge_count: edges.len(),
+            relation_types: stats.relation_types,
         };
 
         Ok(GraphData {
@@ -2408,6 +2583,202 @@ fn resolve_db_path(db_path: &Path) -> Result<String, Error> {
 
 #[cfg(test)]
 mod tests {
+    /// #1166: `open()` must not request a backend the build cannot
+    /// initialize. On a build without the `onnx` feature the default is
+    /// `""` (no embedder) — opening succeeds and FTS5 paths work without
+    /// ever touching an embedder.
+    #[test]
+    fn open_default_backend_is_feature_aware() {
+        // On onnx builds open() keeps working exactly as before.
+        if cfg!(feature = "onnx") {
+            let u = Uteke::open(":memory:").expect("open() must succeed with onnx feature");
+            drop(u);
+        } else {
+            // Non-onnx build with an EMPTY store: no embedder, no persisted
+            // embeddings, so dims cannot be resolved. Must fail with a clear
+            // validation error (#1166) — never a vecq/usearch panic on 0 dims.
+            let _u = Uteke::open(":memory:")
+                .expect("open() must succeed on vecq-only builds via canonical-dims fallback");
+        }
+        // The default must track the feature set in both directions.
+        assert_eq!(
+            default_embedder_backend(),
+            if cfg!(feature = "onnx") { "onnx" } else { "" }
+        );
+    }
+
+    /// #1166: explicit `None` backend opens without an embedder; a vecq-only
+    /// (no-onnx) build must open cleanly instead of failing on a hardcoded
+    /// "onnx" request. FTS5 write+search round-trip works without embedding.
+    #[test]
+    #[serial_test::serial]
+    fn open_with_backend_none_works_without_embedder() {
+        // With UTEKE_EMBEDDING_DIMS set, open succeeds on any build; writes
+        // store without embeddings and FTS search still finds them.
+        unsafe { std::env::set_var("UTEKE_EMBEDDING_DIMS", "768") };
+        let u = Uteke::open_with_backend(":memory:", None)
+            .expect("open must succeed when dims are supplied via env");
+        let id = u
+            .remember("sqlite fts fallback probe", &["probe"], None, None)
+            .expect("write without embedder must succeed");
+        let _ = id;
+        let hits = u
+            .search("fts fallback", 5, None, None)
+            .expect("fts search must work without embedder");
+        assert!(
+            !hits.is_empty(),
+            "FTS5 must find the probe without an embedder"
+        );
+        unsafe { std::env::remove_var("UTEKE_EMBEDDING_DIMS") };
+    }
+
+    /// #1166: `open_with_backend(Some("openai"))` keeps the explicit-backend
+    /// contract (validation still happens at open, same as before).
+    #[test]
+    fn open_with_backend_invalid_name_rejected() {
+        let r = Uteke::open_with_backend(":memory:", Some("not-a-backend"));
+        let e = match r {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("invalid backend must fail at open()"),
+        };
+        assert!(
+            e.contains("Unknown embedding backend"),
+            "expected unknown-backend error, got: {e}"
+        );
+    }
+
+    /// #1078 P0: ensure_embedder lazy-init branches — unknown backend
+    /// (rejected eagerly at open), custom backend without embedder
+    /// (immediate error), openai without API key (deterministic init error,
+    /// cached transient → identical message on 2nd call).
+    #[test]
+    fn ensure_embedder_unknown_backend_errors_not_cached() {
+        // Unknown backends are rejected eagerly at open() time (defensive:
+        // ensure_embedder re-checks, but open fails first with the same message).
+        let r = Uteke::open_with_embedding_and_graph(
+            ":memory:",
+            "not-a-backend",
+            EmbeddingSettings::default(),
+            TierConfig::default(),
+            RecallConfig::default(),
+            graph_rerank::GraphRerankConfig::default(),
+            None,
+        );
+        let e = match r {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("unknown backend must fail at open()"),
+        };
+        assert!(
+            e.contains("Unknown embedding backend: 'not-a-backend'"),
+            "got: {e}"
+        );
+    }
+
+    #[test]
+    fn ensure_embedder_custom_without_embedder_errors() {
+        // The "custom" backend dim-arm is gated on the onnx feature (it maps
+        // to the ONNX dims); on a vecq-only build open() rejects "custom"
+        // eagerly as unknown — both outcomes are correct, assert the one the
+        // current feature set produces (#1166).
+        if !cfg!(feature = "onnx") {
+            let r = Uteke::open_with_embedding_and_graph(
+                ":memory:",
+                "custom",
+                EmbeddingSettings::default(),
+                TierConfig::default(),
+                RecallConfig::default(),
+                graph_rerank::GraphRerankConfig::default(),
+                None,
+            );
+            let e = match r {
+                Err(e) => e.to_string(),
+                Ok(_) => panic!("custom must be rejected at open() on non-onnx builds"),
+            };
+            assert!(
+                e.contains("Unknown embedding backend: 'custom'"),
+                "got: {e}"
+            );
+            return;
+        }
+        let u = Uteke::open_with_embedding_and_graph(
+            ":memory:",
+            "custom",
+            EmbeddingSettings::default(),
+            TierConfig::default(),
+            RecallConfig::default(),
+            graph_rerank::GraphRerankConfig::default(),
+            None,
+        )
+        .unwrap();
+        let e = u.embed_text("x").unwrap_err().to_string();
+        assert!(
+            e.contains("Custom embedder backend set but no embedder was provided"),
+            "got: {e}"
+        );
+    }
+
+    #[test]
+    fn ensure_embedder_openai_missing_key_error_is_cached() {
+        // No UTEKE_EMBEDDING_API_KEY / OPENAI_API_KEY in env → deterministic
+        // init failure at OpenAiEmbedder::new, cached as transient (#822).
+        unsafe {
+            std::env::remove_var("UTEKE_EMBEDDING_API_KEY");
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        let u = Uteke::open_with_embedding_and_graph(
+            ":memory:",
+            "openai",
+            EmbeddingSettings::default(),
+            TierConfig::default(),
+            RecallConfig::default(),
+            graph_rerank::GraphRerankConfig::default(),
+            None,
+        )
+        .unwrap();
+        let e1 = u.embed_text("x").unwrap_err().to_string();
+        assert!(e1.contains("requires an API key"), "got: {e1}");
+        let e2 = u.embed_text("x").unwrap_err().to_string();
+        assert!(
+            e2.contains("previously failed (cached)"),
+            "2nd call must hit the #822 cache: {e2}"
+        );
+    }
+
+    #[test]
+    fn validate_input_with_limits_matrix() {
+        use super::validate_input_with_limits;
+
+        // 1) happy path
+        assert!(validate_input_with_limits("hello", &["a"], 100, 10, 20).is_ok());
+        // 2) empty content (incl. whitespace-only)
+        assert!(validate_input_with_limits("", &["a"], 100, 10, 20).is_err());
+        assert!(validate_input_with_limits("   \n\t", &["a"], 100, 10, 20).is_err());
+        // 3) content exactly at limit → ok; over limit → err
+        let no_tags: &[&str] = &[];
+        let at = "x".repeat(100);
+        assert!(validate_input_with_limits(&at, no_tags, 100, 10, 20).is_ok());
+        let over = "x".repeat(101);
+        assert!(validate_input_with_limits(&over, no_tags, 100, 10, 20).is_err());
+        // 4) content length check disabled when limit = 0
+        let huge = "x".repeat(500);
+        assert!(validate_input_with_limits(&huge, no_tags, 0, 10, 20).is_ok());
+        // 5) tags exactly at count limit → ok; over → err
+        let ten: Vec<&str> = vec!["t"; 10];
+        assert!(validate_input_with_limits("c", &ten, 100, 10, 20).is_ok());
+        let eleven: Vec<&str> = vec!["t"; 11];
+        assert!(validate_input_with_limits("c", &eleven, 100, 10, 20).is_err());
+        // 6) empty tag string rejected
+        assert!(validate_input_with_limits("c", &[""], 100, 10, 20).is_err());
+        // 7) tag exactly at length limit → ok; over → err
+        let tag_at = "y".repeat(20);
+        assert!(validate_input_with_limits("c", &[&tag_at], 100, 10, 20).is_ok());
+        let tag_over = "y".repeat(21);
+        assert!(validate_input_with_limits("c", &[&tag_over], 100, 10, 20).is_err());
+        // 8) tag length check disabled when limit = 0
+        let tag_huge = "y".repeat(200);
+        assert!(validate_input_with_limits("c", &[&tag_huge], 100, 10, 0).is_ok());
+    }
+
     #[ignore = "requires ONNX embedder — index file extension follows active backend"]
     #[test]
     fn index_file_uses_backend_extension() {
@@ -2426,6 +2797,83 @@ mod tests {
             expected.exists(),
             "expected index file {expected:?} to exist after shutdown"
         );
+    }
+
+    /// #1168 (dual-engine builds): switching the engine via preference
+    /// rebuilds from SQLite and both per-engine index files coexist.
+    /// Uses remember_precomputed-equivalent raw inserts so no embedder is
+    /// needed (works on any feature set with both engines compiled in).
+    #[cfg(all(feature = "usearch", feature = "vecq"))]
+    #[test]
+    #[serial_test::serial]
+    fn vector_engine_switch_rebuilds_from_sqlite() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("uteke.db");
+
+        unsafe { std::env::set_var("UTEKE_VECTOR_BACKEND", "usearch") };
+        let u = Uteke::open(&db).unwrap();
+        u.remember_precomputed(
+            "engine switch probe",
+            &[],
+            None,
+            None,
+            "fact",
+            "text",
+            &vec![0.5f32; 768],
+        )
+        .unwrap();
+        u.shutdown().unwrap();
+        drop(u);
+        assert!(
+            dir.path().join("uteke_index.usearch").exists(),
+            "usearch index file must exist"
+        );
+        assert!(
+            !dir.path().join("uteke_index.vecq").exists(),
+            "vecq file must not exist yet"
+        );
+
+        // Switch to vecq: same store, engine preference flips.
+        unsafe { std::env::set_var("UTEKE_VECTOR_BACKEND", "vecq") };
+        let u2 = Uteke::open(&db).unwrap();
+        // finish_open_full auto-rebuilds the empty vecq index from SQLite.
+        let hits = u2
+            .search("engine switch", 5, None, None)
+            .unwrap_or_default();
+        assert!(
+            !hits.is_empty(),
+            "FTS5 must find the probe after engine switch"
+        );
+        u2.shutdown().unwrap();
+        drop(u2);
+        assert!(
+            dir.path().join("uteke_index.vecq").exists(),
+            "vecq index file must be written"
+        );
+        // The old engine's file is left untouched (both coexist).
+        assert!(
+            dir.path().join("uteke_index.usearch").exists(),
+            "usearch file must survive the switch"
+        );
+
+        // And back to usearch — the old file is picked up, no rebuild needed.
+        unsafe { std::env::set_var("UTEKE_VECTOR_BACKEND", "usearch") };
+        let u3 = Uteke::open(&db).unwrap();
+        u3.shutdown().unwrap();
+        drop(u3);
+
+        unsafe { std::env::remove_var("UTEKE_VECTOR_BACKEND") };
+    }
+
+    /// #1168: invalid / not-compiled-in UTEKE_VECTOR_BACKEND falls back to the
+    /// default engine without failing the open.
+    #[test]
+    #[serial_test::serial]
+    fn vector_engine_env_invalid_falls_back() {
+        unsafe { std::env::set_var("UTEKE_VECTOR_BACKEND", "bogus-engine") };
+        let u = Uteke::open(":memory:");
+        assert!(u.is_ok(), "invalid engine name must fall back, not fail");
+        unsafe { std::env::remove_var("UTEKE_VECTOR_BACKEND") };
     }
 
     use super::*;

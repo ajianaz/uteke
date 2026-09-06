@@ -252,6 +252,11 @@ pub struct RecallRequest {
     /// Invalid values return HTTP 400.
     #[serde(default)]
     pub strategy: Option<String>,
+    /// Explain mode (#1160): return per-result ranking signals alongside
+    /// each memory. Memory-only recall — rejected (400) together with
+    /// search_type/unified, at, before/after.
+    #[serde(default)]
+    pub explain: bool,
     /// Temporal range filter: only return memories created at or after this
     /// RFC3339 timestamp (#902).
     #[serde(default)]
@@ -288,6 +293,13 @@ pub struct ListParams {
     /// Time-travel: list memories that existed at this RFC3339 timestamp.
     #[serde(default)]
     pub at: Option<String>,
+    /// Pagination metadata (#1188): when true, respond with an envelope
+    /// `{memories, total, has_more, next_offset}` instead of the bare array.
+    /// Default false — the bare-array shape is unchanged for existing
+    /// clients. Not supported with `at` (point-in-time listing returns the
+    /// bare array regardless).
+    #[serde(default)]
+    pub include_meta: bool,
 }
 
 #[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
@@ -500,6 +512,39 @@ pub struct MemoryUpdateRequest {
     /// Set memory type (fact, procedure, preference, decision, context, note, insight, reference, event).
     #[serde(default)]
     pub memory_type: Option<String>,
+    /// Move the memory to this namespace (#1181). Plain column update — no re-embed.
+    #[serde(default)]
+    pub namespace: Option<String>,
+}
+
+// ── Namespace Management Types (#1181) ─────────────────────────────────────
+
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
+#[derive(Deserialize)]
+pub struct NamespaceRenameRequest {
+    /// Current namespace name.
+    pub from: String,
+    /// New namespace name. If it already exists, this is a merge.
+    pub to: String,
+}
+
+#[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
+#[derive(Deserialize)]
+pub struct NamespaceDeleteRequest {
+    /// Namespace to delete.
+    pub name: String,
+    /// What happens to its memories: `refuse` (default — 409-style error while
+    /// any memory references the name), `merge` (move all memories to `target`),
+    /// or `deprecate` (soft-delete all memories — restorable, never hard-deleted).
+    #[serde(default = "default_namespace_delete_strategy")]
+    pub strategy: String,
+    /// Target namespace when strategy is `merge`.
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+fn default_namespace_delete_strategy() -> String {
+    "refuse".to_string()
 }
 
 // ── Pin Types ─────────────────────────────────────────────────────────────

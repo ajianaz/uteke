@@ -418,6 +418,8 @@ impl super::Store {
                 16 => self.migrate_v15_to_v16()?,
                 // v17: deprecated_at column — time-travel deprecation predicate (#1086)
                 17 => self.migrate_v16_to_v17()?,
+                // v18: provenance chain — source_hash, actor, evidence_json (#1172)
+                18 => self.migrate_v17_to_v18()?,
                 _ => {
                     // No-op for future versions.
                 }
@@ -604,6 +606,7 @@ impl super::Store {
             "memory_feedback",
             "memory_doc_refs",
             "doc_mem_refs",
+            "timeline_events",
         ];
         if !ALLOWED_TABLES.contains(&table) {
             return false;
@@ -1127,6 +1130,54 @@ impl super::Store {
         }
 
         tracing::info!("Migration v16 to v17 complete: deprecated_at column added");
+        Ok(())
+    }
+
+    /// v18: Provenance chain fields (#1172 Fase 1).
+    ///
+    /// Additive, zero data loss:
+    /// - `memories.source_hash` — SHA-256 of the content at write time
+    ///   (tamper-evidence for audits).
+    /// - `timeline_events.actor` — who performed the event (agent id, "user",
+    ///   "system").
+    /// - `timeline_events.evidence_json` — JSON array of related memory IDs /
+    ///   scores supporting the event (e.g. contradiction resolution evidence).
+    fn migrate_v17_to_v18(&self) -> Result<(), Error> {
+        tracing::info!("Applying schema migration v17 to v18: provenance chain (#1172)");
+
+        if !self.column_exists("source_hash") {
+            self.conn
+                .execute_batch("ALTER TABLE memories ADD COLUMN source_hash TEXT;")
+                .map_err(|e| Error::db("schema migration v17 to v18: source_hash", e))?;
+        }
+        // Guard for stores missing the v9 table entirely (defensive — a
+        // stamped v17 store should have it, but test fixtures / repaired
+        // databases may not). Fresh shape includes the new columns.
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS timeline_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+                    event_type TEXT NOT NULL,
+                    event_data TEXT,
+                    created_at TEXT NOT NULL,
+                    actor TEXT,
+                    evidence_json TEXT
+                );",
+            )
+            .map_err(|e| Error::db("schema migration v17 to v18: timeline_events", e))?;
+        if !self.column_exists_in("timeline_events", "actor") {
+            self.conn
+                .execute_batch("ALTER TABLE timeline_events ADD COLUMN actor TEXT;")
+                .map_err(|e| Error::db("schema migration v17 to v18: actor", e))?;
+        }
+        if !self.column_exists_in("timeline_events", "evidence_json") {
+            self.conn
+                .execute_batch("ALTER TABLE timeline_events ADD COLUMN evidence_json TEXT;")
+                .map_err(|e| Error::db("schema migration v17 to v18: evidence_json", e))?;
+        }
+
+        tracing::info!("Migration v17 to v18 complete: provenance chain columns added");
         Ok(())
     }
 }

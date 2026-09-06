@@ -144,6 +144,9 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 tool_search(),
                 tool_list(),
                 tool_get(),
+                tool_provenance(),
+                tool_contradictions(),
+                tool_contradictions_undo(),
                 tool_supersede(),
                 tool_update(),
                 tool_forget(),
@@ -175,6 +178,8 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 tool_tags_list(),
                 tool_tags_rename(),
                 tool_tags_delete(),
+                tool_namespace_rename(),
+                tool_namespace_delete(),
                 tool_pin(),
                 tool_unpin(),
             ]
@@ -194,6 +199,9 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 "uteke_search" => exec_search(uteke, &arguments)?,
                 "uteke_list" => exec_list(uteke, &arguments)?,
                 "uteke_get" => exec_get(uteke, &arguments)?,
+                "uteke_provenance" => exec_provenance(uteke, &arguments)?,
+                "uteke_contradictions" => exec_contradictions(uteke, &arguments)?,
+                "uteke_contradictions_undo" => exec_contradictions_undo(uteke, &arguments)?,
                 "uteke_supersede" => exec_supersede(uteke, &arguments)?,
                 "uteke_update" => exec_update(uteke, &arguments)?,
                 "uteke_forget" => exec_forget(uteke, &arguments)?,
@@ -227,6 +235,8 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 "uteke_tags_list" => exec_tags_list(uteke, &arguments)?,
                 "uteke_tags_rename" => exec_tags_rename(uteke, &arguments)?,
                 "uteke_tags_delete" => exec_tags_delete(uteke, &arguments)?,
+                "uteke_namespace_rename" => exec_namespace_rename(uteke, &arguments)?,
+                "uteke_namespace_delete" => exec_namespace_delete(uteke, &arguments)?,
                 "uteke_pin" => exec_pin(uteke, &arguments)?,
                 "uteke_unpin" => exec_unpin(uteke, &arguments)?,
                 _ => return Err(format!("Unknown tool: {tool_name}")),
@@ -275,7 +285,8 @@ fn tool_recall() -> Value {
                 "tags": { "type": "array", "items": { "type": "string" }, "description": "Filter by tags (optional)" },
                 "min_score": { "type": "number", "description": "Minimum similarity score 0..1 (default: 0.0)" },
                 "type": { "type": "string", "enum": ["all", "memory", "doc"], "description": "Search type: 'all' (default, unified), 'memory', or 'doc'" },
-                "strategy": { "type": "string", "enum": ["fusion", "hybrid", "vector", "fts5", "graph"], "description": "Recall strategy: 'fusion' (default since 0.16.0, weighted RRF of vector×1.7 + hybrid×1, #1123), 'hybrid' (vector+FTS5 via RRF), 'vector' (similarity only), 'fts5' (keyword only), or 'graph' (hybrid + graph-signal reranking)", "default": "fusion" }
+                "strategy": { "type": "string", "enum": ["fusion", "hybrid", "vector", "fts5", "graph"], "description": "Recall strategy: 'fusion' (default since 0.16.0, weighted RRF of vector×1.7 + hybrid×1, #1123), 'hybrid' (vector+FTS5 via RRF), 'vector' (similarity only), 'fts5' (keyword only), or 'graph' (hybrid + graph-signal reranking)", "default": "fusion" },
+                "explain": { "type": "boolean", "description": "Return per-result ranking signals (#1160): vector similarity/rank, RRF contributions, jaccard/salience/recency/graph boosts. Memory-only — omitted type is treated as memory; explicit type=all/doc is rejected." }
             },
             "required": ["query"]
         }
@@ -312,6 +323,113 @@ fn tool_get() -> Value {
     })
 }
 
+fn tool_provenance() -> Value {
+    serde_json::json!({
+        "name": "uteke_provenance",
+        "description": "Full provenance report for a memory (#1172): author/source fields, trust tier, source hash at write vs live content hash (tamper evidence), and the full timeline event chain with actor + evidence. Use when auditing why a memory exists, who wrote it, and whether it changed after write.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Full UUID or unambiguous prefix" }
+            },
+            "required": ["id"]
+        }
+    })
+}
+
+/// Full provenance report for a memory (#1172 Fase 1).
+fn exec_provenance(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let id_arg = args["id"].as_str().ok_or("Missing 'id'")?;
+    let id = resolve_id(uteke, id_arg)?;
+
+    let report = uteke
+        .provenance(&id)
+        .map_err(|e| format!("Failed: {e}"))?
+        .ok_or_else(|| format!("Memory not found: {id}"))?;
+
+    let text = serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string());
+    Ok(ToolResult {
+        content: vec![McpContent::Text {
+            r#type: "text".to_string(),
+            text,
+        }],
+        is_error: false,
+    })
+}
+
+fn tool_contradictions() -> Value {
+    serde_json::json!({
+        "name": "uteke_contradictions",
+        "description": "List the contradiction resolution ledger (#1172): memories that were superseded and soft-deprecated by conflict resolution, with winner, reason, and timestamp. Audit what the pipeline decided without digging through timeline events.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "namespace": { "type": "string", "description": "Filter by namespace" },
+                "limit": { "type": "integer", "description": "Max entries (default 50)" }
+            },
+            "required": []
+        }
+    })
+}
+
+fn tool_contradictions_undo() -> Value {
+    serde_json::json!({
+        "name": "uteke_contradictions_undo",
+        "description": "Undo a contradiction resolution (#1172): restore a superseded memory to active, remove the supersession edge pair, and record the undo in the audit trail. Use when a conflict resolution was wrong.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Full UUID or unambiguous prefix of the RETIRED memory to restore" }
+            },
+            "required": ["id"]
+        }
+    })
+}
+
+/// Contradiction resolution ledger (#1172 Fase 2).
+fn exec_contradictions(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let namespace = args["namespace"].as_str();
+    let limit = args["limit"].as_u64().unwrap_or(50) as usize;
+
+    let resolutions = uteke
+        .contradiction_resolutions(namespace, limit)
+        .map_err(|e| format!("Failed: {e}"))?;
+
+    let text = serde_json::to_string_pretty(&resolutions).unwrap_or_else(|_| "[]".to_string());
+    Ok(ToolResult {
+        content: vec![McpContent::Text {
+            r#type: "text".to_string(),
+            text,
+        }],
+        is_error: false,
+    })
+}
+
+/// Undo a contradiction resolution (#1172 Fase 2).
+fn exec_contradictions_undo(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let id_arg = args["id"].as_str().ok_or("Missing 'id'")?;
+    let id = resolve_id(uteke, id_arg)?;
+
+    match uteke
+        .undo_supersession(&id)
+        .map_err(|e| format!("Failed: {e}"))?
+    {
+        Some(winner) => {
+            let text = format!(
+                "\u{2713} Restored memory {id}\n  was superseded by {winner}\n  supersession edges removed \u{2014} the pair is no longer flagged"
+            );
+            Ok(ToolResult {
+                content: vec![McpContent::Text {
+                    r#type: "text".to_string(),
+                    text,
+                }],
+                is_error: false,
+            })
+        }
+        None => Err(format!("No supersession found for memory: {id}")),
+    }
+}
+
 fn tool_supersede() -> Value {
     serde_json::json!({
         "name": "uteke_supersede",
@@ -341,7 +459,8 @@ fn tool_update() -> Value {
                 "metadata": { "type": "object", "description": "Replacement metadata JSON" },
                 "importance": { "type": "number", "description": "0.0–1.0" },
                 "pinned": { "type": "boolean", "description": "Pin (never decays) or unpin" },
-                "memory_type": { "type": "string", "description": "fact | procedure | preference | decision | context | note | insight | reference | event" }
+                "memory_type": { "type": "string", "description": "fact | procedure | preference | decision | context | note | insight | reference | event" },
+                "namespace": { "type": "string", "description": "Move the memory to this namespace (#1181 — plain move, no re-embed)" }
             },
             "required": ["id"]
         }
@@ -762,6 +881,37 @@ fn tool_tags_delete() -> Value {
     })
 }
 
+fn tool_namespace_rename() -> Value {
+    serde_json::json!({
+        "name": "uteke_namespace_rename",
+        "description": "Rename a namespace, merging into the target when it already exists. Namespaces are a derived view — the old name vanishes when its last memory moved (#1181).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "from": { "type": "string", "description": "Current namespace name" },
+                "to": { "type": "string", "description": "New namespace name (existing name = merge)" }
+            },
+            "required": ["from", "to"]
+        }
+    })
+}
+
+fn tool_namespace_delete() -> Value {
+    serde_json::json!({
+        "name": "uteke_namespace_delete",
+        "description": "Delete a namespace with an explicit strategy for its memories: refuse (default — error while any memory uses the name), merge (move all memories to `target`), or deprecate (soft-delete — restorable via promote, never hard-deleted) (#1181).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": { "type": "string", "description": "Namespace to delete" },
+                "strategy": { "type": "string", "enum": ["refuse", "merge", "deprecate"], "description": "Default: refuse" },
+                "target": { "type": "string", "description": "Target namespace when strategy = merge" }
+            },
+            "required": ["name"]
+        }
+    })
+}
+
 fn tool_pin() -> Value {
     serde_json::json!({
         "name": "uteke_pin",
@@ -899,6 +1049,40 @@ fn exec_recall(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
         },
         None => uteke_core::RecallStrategy::Fusion,
     };
+
+    // Explain mode (#1160): memory-only, bypasses unified results and
+    // returns full ranking signals per result. An omitted `type` (the
+    // documented default invocation) is accepted and treated as memory
+    // recall — only explicit all/doc are rejected (code-scanning fix:
+    // None maps to SearchType::All above, so the previous enum comparison
+    // wrongly rejected the default call).
+    if args["explain"].as_bool().unwrap_or(false) {
+        if !matches!(args["type"].as_str(), None | Some("memory")) {
+            return Err(
+                "explain is memory-only: pass \"type\": \"memory\" (or drop type)".to_string(),
+            );
+        }
+        let explained = uteke
+            .recall_explained(query, limit, tags_ref, namespace, strategy, min_score)
+            .map_err(|e| format!("Failed: {e}"))?;
+        if explained.is_empty() {
+            return Ok(ToolResult {
+                content: vec![McpContent::Text {
+                    r#type: "text".to_string(),
+                    text: "No results found.".to_string(),
+                }],
+                is_error: false,
+            });
+        }
+        let text = serde_json::to_string_pretty(&explained).unwrap_or_else(|_| "[]".to_string());
+        return Ok(ToolResult {
+            content: vec![McpContent::Text {
+                r#type: "text".to_string(),
+                text,
+            }],
+            is_error: false,
+        });
+    }
 
     // Use unified search when type is specified or default (all).
     // Fall back to legacy recall only for backward compat with existing MCP consumers.
@@ -1137,6 +1321,22 @@ fn exec_update(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
             }],
             is_error: true,
         });
+    }
+
+    // Namespace move (#1181) — plain column update, no re-embed needed.
+    if let Some(ns) = args["namespace"].as_str() {
+        let moved = uteke
+            .move_memory(&id, ns)
+            .map_err(|e| format!("Failed: {e}"))?;
+        if !moved {
+            return Ok(ToolResult {
+                content: vec![McpContent::Text {
+                    r#type: "text".to_string(),
+                    text: format!("Memory not found: {id}"),
+                }],
+                is_error: true,
+            });
+        }
     }
 
     Ok(ToolResult {
@@ -1856,14 +2056,18 @@ fn exec_room_list(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
 fn exec_room_delete(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
     let room_id = args["room_id"].as_str().ok_or("Missing 'room_id'")?;
 
-    uteke
+    let unlinked = uteke
         .delete_room(room_id)
         .map_err(|e| format!("Failed to delete room: {e}"))?;
+
+    let text = format!(
+        "Room '{room_id}' deleted. {unlinked} memory link(s) removed; the memories themselves are preserved in their namespaces (no longer linked to any room)."
+    );
 
     Ok(ToolResult {
         content: vec![McpContent::Text {
             r#type: "text".to_string(),
-            text: format!("Room deleted: {room_id}"),
+            text,
         }],
         is_error: false,
     })
@@ -2212,6 +2416,64 @@ fn exec_tags_delete(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
     })
 }
 
+/// Rename a namespace, merging into an existing target (#1181).
+fn exec_namespace_rename(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let from = args["from"].as_str().ok_or("Missing 'from'")?;
+    let to = args["to"].as_str().ok_or("Missing 'to'")?;
+
+    let result = uteke
+        .rename_namespace(from, to)
+        .map_err(|e| format!("Failed: {e}"))?;
+
+    let kind = if result.target_existed {
+        "merged into existing"
+    } else {
+        "renamed to"
+    };
+    Ok(ToolResult {
+        content: vec![McpContent::Text {
+            r#type: "text".to_string(),
+            text: format!(
+                "✓ Namespace '{}' {} '{}' — {} memories moved",
+                result.from, kind, result.to, result.moved
+            ),
+        }],
+        is_error: false,
+    })
+}
+
+/// Delete a namespace with an explicit memory-fate strategy (#1181).
+fn exec_namespace_delete(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
+    let name = args["name"].as_str().ok_or("Missing 'name'")?;
+    let strategy = args["strategy"].as_str().unwrap_or("refuse");
+    let target = args["target"].as_str();
+
+    let result = uteke
+        .delete_namespace(name, strategy, target)
+        .map_err(|e| format!("Failed: {e}"))?;
+
+    let text = match result.strategy.as_str() {
+        "merge" => format!(
+            "✓ Moved {} memories from '{}' to '{}' — namespace removed",
+            result.affected,
+            result.name,
+            result.target.as_deref().unwrap_or("?")
+        ),
+        "deprecate" => format!(
+            "✓ Soft-deleted {} memories in '{}' (restorable via promote; the name stays visible as deprecated-only)",
+            result.affected, result.name
+        ),
+        other => format!("✓ Namespace '{}' deleted (strategy={other})", result.name),
+    };
+    Ok(ToolResult {
+        content: vec![McpContent::Text {
+            r#type: "text".to_string(),
+            text,
+        }],
+        is_error: false,
+    })
+}
+
 fn exec_pin(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
     let id_arg = args["id"].as_str().ok_or("Missing 'id'")?;
     let id = resolve_id(uteke, id_arg)?;
@@ -2482,6 +2744,100 @@ mod supersession_mcp_tests {
             &serde_json::json!({"old_id": &old_short, "new_id": &old_short}),
         );
         assert!(err.is_err());
+
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod contradiction_mcp_tests {
+    use super::*;
+    use uteke_core::Uteke;
+
+    #[test]
+    fn exec_contradictions_list_and_undo_roundtrip() {
+        let dir = std::env::temp_dir().join(format!(
+            "scmcp-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+
+        let mk = |content: &str| -> String {
+            use uteke_core::memory::types::Memory;
+            let id = uuid::Uuid::new_v4().to_string();
+            let m = Memory {
+                id: id.clone(),
+                content: content.to_string(),
+                embedding: vec![0.5; 768],
+                tags: vec![],
+                metadata: serde_json::json!({}),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                namespace: "scmcp-ns".to_string(),
+                access_count: 0,
+                last_accessed: None,
+                deprecated: false,
+                deprecated_at: None,
+                valid_from: None,
+                valid_until: None,
+                memory_type: "decision".to_string(),
+                importance: 0.5,
+                pinned: false,
+                content_type: "text".to_string(),
+                slug: None,
+                source: None,
+                source_type: "user".to_string(),
+                author_type: "agent".to_string(),
+            };
+            uteke.store().insert(&m).unwrap();
+            id
+        };
+        let old = mk("old decision");
+        let new = mk("new decision");
+        uteke.supersede(&old, &new, Some("pivot")).unwrap();
+
+        // Ledger lists the superseded memory.
+        let result = exec_contradictions(
+            &uteke,
+            &serde_json::json!({"namespace": "scmcp-ns", "limit": 50}),
+        )
+        .unwrap();
+        assert!(!result.is_error);
+        let text = match &result.content[0] {
+            McpContent::Text { text, .. } => text.clone(),
+            #[allow(unreachable_patterns)]
+            _ => panic!("expected text content"),
+        };
+        let ledger: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let entries = ledger.as_array().unwrap();
+        assert_eq!(entries.len(), 1, "one entry expected: {text}");
+        assert_eq!(entries[0]["id"], serde_json::json!(old));
+
+        // Undo via short id (resolution contract).
+        let old_short: String = old.chars().take(8).collect();
+        let undone =
+            exec_contradictions_undo(&uteke, &serde_json::json!({"id": old_short})).unwrap();
+        assert!(!undone.is_error);
+
+        // Ledger empty after undo; the memory is active again.
+        let result = exec_contradictions(&uteke, &serde_json::json!({})).unwrap();
+        let text = match &result.content[0] {
+            McpContent::Text { text, .. } => text.clone(),
+            #[allow(unreachable_patterns)]
+            _ => panic!("expected text content"),
+        };
+        assert_eq!(text.trim(), "[]", "ledger must be empty after undo: {text}");
+        assert!(!uteke.get_by_id(&old).unwrap().unwrap().deprecated);
+
+        // Undo again → loud error (no supersession left).
+        let err = exec_contradictions_undo(&uteke, &serde_json::json!({"id": &old}));
+        assert!(err.is_err(), "second undo must error loudly");
 
         drop(uteke);
         std::fs::remove_dir_all(&dir).ok();

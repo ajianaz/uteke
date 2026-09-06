@@ -307,6 +307,35 @@ pub struct BulkDeleteResult {
     pub ids: Vec<String>,
 }
 
+/// Result of a namespace delete with an explicit strategy (#1181).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamespaceDeleteResult {
+    /// The deleted namespace name.
+    pub name: String,
+    /// Strategy that was applied.
+    pub strategy: String,
+    /// Memories affected by the strategy.
+    pub affected: usize,
+    /// Memories moved to `target` (only for the `merge` strategy).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// True when the namespace is now empty and its name disappears from listings.
+    pub empty: bool,
+}
+
+/// Result of a namespace rename/merge (#1181).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamespaceRenameResult {
+    /// The original namespace name.
+    pub from: String,
+    /// The new namespace name.
+    pub to: String,
+    /// Number of memories moved.
+    pub moved: usize,
+    /// True when `to` already existed (this call was a merge).
+    pub target_existed: bool,
+}
+
 /// Lightweight export format — no embedding vector (re-embedded on import).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportEntry {

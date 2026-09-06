@@ -124,6 +124,9 @@ pub enum Commands {
         /// When absent, recency uses the default weight (0.1). Use --no-recency to disable (#721).
         #[arg(long)]
         recency: Option<bool>,
+        /// Explain each result: show the ranking signals behind it (#1160)
+        #[arg(long)]
+        explain: bool,
         /// Follow relationship edges in memory metadata
         #[arg(long)]
         related: bool,
@@ -460,6 +463,26 @@ pub enum Commands {
         #[arg(long, default_value = "20")]
         limit: usize,
     },
+    /// Show the full provenance report for a memory (#1172)
+    Provenance {
+        /// Memory ID (UUID)
+        id: String,
+    },
+    /// Resolve a conflict: mark old_id superseded by new_id (#1053)
+    Supersede {
+        /// Full UUID or unambiguous prefix of the STALE memory
+        old: String,
+        /// Full UUID or unambiguous prefix of the CURRENT memory
+        new: String,
+        /// Why it was superseded (stored on the deprecation)
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Inspect the contradiction resolution ledger (#1172)
+    Contradictions {
+        #[command(subcommand)]
+        command: ContradictionCommands,
+    },
     /// Document operations — wiki/knowledge base (#406, #411)
     Doc {
         #[command(subcommand)]
@@ -666,6 +689,25 @@ pub enum TagCommands {
     },
 }
 
+/// Subcommands for the contradiction resolution ledger (#1172).
+#[derive(Subcommand)]
+pub enum ContradictionCommands {
+    /// List superseded-but-not-restored memories (the resolution ledger)
+    List {
+        /// Filter by namespace
+        #[arg(long)]
+        namespace: Option<String>,
+        /// Maximum entries to show
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
+    /// Restore a superseded memory — undoes the supersession pair
+    Undo {
+        /// Memory ID (UUID) of the retired memory to restore
+        id: String,
+    },
+}
+
 /// Subcommands for namespace management.
 #[derive(Subcommand)]
 pub enum NamespaceCommands {
@@ -680,6 +722,34 @@ pub enum NamespaceCommands {
     Switch {
         /// Namespace name to set as default
         name: String,
+    },
+    /// Move a memory to another namespace (#1181)
+    Move {
+        /// Memory ID
+        id: String,
+        /// Target namespace
+        namespace: String,
+    },
+    /// Rename a namespace — merges into the target when it already exists (#1181)
+    Rename {
+        /// Current namespace name
+        from: String,
+        /// New namespace name
+        to: String,
+    },
+    /// Delete a namespace with an explicit strategy for its memories (#1181)
+    Delete {
+        /// Namespace to delete
+        name: String,
+        /// What happens to its memories: refuse (default), merge, deprecate
+        #[arg(long, default_value = "refuse")]
+        strategy: String,
+        /// Target namespace when strategy = merge
+        #[arg(long)]
+        target: Option<String>,
+        /// Confirm the deletion (required)
+        #[arg(long)]
+        confirm: bool,
     },
 }
 

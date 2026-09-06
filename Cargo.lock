@@ -727,12 +727,13 @@ checksum = "26b73573e6edcd2af0cdf47bd6cb58f0b3839491263c314eaad1ccf24430e1de"
 
 [[package]]
 name = "flate2"
-version = "1.1.9"
+version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
+checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -1348,9 +1349,9 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "miniz_oxide"
-version = "0.8.9"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
 dependencies = [
  "adler2",
  "simd-adler32",
@@ -2755,9 +2756,9 @@ checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
 name = "usearch"
-version = "2.26.0"
+version = "2.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1cd7f672d20412962c457b11c858c6c5aecb949808a5345a95e1d671112bcf72"
+checksum = "884002b91c545f43b67e9eadbef70834502ad14c32df1ce8d72bdb56ab7d8be3"
 dependencies = [
  "cxx",
  "cxx-build",
@@ -2766,7 +2767,7 @@ dependencies = [
 
 [[package]]
 name = "uteke-cli"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "chrono",
  "clap",
@@ -2792,7 +2793,7 @@ dependencies = [
 
 [[package]]
 name = "uteke-core"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -2816,7 +2817,7 @@ dependencies = [
 
 [[package]]
 name = "uteke-mcp"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -2828,7 +2829,7 @@ dependencies = [
 
 [[package]]
 name = "uteke-server"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "chrono",
  "ctrlc",
@@ -2859,9 +2860,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.24.0"
+version = "1.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
+checksum = "b5772d71c9be8a8a6ac2117d949c5b224c1b72241bb611d9a3012edcf8af7812"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
@@ -2882,9 +2883,9 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "vecq-core"
-version = "0.1.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07959c480b6d1d1d0d80eb92fa322271d6c2f1ae69529d6b0fbefc6dd4c88693"
+checksum = "543ddd2e748c26c39bd8ca5ab9c43eb01ba0ca13750a1428b08e8c7dc0d9def7"
 
 [[package]]
 name = "version_check"
@@ -3002,9 +3003,9 @@ dependencies = [
 
 [[package]]
 name = "which"
-version = "8.0.5"
+version = "8.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f3ef584124b911bcc3875c2f1472e80f24361ceb789bd1c62b3e9a3df9ff43c"
+checksum = "bae2f2b2b816647a1cab1acc91f5bd20812d53cb344382635ec2181940c8034f"
 dependencies = [
  "libc",
 ]
@@ -3311,6 +3312,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34b31d188d9d685a4f9c7b46d6e36631b07058d2cfe190267adce54dc230bf12"
 
 [[package]]
 name = "zmij"

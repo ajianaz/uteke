@@ -63,19 +63,37 @@ pub(crate) fn run_repair(
         tracing::info!("Running repair");
     }
 
-    let report = uteke.repair().map_err(|e| format!("Repair failed: {e}"))?;
+    let mut report = uteke.repair().map_err(|e| format!("Repair failed: {e}"))?;
+
+    // Optional: re-embed memories with missing vectors.
+    // Runs BEFORE the Repair Report is printed so `index_after` and the
+    // "still differs" warning reflect the final state, not the intermediate
+    // rebuild that legitimately excludes NULL/empty-embedding rows (#1149).
+    let reembed_report = if reembed {
+        tracing::info!("Running repair --reembed (regenerating missing embeddings)");
+        match uteke.reembed_missing() {
+            Ok(r) => {
+                // Refresh the vector count to include newly appended vectors.
+                if let Ok(v) = uteke.verify() {
+                    report.index_after = v.index_count;
+                }
+                Some(Ok(r))
+            }
+            Err(e) => Some(Err(e)),
+        }
+    } else {
+        None
+    };
+
+    // Repair itself succeeded — always print its report (even if reembed failed).
     if cli.json {
         output::print_json(&report);
     } else {
         output::print_repair_human(&report);
     }
 
-    // Optional: re-embed memories with missing vectors.
-    if reembed {
-        tracing::info!("Running repair --reembed (regenerating missing embeddings)");
-        let reembed_report = uteke
-            .reembed_missing()
-            .map_err(|e| format!("Re-embed failed: {e}"))?;
+    if let Some(result) = reembed_report {
+        let reembed_report = result.map_err(|e| format!("Re-embed failed: {e}"))?;
         if cli.json {
             output::print_json(&reembed_report);
         } else {

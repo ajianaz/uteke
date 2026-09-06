@@ -160,14 +160,22 @@ pub(crate) fn run(
                 return Err("Operation not confirmed".to_string());
             }
 
-            uteke
+            let unlinked = uteke
                 .delete_room(room_id)
                 .map_err(|e| format!("Failed to delete room: {e}"))?;
 
             if cli.json {
-                println!("{}", serde_json::json!({"deleted": room_id}));
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "deleted": room_id,
+                        "unlinked_memories": unlinked,
+                    })
+                );
             } else {
-                println!("Room {room_id} deleted. Memories are preserved in their namespaces.");
+                println!(
+                    "Room {room_id} deleted. {unlinked} memory link(s) removed; memories are preserved in their namespaces."
+                );
             }
             Ok(())
         }
