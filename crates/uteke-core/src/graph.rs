@@ -330,11 +330,69 @@ impl<'a> GraphStore<'a> {
     /// work with plain memory IDs — `graph_edges.source_id/target_id` have
     /// FKs to `graph_nodes(id)`, so memory IDs must be mapped to nodes
     /// before insertion (#1180).
+    ///
+    /// #1187: newly created memory nodes carry a readable content preview
+    /// (first 60 chars) as their label instead of the raw memory UUID.
+    /// Legacy rows whose label is still the raw memory ID are upgraded
+    /// in place here.
     pub fn ensure_node_for_memory(&self, memory_id: &str) -> Result<String, Error> {
-        if let Some(id) = self.node_id_for_memory(memory_id)? {
-            return Ok(id);
+        let node_id = match self.node_id_for_memory(memory_id)? {
+            Some(id) => id,
+            None => {
+                let label = self.memory_node_label(memory_id)?;
+                return self.upsert_node(&label, Some("memory"), Some(memory_id));
+            }
+        };
+
+        // #1187 legacy upgrade: raw-UUID labels → readable preview labels.
+        // Entity nodes and non-UUID labels are untouched.
+        let label_is_memory_id: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM graph_nodes WHERE id = ?1 AND label = ?2 AND memory_id = ?2 AND entity_type = 'memory'",
+                params![node_id, memory_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .map_err(|e| Error::db("graph node label probe", e))?;
+        if label_is_memory_id {
+            let label = self.memory_node_label(memory_id)?;
+            self.conn
+                .execute(
+                    "UPDATE graph_nodes SET label = ?1 WHERE id = ?2",
+                    params![label, node_id],
+                )
+                .map_err(|e| Error::db("graph node label upgrade", e))?;
         }
-        self.upsert_node(memory_id, Some("memory"), Some(memory_id))
+        Ok(node_id)
+    }
+
+    /// Readable node label for a memory (#1187): `preview — <8-char id>`
+    /// so two memories with identical 60-char prefixes still get distinct
+    /// labels (upsert is label-keyed; a bare preview could collide or
+    /// hijack an existing entity node).
+    fn memory_node_label(&self, memory_id: &str) -> Result<String, Error> {
+        let preview = self.memory_label_preview(memory_id)?;
+        let short_id: String = memory_id.chars().take(8).collect();
+        Ok(match preview {
+            Some(p) => format!("{p} — {short_id}"),
+            None => memory_id.to_string(),
+        })
+    }
+
+    /// Content preview for a memory's node label (#1187): first 60 chars of
+    /// the memory content. `None` when the memory does not exist.
+    fn memory_label_preview(&self, memory_id: &str) -> Result<Option<String>, Error> {
+        let row: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT substr(content, 1, 60) FROM memories WHERE id = ?1",
+                params![memory_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| Error::db("memory label preview", e))?;
+        Ok(row.filter(|s| !s.trim().is_empty()))
     }
 
     /// Create an edge between two nodes. Ignores if edge already exists (INSERT OR IGNORE).
@@ -693,9 +751,14 @@ mod tests {
     fn setup() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         // Don't enable foreign_keys in test — graph_nodes references memories(id)
-        // which doesn't exist in this minimal test setup.
+        // which doesn't exist in this minimal test setup. A minimal memories
+        // table IS present so #1187 label previews can resolve.
         conn.execute_batch(
             r#"
+            CREATE TABLE memories (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL DEFAULT ''
+            );
             CREATE TABLE graph_nodes (
                 id TEXT PRIMARY KEY,
                 label TEXT NOT NULL COLLATE NOCASE,
@@ -780,13 +843,19 @@ mod tests {
     #[test]
     fn test_ensure_node_for_memory_creates_linked_node_idempotently() {
         let conn = setup();
+        conn.execute(
+            "INSERT INTO memories (id, content) VALUES ('01890a5d-ac96-774b-bcce-b30220900001', 'Deploy uses Bun, never npm')",
+            [],
+        )
+        .unwrap();
         let g = GraphStore::new(&conn);
         let mid = "01890a5d-ac96-774b-bcce-b30220900001";
         let first = g.ensure_node_for_memory(mid).unwrap();
         let second = g.ensure_node_for_memory(mid).unwrap();
         assert_eq!(first, second, "ensure must be idempotent");
         let node = g.get_node(&first).unwrap().expect("node must exist");
-        assert_eq!(node.label, mid);
+        // #1187: label is a readable content preview + short id, not the UUID.
+        assert_eq!(node.label, "Deploy uses Bun, never npm — 01890a5d");
         assert_eq!(node.entity_type.as_deref(), Some("memory"));
         assert_eq!(node.memory_id.as_deref(), Some(mid));
     }
@@ -997,5 +1066,153 @@ mod tests {
         let nodes = g.all_nodes().unwrap();
         assert_eq!(nodes.len(), 3);
         assert_eq!(nodes[0].label, "Alice"); // sorted
+    }
+
+    // ── #1187 legacy label upgrade + #1189 graph liveness ──────────────
+
+    #[test]
+    fn test_ensure_node_for_memory_upgrades_legacy_uuid_label() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO memories (id, content) VALUES ('legacy-mem-1', 'Vector index uses usearch by default')",
+            [],
+        )
+        .unwrap();
+        let g = GraphStore::new(&conn);
+        // Legacy row: raw memory UUID as the label (pre-#1187 servers).
+        let legacy_id = g
+            .upsert_node("legacy-mem-1", Some("memory"), Some("legacy-mem-1"))
+            .unwrap();
+
+        let node = g.get_node(&legacy_id).unwrap().expect("node exists");
+        assert_eq!(
+            node.label, "legacy-mem-1",
+            "precondition: legacy UUID label"
+        );
+
+        // First ensure() must upgrade the label in place, keeping the ID.
+        let id = g.ensure_node_for_memory("legacy-mem-1").unwrap();
+        assert_eq!(id, legacy_id, "node id must be preserved");
+        let node = g.get_node(&id).unwrap().expect("node exists");
+        assert_eq!(
+            node.label, "Vector index uses usearch by default — legacy-m",
+            "label upgraded to readable preview"
+        );
+    }
+
+    #[test]
+    fn test_graph_data_filters_stale_memory_nodes() {
+        let uteke = crate::Uteke::open(":memory:").unwrap();
+        // Embedder-free seeding (CI has no ONNX runtime) — the graph layer
+        // under test is storage-only, vectors are opaque bytes here.
+        let embedding = vec![0.1_f32; 768];
+        let keep = uteke
+            .remember_precomputed(
+                "active memory about caching",
+                &[],
+                None,
+                Some("gns"),
+                "fact",
+                "text",
+                &embedding,
+            )
+            .unwrap();
+        let gone = uteke
+            .remember_precomputed(
+                "memory that will be forgotten",
+                &[],
+                None,
+                Some("gns"),
+                "fact",
+                "text",
+                &embedding,
+            )
+            .unwrap();
+        let dep = uteke
+            .remember_precomputed(
+                "memory that will be deprecated",
+                &[],
+                None,
+                Some("gns"),
+                "fact",
+                "text",
+                &embedding,
+            )
+            .unwrap();
+        uteke.forget(&gone).unwrap();
+        uteke.supersede(&dep, &keep, Some("pivot")).unwrap();
+
+        let gs = crate::GraphStore::new(uteke.graph_store());
+        // One node per live memory + the stale ones (the bug setup).
+        let n_keep = gs.ensure_node_for_memory(&keep).unwrap();
+        let n_gone = gs.ensure_node_for_memory(&gone).unwrap();
+        let n_dep = gs.ensure_node_for_memory(&dep).unwrap();
+        gs.add_edge(&n_keep, &n_dep, "related", 1.0).unwrap();
+        gs.add_edge(&n_dep, &n_gone, "related", 1.0).unwrap();
+
+        // No namespace: stale nodes (forgotten + deprecated) must vanish.
+        let data = uteke.graph_data(None).unwrap();
+        let ids: Vec<&str> = data.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(
+            !ids.contains(&n_gone.as_str()),
+            "forgotten memory's node must be filtered (#1189)"
+        );
+        assert!(
+            !ids.contains(&n_dep.as_str()),
+            "deprecated memory's node must be filtered (#1189)"
+        );
+        assert!(
+            ids.contains(&n_keep.as_str()),
+            "live memory's node must stay"
+        );
+        // Edges touching removed nodes are gone too.
+        assert_eq!(
+            data.edges.len(),
+            0,
+            "all edges touched stale nodes: {:?}",
+            data.edges
+        );
+        // Stats reflect the filtered graph.
+        assert_eq!(data.stats.node_count, ids.len());
+    }
+
+    #[test]
+    fn test_graph_data_namespace_filter_still_excludes_other_ns() {
+        let uteke = crate::Uteke::open(":memory:").unwrap();
+        let embedding = vec![0.1_f32; 768];
+        let in_ns = uteke
+            .remember_precomputed(
+                "in target namespace",
+                &[],
+                None,
+                Some("ns-a"),
+                "fact",
+                "text",
+                &embedding,
+            )
+            .unwrap();
+        let other = uteke
+            .remember_precomputed(
+                "in another namespace",
+                &[],
+                None,
+                Some("ns-b"),
+                "fact",
+                "text",
+                &embedding,
+            )
+            .unwrap();
+        let gs = crate::GraphStore::new(uteke.graph_store());
+        let _ = gs.ensure_node_for_memory(&in_ns).unwrap();
+        let _ = gs.ensure_node_for_memory(&other).unwrap();
+
+        let data = uteke.graph_data(Some("ns-a")).unwrap();
+        let mids: Vec<&str> = data
+            .nodes
+            .iter()
+            .filter_map(|n| n.memory_id.as_deref())
+            .collect();
+        assert!(mids.contains(&in_ns.as_str()));
+        assert!(!mids.contains(&other.as_str()), "other ns must be excluded");
     }
 }
