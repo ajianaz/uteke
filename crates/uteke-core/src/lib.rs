@@ -1364,18 +1364,34 @@ impl Uteke {
     /// Get graph nodes + edges for visualization (#408).
     ///
     /// Returns all nodes and edges in the knowledge graph, optionally
-    /// limited by namespace.
+    /// limited by namespace. Stale memory nodes are excluded in every
+    /// path (#1189): the namespace path matches `namespace AND
+    /// deprecated = 0`; the no-namespace path drops nodes whose parent
+    /// memory is missing (hard-deleted) or deprecated — so the graph
+    /// does not grow stale nodes on every forget/deprecate.
     pub fn graph_data(&self, namespace: Option<&str>) -> Result<GraphData, Error> {
         let gs = GraphStore::new(&self.store.conn);
         let nodes = gs.all_nodes()?;
         let edges = gs.all_edges()?;
         let stats = gs.stats()?;
 
+        // Liveness set: memories that may appear in the graph — existing
+        // AND not deprecated (#1189). Legacy graph_rows whose memory was
+        // hard-deleted drop out here too (orphaned nodes).
+        let live_memory_ids: std::collections::HashSet<String> = self
+            .store
+            .conn
+            .prepare("SELECT id FROM memories WHERE deprecated = 0")
+            .map_err(|e| Error::db("Failed to prepare liveness query", e))?
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| Error::db("Failed to query live memories", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+
         // Filter by namespace if specified.
         // Memory-linked nodes are filtered by their parent memory's namespace.
         // Entity nodes (no memory_id) are always included (shared across namespaces).
         let (nodes, edges) = if let Some(ns) = namespace {
-            // Build a set of memory IDs that belong to this namespace.
             let ns_memory_ids: std::collections::HashSet<String> = self
                 .store
                 .conn
@@ -1411,7 +1427,33 @@ impl Uteke {
 
             (filtered_nodes, filtered_edges)
         } else {
-            (nodes, edges)
+            // #1189: no namespace → still drop nodes whose memory is gone
+            // or deprecated (the bug: this path returned all_nodes() raw).
+            let filtered_nodes: Vec<GraphNode> = nodes
+                .into_iter()
+                .filter(|n| match &n.memory_id {
+                    None => true,
+                    Some(mid) => live_memory_ids.contains(mid),
+                })
+                .collect();
+            let node_ids: std::collections::HashSet<&str> =
+                filtered_nodes.iter().map(|n| n.id.as_str()).collect();
+            let filtered_edges: Vec<GraphEdge> = edges
+                .into_iter()
+                .filter(|e| {
+                    node_ids.contains(e.source_id.as_str())
+                        && node_ids.contains(e.target_id.as_str())
+                })
+                .collect();
+            (filtered_nodes, filtered_edges)
+        };
+
+        // Stats count the FILTERED graph, not the raw tables (#1189) —
+        // otherwise GET /graph reported node counts that included stale rows.
+        let stats = crate::graph::GraphStats {
+            node_count: nodes.len(),
+            edge_count: edges.len(),
+            relation_types: stats.relation_types,
         };
 
         Ok(GraphData {

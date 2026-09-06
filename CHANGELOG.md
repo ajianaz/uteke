@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Graph data returned stale nodes (#1189)** — `GET /graph` without a namespace returned every `graph_nodes` row raw, including nodes whose parent memory had been forgotten or deprecated; with soft-delete the store accumulated stale nodes on every conflict resolution. Memory-linked nodes are now filtered by liveness (memory exists and `deprecated = 0`) in every `graph_data` path, edges touching removed nodes are dropped, and `stats` counts the filtered graph.
+- **Memory graph nodes labeled with raw UUIDs (#1187)** — `ensure_node_for_memory` now labels new memory nodes with a readable content preview (first 60 chars of the memory) instead of the raw memory UUID, and upgrades legacy UUID-labeled rows in place on next access. Entity nodes are unaffected.
+
 ### Added
 
 - **Explain recall (#1160)** — `explain` mode on every recall surface shows WHY each memory ranked where it did: vector similarity and rank, FTS rank, RRF score with per-channel fusion contributions, and jaccard/salience/recency/graph boost deltas. Surfaces: `uteke recall "…" --explain` (human-readable, combine with `--json` for machine output), `POST /recall` with `"explain": true` (memory-only — combined with `search_type`/`at`/`before`/`after` returns 400), and the `explain` flag on the MCP `uteke_recall` tool. The explanation path replays the active strategy's exact pipeline (same channel depths, RRF constants, and boost order) while bypassing the recall cache, so the explanation always matches the returned results; fts5 explanation works without an embedder, other strategies embed the query once (~50 ms, same as a cold recall).
