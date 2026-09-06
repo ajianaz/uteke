@@ -286,7 +286,7 @@ fn tool_recall() -> Value {
                 "min_score": { "type": "number", "description": "Minimum similarity score 0..1 (default: 0.0)" },
                 "type": { "type": "string", "enum": ["all", "memory", "doc"], "description": "Search type: 'all' (default, unified), 'memory', or 'doc'" },
                 "strategy": { "type": "string", "enum": ["fusion", "hybrid", "vector", "fts5", "graph"], "description": "Recall strategy: 'fusion' (default since 0.16.0, weighted RRF of vector×1.7 + hybrid×1, #1123), 'hybrid' (vector+FTS5 via RRF), 'vector' (similarity only), 'fts5' (keyword only), or 'graph' (hybrid + graph-signal reranking)", "default": "fusion" },
-                "explain": { "type": "boolean", "description": "Return per-result ranking signals (#1160): vector similarity/rank, RRF contributions, jaccard/salience/recency/graph boosts. Memory-only — rejected with type=all/doc." }
+                "explain": { "type": "boolean", "description": "Return per-result ranking signals (#1160): vector similarity/rank, RRF contributions, jaccard/salience/recency/graph boosts. Memory-only — omitted type is treated as memory; explicit type=all/doc is rejected." }
             },
             "required": ["query"]
         }
@@ -1051,9 +1051,13 @@ fn exec_recall(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
     };
 
     // Explain mode (#1160): memory-only, bypasses unified results and
-    // returns full ranking signals per result.
+    // returns full ranking signals per result. An omitted `type` (the
+    // documented default invocation) is accepted and treated as memory
+    // recall — only explicit all/doc are rejected (code-scanning fix:
+    // None maps to SearchType::All above, so the previous enum comparison
+    // wrongly rejected the default call).
     if args["explain"].as_bool().unwrap_or(false) {
-        if search_type != uteke_core::SearchType::Memory {
+        if !matches!(args["type"].as_str(), None | Some("memory")) {
             return Err(
                 "explain is memory-only: pass \"type\": \"memory\" (or drop type)".to_string(),
             );

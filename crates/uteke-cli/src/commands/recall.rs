@@ -112,11 +112,14 @@ pub(crate) fn run_recall(
     // --explain (#1160): memory-recall explanation mode. Runs the real
     // strategy pipeline with per-stage instrumentation and prints the
     // signals behind each result. Mutually exclusive with the unified
-    // search surface (docs/entities) — explanation is memory-only.
+    // search surface (docs/entities) — explanation is memory-only. An
+    // omitted --type (the default invocation) is accepted and treated as
+    // memory recall; only explicit --type doc is rejected (code-scanning
+    // fix: None maps to SearchType::All, which the old guard rejected).
     if explain {
-        if use_unified && resolved_search_type != SearchType::Memory {
+        if resolved_search_type == SearchType::Document {
             return Err(
-                "--explain works on memory recall. Drop --type or use --type memory.".to_string(),
+                "--explain works on memory recall; --type doc is not supported.".to_string(),
             );
         }
         if at.is_some() {

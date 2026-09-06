@@ -172,8 +172,17 @@ impl Uteke {
         // (ordered results with raw base scores, signals per id)
         let (mut results, mut signals): (Vec<SearchResult>, HashMap<String, Sig>) = match strategy {
             RecallStrategy::Vector => {
-                // The real vector arm at the caller's limit.
-                let results = self.recall(query, limit, tags_filter, namespace, 0.0, None, None)?;
+                // The real vector arm via compute_recall (same entry point
+                // the dispatcher uses — keeps the cache/boost contract of
+                // this function consistent across strategies).
+                let results = self.compute_recall(
+                    RecallStrategy::Vector,
+                    query,
+                    limit,
+                    tags_filter,
+                    namespace,
+                    0.0,
+                )?;
                 let ranks = rank_map(results.iter());
                 let mut sigs: HashMap<String, Sig> = HashMap::new();
                 for sr in &results {
