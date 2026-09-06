@@ -44,6 +44,14 @@ host = "127.0.0.1"
 
 # Server port
 port = 8767
+
+[vector]
+# Vector search engine when the binary ships BOTH engines (official builds):
+# "usearch" (default — HNSW, C++ FFI, fastest) or "vecq" (training-free
+# quantization, zero C++ dep — mobile/slim builds). Switching engines on an
+# existing store auto-rebuilds the index from SQLite on next open (#1168).
+# Env override: UTEKE_VECTOR_BACKEND=usearch|vecq
+backend = "usearch"
 ```
 
 ## Server Mode
