@@ -215,8 +215,14 @@ impl Uteke {
             RecallStrategy::Hybrid | RecallStrategy::Graph => {
                 // recall_rrf(window): sub-channels run at window*3 depth.
                 let depth = boost_window.saturating_mul(3);
-                let vec_list =
-                    self.recall(query, depth, tags_filter, namespace, 0.0, None, None)?;
+                let vec_list = self.compute_recall(
+                    RecallStrategy::Vector,
+                    query,
+                    depth,
+                    tags_filter,
+                    namespace,
+                    0.0,
+                )?;
                 let fts_list: Vec<(Memory, f64)> = {
                     let fts = match self.store.search_fts5(query, namespace, depth) {
                         Ok(r) if !r.is_empty() => r,
