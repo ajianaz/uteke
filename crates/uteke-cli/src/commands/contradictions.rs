@@ -81,3 +81,50 @@ pub(crate) fn run(cli: &Cli, uteke: &Uteke, command: &ContradictionCommands) -> 
 fn short_id(id: &str) -> String {
     id.chars().take(8).collect()
 }
+
+/// `uteke supersede old new [--reason text]` (#1053) — CLI parity with the
+/// MCP tool and HTTP surface. Accepts full UUIDs or unambiguous prefixes.
+pub(crate) fn supersede(
+    cli: &Cli,
+    uteke: &Uteke,
+    old: &str,
+    new: &str,
+    reason: Option<&str>,
+) -> Result<(), String> {
+    tracing::info!("Superseding {old} -> {new}");
+    let resolve = |id: &str| -> Result<String, String> {
+        if id.len() == 36 {
+            return Ok(id.to_string());
+        }
+        match uteke
+            .resolve_id_prefix(id)
+            .map_err(|e| format!("Failed to resolve id: {e}"))?
+        {
+            Some(full) => Ok(full),
+            None => Err(format!("No memory matches id prefix '{id}'")),
+        }
+    };
+    let old_id = resolve(old)?;
+    let new_id = resolve(new)?;
+
+    let (o, n) = uteke
+        .supersede(&old_id, &new_id, reason)
+        .map_err(|e| format!("Failed to supersede: {e}"))?;
+    if cli.json {
+        output::print_json(&serde_json::json!({
+            "superseded": o,
+            "by": n,
+            "reason": reason,
+        }));
+    } else {
+        println!("✓ Superseded {} → {}", short_id(&o), short_id(&n));
+        if let Some(r) = reason {
+            println!("  reason: {r}");
+        }
+        println!(
+            "  recall now flags the pair; restore: uteke contradictions undo {}",
+            short_id(&o)
+        );
+    }
+    Ok(())
+}

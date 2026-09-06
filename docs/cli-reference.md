@@ -284,6 +284,16 @@ Hash verdicts: `✓ matches` (content unchanged since write), `✗ MISMATCH`
 (content modified after write — investigate), `—` (memory predates
 schema v18; hash will be recorded on next content update).
 
+## uteke supersede
+
+Resolve a conflict: mark the old memory superseded by a newer one (#1053) —
+wires the supersession edge pair, soft-deprecates the old memory, and records
+the resolution in the contradiction ledger (#1172).
+
+```bash
+uteke supersede <old-memory-id> <new-memory-id> --reason "decision pivot"
+```
+
 ## uteke contradictions
 
 Inspect the contradiction resolution ledger (#1172) — memories that were

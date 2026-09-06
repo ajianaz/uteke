@@ -468,6 +468,16 @@ pub enum Commands {
         /// Memory ID (UUID)
         id: String,
     },
+    /// Resolve a conflict: mark old_id superseded by new_id (#1053)
+    Supersede {
+        /// Full UUID or unambiguous prefix of the STALE memory
+        old: String,
+        /// Full UUID or unambiguous prefix of the CURRENT memory
+        new: String,
+        /// Why it was superseded (stored on the deprecation)
+        #[arg(long)]
+        reason: Option<String>,
+    },
     /// Inspect the contradiction resolution ledger (#1172)
     Contradictions {
         #[command(subcommand)]
