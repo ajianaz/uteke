@@ -9,6 +9,8 @@
 
 ### Added
 
+- **Contradiction benchmark segment (#1172, phase 3)** — `benchmarks/longmemeval/contradiction_segment.py`: 40-topic active-store segment measuring conflict-resolution quality end-to-end. Baseline (both facts active) vs resolved (superseded): fusion winner@1 0.975 → 1.000, stale@5 0.825 → 0.000. Published in `benchmarks/longmemeval/RESULTS.md`. Also adds `uteke supersede <old> <new> [--reason]` — CLI surface parity for supersession (previously MCP/HTTP only).
+
 - **`/list` pagination metadata (#1188)** — `POST /list` accepts `"include_meta": true` to respond with an envelope `{memories, total, has_more, next_offset}` (`next_offset` is `null` on the last page) so clients no longer blind-paginate with 100-row guesses. The default response is unchanged (bare array) — existing clients are untouched; `include_meta` is ignored in `at` (point-in-time) mode, which stays a bare array.
 
 - **Explain recall (#1160)** — `explain` mode on every recall surface shows WHY each memory ranked where it did: vector similarity and rank, FTS rank, RRF score with per-channel fusion contributions, and jaccard/salience/recency/graph boost deltas. Surfaces: `uteke recall "…" --explain` (human-readable, combine with `--json` for machine output), `POST /recall` with `"explain": true` (memory-only — combined with `search_type`/`at`/`before`/`after` returns 400), and the `explain` flag on the MCP `uteke_recall` tool. The explanation path replays the active strategy's exact pipeline (same channel depths, RRF constants, and boost order) while bypassing the recall cache, so the explanation always matches the returned results; fts5 explanation works without an embedder, other strategies embed the query once (~50 ms, same as a cold recall).

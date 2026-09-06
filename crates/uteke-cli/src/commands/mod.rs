@@ -391,6 +391,10 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
             crate::commands::contradictions::run(cli, uteke, command)
         }
 
+        Commands::Supersede { old, new, reason } => {
+            crate::commands::contradictions::supersede(cli, uteke, old, new, reason.as_deref())
+        }
+
         Commands::Provenance { id } => {
             let report = uteke
                 .provenance(id)
