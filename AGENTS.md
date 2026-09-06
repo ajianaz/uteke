@@ -36,3 +36,10 @@ When develop→main conflicts, do NOT hand-resolve server-side (protected branch
 rejects direct pushes). Instead: branch from the release commit, `git merge main`,
 resolve keeping develop's side (unless main carries unique content — verify), push
 the branch as `chore/release-*`, and open the release PR from it.
+
+## Source of truth for workflow standards
+
+The canonical workflow SOP (merge gate, release flow, governance) lives in the
+uteke room `codecora-workflow-standard` (namespace `codecora`) on the shared
+store. This file is the repo-enforced subset — when rules disagree, the room
+wins, and this file gets updated in the same commit that changes the rule.
