@@ -128,6 +128,21 @@ pub(crate) fn run_recall(
         if related {
             return Err("--explain and --related cannot be used together".to_string());
         }
+        if entity.is_some() {
+            return Err("--explain and --entity cannot be used together".to_string());
+        }
+        if category.is_some() {
+            return Err("--explain and --category cannot be used together".to_string());
+        }
+        if where_filter.is_some() {
+            return Err("--explain and --where cannot be used together".to_string());
+        }
+        if context {
+            return Err("--explain and --context cannot be used together".to_string());
+        }
+        if enrich {
+            return Err("--explain and --enrich cannot be used together".to_string());
+        }
         let explained = uteke
             .recall_explained(query, limit, tags_filter, ns, resolved_strategy, min_score)
             .map_err(|e| format!("Failed to recall: {e}"))?;

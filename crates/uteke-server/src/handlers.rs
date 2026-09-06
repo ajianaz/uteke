@@ -388,6 +388,13 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                             "explain cannot be combined with at/before/after",
                         );
                     }
+                    if entity_filter.is_some() || category_filter.is_some() || req_data.enrich {
+                        return ctx.error_response_for(
+                            req,
+                            400,
+                            "explain cannot be combined with entity/category/enrich",
+                        );
+                    }
                     return match uteke.recall_explained(
                         &req_data.query,
                         limit,
@@ -3470,5 +3477,15 @@ mod explain_recall_api_tests {
         .to_string();
         let (status, _) = app.call(Method::Post, "/recall", Some(bad));
         assert_eq!(status, 400, "explain + at must 400");
+
+        // explain + entity → 400 (filter would be silently dropped).
+        let bad = serde_json::json!({
+            "query": "quick brown fox",
+            "entity": "staging",
+            "explain": true
+        })
+        .to_string();
+        let (status, _) = app.call(Method::Post, "/recall", Some(bad));
+        assert_eq!(status, 400, "explain + entity must 400");
     }
 }
