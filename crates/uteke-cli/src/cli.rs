@@ -124,6 +124,9 @@ pub enum Commands {
         /// When absent, recency uses the default weight (0.1). Use --no-recency to disable (#721).
         #[arg(long)]
         recency: Option<bool>,
+        /// Explain each result: show the ranking signals behind it (#1160)
+        #[arg(long)]
+        explain: bool,
         /// Follow relationship edges in memory metadata
         #[arg(long)]
         related: bool,

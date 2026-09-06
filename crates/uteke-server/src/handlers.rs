@@ -370,6 +370,40 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                     None => uteke_core::RecallStrategy::Fusion,
                 };
 
+                // Explain mode (#1160): memory-only recall with per-result
+                // ranking signals. Mutually exclusive with the unified /
+                // time-travel / temporal surfaces.
+                if req_data.explain {
+                    if req_data.search_type.is_some() {
+                        return ctx.error_response_for(
+                            req,
+                            400,
+                            "explain is memory-only: omit search_type",
+                        );
+                    }
+                    if point_in_time.is_some() || has_temporal {
+                        return ctx.error_response_for(
+                            req,
+                            400,
+                            "explain cannot be combined with at/before/after",
+                        );
+                    }
+                    return match uteke.recall_explained(
+                        &req_data.query,
+                        limit,
+                        tags_filter,
+                        ns(&req_data.namespace),
+                        strategy,
+                        min_score,
+                    ) {
+                        Ok(explained) => ctx.ok_response_for(req, &explained),
+                        Err(e) => {
+                            error!("Explain recall error: {e}");
+                            ctx.error_response_for(req, 500, "Internal server error")
+                        }
+                    };
+                }
+
                 // Unified search path (#531): when search_type is specified,
                 // use recall_unified. Entity/category filters are passed
                 // through to the core recall candidate loop (#663).
@@ -3318,5 +3352,123 @@ mod contradiction_api_tests {
             Some("not-json".into()),
         );
         assert_eq!(status, 400);
+    }
+}
+
+// ── Explain recall API (#1160) ──────────────────────────────────────
+
+#[cfg(test)]
+mod explain_recall_api_tests {
+    use super::*;
+    use tiny_http::TestRequest;
+
+    struct ExplainApp {
+        uteke: Mutex<Uteke>,
+    }
+
+    impl ExplainApp {
+        fn new() -> Self {
+            // No embedder: tests use the fts5 strategy, which needs no
+            // query embedding (CI-safe without ONNX).
+            Self {
+                uteke: Mutex::new(
+                    Uteke::open_with_backend(":memory:", None)
+                        .expect("open in-memory uteke without embedder"),
+                ),
+            }
+        }
+
+        fn call(
+            &self,
+            method: Method,
+            url: &str,
+            body: Option<String>,
+        ) -> (u16, serde_json::Value) {
+            let mut req = match body {
+                Some(b) => {
+                    let leaked: &'static str = Box::leak(b.into_boxed_str());
+                    TestRequest::new()
+                        .with_method(method)
+                        .with_path(url)
+                        .with_body(leaked)
+                        .into()
+                }
+                None => TestRequest::new().with_method(method).with_path(url).into(),
+            };
+            let ctx = ReqCtx {
+                auth_token_hash: None,
+                read_only_token_hash: None,
+                cors_origins: Vec::new(),
+                recall_config: None,
+                extraction_config: None,
+            };
+            let resp = route(&self.uteke, &ctx, &mut req);
+            let status = resp.status_code().0;
+            let bytes = resp.into_reader().into_inner();
+            let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+            (status, json)
+        }
+
+        fn remember_in(&self, content: &str, namespace: &str) -> String {
+            let body =
+                serde_json::json!({ "content": content, "namespace": namespace }).to_string();
+            let (status, resp) = self.call(Method::Post, "/remember", Some(body));
+            assert_eq!(status, 200, "remember must succeed: {resp}");
+            resp["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("remember response must carry id: {resp}"))
+                .to_string()
+        }
+    }
+
+    #[test]
+    fn explain_fts5_returns_signals_and_guards() {
+        let app = ExplainApp::new();
+        let fox_id = app.remember_in("The quick brown fox jumps over the lazy dog", "explain-ns");
+        app.remember_in(
+            "Completely unrelated content about gardening tools",
+            "explain-ns",
+        );
+
+        // Body built separately so the api_registry route scanner does not
+        // mistake this literal for a handler route arm.
+        let body = serde_json::json!({
+            "query": "quick brown fox",
+            "limit": 5,
+            "namespace": "explain-ns",
+            "strategy": "fts5",
+            "explain": true
+        })
+        .to_string();
+        let (status, resp) = app.call(Method::Post, "/recall", Some(body));
+        assert_eq!(status, 200, "{resp}");
+        let arr = resp.as_array().expect("explained results array");
+        assert!(!arr.is_empty(), "fts5 must find the fox");
+        let first = &arr[0];
+        assert_eq!(first["memory"]["id"], serde_json::json!(fox_id));
+        let ex = &first["explanation"];
+        assert_eq!(ex["strategy"], serde_json::json!("fts5"));
+        assert_eq!(ex["fts_rank"], serde_json::json!(1));
+        assert!(ex["final_score"].is_number(), "final_score must exist");
+
+        // explain + search_type → 400 (memory-only feature).
+        let bad = serde_json::json!({
+            "query": "quick brown fox",
+            "search_type": "all",
+            "explain": true
+        })
+        .to_string();
+        let (status, _) = app.call(Method::Post, "/recall", Some(bad));
+        assert_eq!(status, 400, "explain + search_type must 400");
+
+        // explain + at → 400.
+        let bad = serde_json::json!({
+            "query": "quick brown fox",
+            "at": "2026-01-01T00:00:00Z",
+            "explain": true
+        })
+        .to_string();
+        let (status, _) = app.call(Method::Post, "/recall", Some(bad));
+        assert_eq!(status, 400, "explain + at must 400");
     }
 }
