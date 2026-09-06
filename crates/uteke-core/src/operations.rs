@@ -676,7 +676,9 @@ impl crate::Uteke {
     ///
     /// Callers must NOT cache inside this method — the dispatcher owns the
     /// cache put and applies salience/recency boosts exactly once.
-    fn compute_recall(
+    /// `pub(crate)` for the #1160 explanation path, which replays the same
+    /// building blocks stage-by-stage.
+    pub(crate) fn compute_recall(
         &self,
         strategy: RecallStrategy,
         query: &str,
@@ -2233,16 +2235,17 @@ mod recall_cache_parity_tests {
 /// Fusion weights benchmark-tuned on LongMemEval fast50 (#1123):
 /// plateau [1.7, 1.9] → R@5 0.98; 1.7 chosen mid-plateau.
 /// k=60 matches the k used by recall_rrf.
-const FUSION_W_VECTOR: f64 = 1.7;
-const FUSION_W_HYBRID: f64 = 1.0;
-const FUSION_RRF_K: f64 = 60.0;
+pub(crate) const FUSION_W_VECTOR: f64 = 1.7;
+pub(crate) const FUSION_W_HYBRID: f64 = 1.0;
+pub(crate) const FUSION_RRF_K: f64 = 60.0;
 
 /// Weighted RRF fuse of two complete SearchResult rankings (#1123).
 ///
 /// Deduplicates by memory id (first occurrence keeps the Memory payload),
 /// sorts by fused score descending, and rewrites each result's score to the
 /// fused RRF score. No truncation — the caller truncates to its window.
-fn rrf_fuse_weighted(
+/// `pub(crate)` for the #1160 explanation path, which replays the same fuse.
+pub(crate) fn rrf_fuse_weighted(
     primary: Vec<SearchResult>,
     secondary: Vec<SearchResult>,
     w_primary: f64,

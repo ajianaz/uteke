@@ -113,7 +113,7 @@ pub const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         method: "POST",
         path: "/recall",
-        description: "Semantic search — recall memories by meaning. Returns ranked results.",
+        description: "Semantic search — recall memories by meaning. Returns ranked results. Set `explain: true` (#1160) to include per-result ranking signals (vector similarity/rank, RRF contributions, boosts); memory-only recall.",
         request_type: Some("RecallRequest"),
         response_type: None,
         excludes_deprecated: true,

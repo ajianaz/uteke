@@ -304,7 +304,7 @@ Store a new memory. Accepts content, tags, namespace, type, metadata.
 
 #### 🟡 `POST` `/recall`
 
-Semantic search — recall memories by meaning. Returns ranked results.
+Semantic search — recall memories by meaning. Returns ranked results. Set `explain: true` (#1160) to include per-result ranking signals (vector similarity/rank, RRF contributions, boosts); memory-only recall.
 
 *Excludes deprecated memories from results.*
 
@@ -693,6 +693,9 @@ RFC3339 timestamp (#902). |
 When true, populates `linked_doc_slugs` on memory results and
 `linked_memory_ids` on document results. |
 | `entity` | any | No | Filter by entity metadata. |
+| `explain` | `boolean` | No | Explain mode (#1160): return per-result ranking signals alongside
+each memory. Memory-only recall — rejected (400) together with
+search_type/unified, at, before/after. |
 | `limit` | `integer` | No |  |
 | `min_score` | any | No | Minimum similarity score (0.0-1.0). Results below are filtered.
 Default: 0.0 (no filtering). Use `strict=true` for 0.5 default (#995). |

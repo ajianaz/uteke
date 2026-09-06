@@ -285,7 +285,8 @@ fn tool_recall() -> Value {
                 "tags": { "type": "array", "items": { "type": "string" }, "description": "Filter by tags (optional)" },
                 "min_score": { "type": "number", "description": "Minimum similarity score 0..1 (default: 0.0)" },
                 "type": { "type": "string", "enum": ["all", "memory", "doc"], "description": "Search type: 'all' (default, unified), 'memory', or 'doc'" },
-                "strategy": { "type": "string", "enum": ["fusion", "hybrid", "vector", "fts5", "graph"], "description": "Recall strategy: 'fusion' (default since 0.16.0, weighted RRF of vector×1.7 + hybrid×1, #1123), 'hybrid' (vector+FTS5 via RRF), 'vector' (similarity only), 'fts5' (keyword only), or 'graph' (hybrid + graph-signal reranking)", "default": "fusion" }
+                "strategy": { "type": "string", "enum": ["fusion", "hybrid", "vector", "fts5", "graph"], "description": "Recall strategy: 'fusion' (default since 0.16.0, weighted RRF of vector×1.7 + hybrid×1, #1123), 'hybrid' (vector+FTS5 via RRF), 'vector' (similarity only), 'fts5' (keyword only), or 'graph' (hybrid + graph-signal reranking)", "default": "fusion" },
+                "explain": { "type": "boolean", "description": "Return per-result ranking signals (#1160): vector similarity/rank, RRF contributions, jaccard/salience/recency/graph boosts. Memory-only — omitted type is treated as memory; explicit type=all/doc is rejected." }
             },
             "required": ["query"]
         }
@@ -1048,6 +1049,40 @@ fn exec_recall(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
         },
         None => uteke_core::RecallStrategy::Fusion,
     };
+
+    // Explain mode (#1160): memory-only, bypasses unified results and
+    // returns full ranking signals per result. An omitted `type` (the
+    // documented default invocation) is accepted and treated as memory
+    // recall — only explicit all/doc are rejected (code-scanning fix:
+    // None maps to SearchType::All above, so the previous enum comparison
+    // wrongly rejected the default call).
+    if args["explain"].as_bool().unwrap_or(false) {
+        if !matches!(args["type"].as_str(), None | Some("memory")) {
+            return Err(
+                "explain is memory-only: pass \"type\": \"memory\" (or drop type)".to_string(),
+            );
+        }
+        let explained = uteke
+            .recall_explained(query, limit, tags_ref, namespace, strategy, min_score)
+            .map_err(|e| format!("Failed: {e}"))?;
+        if explained.is_empty() {
+            return Ok(ToolResult {
+                content: vec![McpContent::Text {
+                    r#type: "text".to_string(),
+                    text: "No results found.".to_string(),
+                }],
+                is_error: false,
+            });
+        }
+        let text = serde_json::to_string_pretty(&explained).unwrap_or_else(|_| "[]".to_string());
+        return Ok(ToolResult {
+            content: vec![McpContent::Text {
+                r#type: "text".to_string(),
+                text,
+            }],
+            is_error: false,
+        });
+    }
 
     // Use unified search when type is specified or default (all).
     // Fall back to legacy recall only for backward compat with existing MCP consumers.

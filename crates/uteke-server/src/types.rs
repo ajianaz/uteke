@@ -252,6 +252,11 @@ pub struct RecallRequest {
     /// Invalid values return HTTP 400.
     #[serde(default)]
     pub strategy: Option<String>,
+    /// Explain mode (#1160): return per-result ranking signals alongside
+    /// each memory. Memory-only recall — rejected (400) together with
+    /// search_type/unified, at, before/after.
+    #[serde(default)]
+    pub explain: bool,
     /// Temporal range filter: only return memories created at or after this
     /// RFC3339 timestamp (#902).
     #[serde(default)]

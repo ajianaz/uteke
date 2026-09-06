@@ -120,6 +120,8 @@ uteke recall "config" --category infrastructure --limit 5
 uteke recall "API architecture" --type doc
 # Search memories only (backward compatible)
 uteke recall "deployment" --type memory
+# Explain mode (#1160): show the ranking signals behind each result
+uteke recall "database caching" --explain
 ```
 
 | Flag | Description |
@@ -130,6 +132,7 @@ uteke recall "deployment" --type memory
 | `--category <cat>` | Filter results to a specific category |
 | `--content-format <fmt>` | Content display: `auto` (detect), `text`, `json` (pretty-print JSON memories) |
 | `--where <key=value>` | Filter by JSON field on structured memories (e.g. `--where role=CTO`) |
+| `--explain` | Show the ranking signals behind each result (#1160): final score, strategy, vector similarity + rank, FTS rank, RRF score with per-channel fusion contributions, and jaccard/salience/recency/graph boost deltas. Memory-only — not available with `--type doc` |
 | `--json` | Output as JSON array |
 
 ## uteke search

@@ -31,6 +31,7 @@ mod operations;
 mod orphans;
 pub mod provenance;
 mod recall_cache;
+pub mod recall_explain;
 mod rooms;
 pub mod rooms_segments;
 pub mod salience_recency;
