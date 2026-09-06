@@ -320,7 +320,7 @@ Keyword search — find memories by matching words in content/tags.
 
 #### 🟡 `POST` `/list`
 
-List memories with optional filters (namespace, tags, sort, limit, offset).
+List memories with optional filters (namespace, tags, sort, limit, offset). Set `include_meta: true` (#1188) for a pagination envelope `{memories, total, has_more, next_offset}` instead of the bare array (not supported with `at`).
 
 *Excludes deprecated memories from results.*
 
@@ -608,6 +608,11 @@ features on the actual server capability rather than a local CLI probe. |
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `at` | any | No | Time-travel: list memories that existed at this RFC3339 timestamp. |
+| `include_meta` | `boolean` | No | Pagination metadata (#1188): when true, respond with an envelope
+`{memories, total, has_more, next_offset}` instead of the bare array.
+Default false — the bare-array shape is unchanged for existing
+clients. Not supported with `at` (point-in-time listing returns the
+bare array regardless). |
 | `limit` | `integer` | No |  |
 | `namespace` | any | No |  |
 | `offset` | `integer` | No |  |
