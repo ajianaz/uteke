@@ -131,7 +131,7 @@ pub const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         method: "POST",
         path: "/list",
-        description: "List memories with optional filters (namespace, tags, sort, limit, offset).",
+        description: "List memories with optional filters (namespace, tags, sort, limit, offset). Set `include_meta: true` (#1188) for a pagination envelope `{memories, total, has_more, next_offset}` instead of the bare array (not supported with `at`).",
         request_type: Some("ListParams"),
         response_type: None,
         excludes_deprecated: true,

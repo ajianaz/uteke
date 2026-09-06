@@ -623,7 +623,35 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                     ),
                 };
                 match list_result {
-                    Ok(memories) => ctx.ok_response_for(req, &memories),
+                    Ok(memories) => {
+                        // #1188: opt-in pagination envelope. The default
+                        // response stays a bare array for existing clients.
+                        if req_data.include_meta && req_data.at.is_none() {
+                            // Total matching rows (same filters as the page).
+                            let total = match &req_data.tag {
+                                Some(tag) => uteke.count_by_tag(tag, ns(&req_data.namespace)),
+                                None => uteke.count(ns(&req_data.namespace)),
+                            }
+                            .unwrap_or(0);
+                            let fetched = memories.len();
+                            let has_more = req_data.offset + fetched < total;
+                            let next_offset = if has_more {
+                                Some(req_data.offset + fetched)
+                            } else {
+                                None
+                            };
+                            return ctx.ok_response_for(
+                                req,
+                                &serde_json::json!({
+                                    "memories": memories,
+                                    "total": total,
+                                    "has_more": has_more,
+                                    "next_offset": next_offset,
+                                }),
+                            );
+                        }
+                        ctx.ok_response_for(req, &memories)
+                    }
                     Err(e) => {
                         error!("Internal error: {e}");
                         ctx.error_response_for(req, 500, "Internal server error")
@@ -3487,5 +3515,128 @@ mod explain_recall_api_tests {
         .to_string();
         let (status, _) = app.call(Method::Post, "/recall", Some(bad));
         assert_eq!(status, 400, "explain + entity must 400");
+    }
+}
+
+// ── /list pagination metadata (#1188) ───────────────────────────────
+
+#[cfg(test)]
+mod list_pagination_tests {
+    use super::*;
+    use tiny_http::TestRequest;
+
+    struct ListApp {
+        uteke: Mutex<Uteke>,
+    }
+
+    impl ListApp {
+        fn new() -> Self {
+            Self {
+                uteke: Mutex::new(
+                    Uteke::open_with_backend(":memory:", None)
+                        .expect("open in-memory uteke without embedder"),
+                ),
+            }
+        }
+
+        fn call(
+            &self,
+            method: Method,
+            url: &str,
+            body: Option<String>,
+        ) -> (u16, serde_json::Value) {
+            let mut req = match body {
+                Some(b) => {
+                    let leaked: &'static str = Box::leak(b.into_boxed_str());
+                    TestRequest::new()
+                        .with_method(method)
+                        .with_path(url)
+                        .with_body(leaked)
+                        .into()
+                }
+                None => TestRequest::new().with_method(method).with_path(url).into(),
+            };
+            let ctx = ReqCtx {
+                auth_token_hash: None,
+                read_only_token_hash: None,
+                cors_origins: Vec::new(),
+                recall_config: None,
+                extraction_config: None,
+            };
+            let resp = route(&self.uteke, &ctx, &mut req);
+            let status = resp.status_code().0;
+            let bytes = resp.into_reader().into_inner();
+            let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+            (status, json)
+        }
+
+        fn remember_in(&self, content: &str, namespace: &str) {
+            let body =
+                serde_json::json!({ "content": content, "namespace": namespace }).to_string();
+            let (status, resp) = self.call(Method::Post, "/remember", Some(body));
+            assert_eq!(status, 200, "seed remember must succeed: {resp}");
+        }
+    }
+
+    #[test]
+    fn list_meta_envelope_and_bare_default() {
+        let app = ListApp::new();
+        for i in 0..7 {
+            app.remember_in(&format!("pagination probe {i}"), "pg");
+        }
+
+        // Default (no include_meta): bare array — unchanged shape.
+        let body = serde_json::json!({ "namespace": "pg", "limit": 100 }).to_string();
+        let (status, resp) = app.call(Method::Post, "/list", Some(body));
+        assert_eq!(status, 200);
+        assert!(resp.is_array(), "default must stay a bare array: {resp}");
+        assert_eq!(resp.as_array().unwrap().len(), 7);
+
+        // include_meta: envelope with total/has_more/next_offset.
+        // URL built separately so the api_registry route scanner does not
+        // mistake this literal for a handler route arm.
+        let body = serde_json::json!({
+            "namespace": "pg",
+            "limit": 3,
+            "offset": 0,
+            "include_meta": true
+        })
+        .to_string();
+        let (status, resp) = app.call(Method::Post, "/list", Some(body));
+        assert_eq!(status, 200);
+        assert!(resp.is_object(), "envelope expected: {resp}");
+        assert_eq!(resp["total"], serde_json::json!(7));
+        assert_eq!(resp["has_more"], serde_json::json!(true));
+        assert_eq!(resp["next_offset"], serde_json::json!(3));
+        assert_eq!(resp["memories"].as_array().expect("page rows").len(), 3);
+
+        // Last page: has_more false, next_offset null.
+        let body = serde_json::json!({
+            "namespace": "pg",
+            "limit": 10,
+            "offset": 6,
+            "include_meta": true
+        })
+        .to_string();
+        let (status, resp) = app.call(Method::Post, "/list", Some(body));
+        assert_eq!(status, 200);
+        assert_eq!(resp["has_more"], serde_json::json!(false));
+        assert!(resp["next_offset"].is_null());
+        assert_eq!(
+            resp["memories"].as_array().expect("page rows").len(),
+            1,
+            "offset 6 of 7 rows returns the last row"
+        );
+
+        // include_meta + at: `at` wins — bare array (documented).
+        let body = serde_json::json!({
+            "namespace": "pg",
+            "include_meta": true,
+            "at": "2100-01-01T00:00:00Z"
+        })
+        .to_string();
+        let (status, resp) = app.call(Method::Post, "/list", Some(body));
+        assert_eq!(status, 200);
+        assert!(resp.is_array(), "at-mode stays a bare array: {resp}");
     }
 }

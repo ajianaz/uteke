@@ -293,6 +293,13 @@ pub struct ListParams {
     /// Time-travel: list memories that existed at this RFC3339 timestamp.
     #[serde(default)]
     pub at: Option<String>,
+    /// Pagination metadata (#1188): when true, respond with an envelope
+    /// `{memories, total, has_more, next_offset}` instead of the bare array.
+    /// Default false — the bare-array shape is unchanged for existing
+    /// clients. Not supported with `at` (point-in-time listing returns the
+    /// bare array regardless).
+    #[serde(default)]
+    pub include_meta: bool,
 }
 
 #[cfg_attr(feature = "docgen", derive(schemars::JsonSchema))]
