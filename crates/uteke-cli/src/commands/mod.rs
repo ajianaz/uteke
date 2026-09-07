@@ -19,6 +19,7 @@ mod room;
 mod server;
 mod tags;
 mod timeline;
+mod update;
 pub(crate) mod update_check;
 pub(crate) mod upgrade;
 
@@ -150,6 +151,24 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
         ),
 
         Commands::Get { id } => list::run_get(cli, uteke, id),
+
+        Commands::Update {
+            id,
+            content,
+            tags,
+            importance,
+            pinned,
+            r#type,
+        } => update::run(
+            cli,
+            uteke,
+            id,
+            content.clone(),
+            tags.clone(),
+            *importance,
+            *pinned,
+            r#type.clone(),
+        ),
 
         Commands::Forget {
             id,
