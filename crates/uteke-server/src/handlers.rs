@@ -1649,6 +1649,120 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
             }
         }
 
+        // POST /room/rename — rename a room, moving all member/document
+        // links in one transaction (#1202)
+        (Method::Post, "/room/rename") => {
+            #[derive(Deserialize)]
+            struct RoomRenameRequest {
+                from: String,
+                to: String,
+            }
+            match read_body::<RoomRenameRequest>(req.as_reader()) {
+                Ok(req_data) => match uteke.rename_room(&req_data.from, &req_data.to) {
+                    Ok(room) => ctx.ok_response_for(
+                        req,
+                        &serde_json::json!({
+                            "renamed": req_data.from,
+                            "to": req_data.to,
+                            "room": room,
+                        }),
+                    ),
+                    Err(e) => {
+                        let status = match e {
+                            uteke_core::Error::Validation(_) => 400,
+                            _ => 500,
+                        };
+                        ctx.error_response_for(req, status, e.to_string())
+                    }
+                },
+                Err(e) => ctx.error_response_for(req, 400, e),
+            }
+        }
+
+        // POST /room/update — update room title/description (#1202)
+        (Method::Post, "/room/update") => {
+            #[derive(Deserialize)]
+            struct RoomUpdateRequest {
+                room_id: String,
+                #[serde(default)]
+                title: Option<String>,
+                #[serde(default)]
+                description: Option<String>,
+            }
+            match read_body::<RoomUpdateRequest>(req.as_reader()) {
+                Ok(req_data) => {
+                    match uteke.update_room(
+                        &req_data.room_id,
+                        req_data.title.as_deref(),
+                        req_data.description.as_deref(),
+                    ) {
+                        Ok(Some(room)) => {
+                            ctx.ok_response_for(req, &serde_json::json!({ "room": room }))
+                        }
+                        Ok(None) => ctx.error_response_for(
+                            req,
+                            404,
+                            format!("Room not found: {}", req_data.room_id),
+                        ),
+                        Err(e) => {
+                            let status = match e {
+                                uteke_core::Error::Validation(_) => 400,
+                                _ => 500,
+                            };
+                            ctx.error_response_for(req, status, e.to_string())
+                        }
+                    }
+                }
+                Err(e) => ctx.error_response_for(req, 400, e),
+            }
+        }
+
+        // POST /room/memory/move — move a memory from one room to another,
+        // preserving link author/role/joined_at (#1202)
+        (Method::Post, "/room/memory/move") => {
+            #[derive(Deserialize)]
+            struct RoomMemoryMoveRequest {
+                memory_id: String,
+                from_room: String,
+                to_room: String,
+            }
+            match read_body::<RoomMemoryMoveRequest>(req.as_reader()) {
+                Ok(req_data) => {
+                    match uteke.move_memory_to_room(
+                        &req_data.memory_id,
+                        &req_data.from_room,
+                        &req_data.to_room,
+                    ) {
+                        Ok(1) => ctx.ok_response_for(
+                            req,
+                            &serde_json::json!({
+                                "moved": req_data.memory_id,
+                                "from_room": req_data.from_room,
+                                "to_room": req_data.to_room,
+                            }),
+                        ),
+                        Ok(0) => ctx.error_response_for(
+                            req,
+                            404,
+                            format!(
+                                "Memory {} has no link in room {}",
+                                req_data.memory_id, req_data.from_room
+                            ),
+                        ),
+                        Ok(_) => unreachable!("move returns 0 or 1"),
+                        Err(e) => {
+                            let status = match e {
+                                uteke_core::Error::Validation(_) => 400,
+                                _ => 500,
+                            };
+                            ctx.error_response_for(req, status, e.to_string())
+                        }
+                    }
+                }
+                Err(e) => ctx.error_response_for(req, 400, e),
+            }
+        }
+
         // POST /room/remember — store memory and link to room (#762)
         (Method::Post, "/room/remember") => {
             match read_body::<RoomRememberRequest>(req.as_reader()) {
@@ -3165,6 +3279,80 @@ mod room_recall_at_tests {
                 .to_lowercase()
                 .contains("refus")
         );
+    }
+
+    #[test]
+    fn room_rename_update_move_endpoints_roundtrip() {
+        let app = NamespaceApp::new();
+
+        // Create rooms + one room memory.
+        let body = serde_json::json!({ "room_id": "ws", "namespace": "default" }).to_string();
+        let (status, resp) = app.call(Method::Post, "/room/create", Some(body));
+        assert_eq!(status, 200, "{resp}");
+        let body = serde_json::json!({ "room_id": "ws-3", "namespace": "default" }).to_string();
+        let (status, resp) = app.call(Method::Post, "/room/create", Some(body));
+        assert_eq!(status, 200, "{resp}");
+
+        let body = serde_json::json!({
+            "content": "room note",
+            "tags": [],
+            "room_id": "ws",
+            "author": "tester"
+        })
+        .to_string();
+        let (status, resp) = app.call(Method::Post, "/room/remember", Some(body));
+        assert_eq!(status, 200, "{resp}");
+        let memory_id = resp["id"].as_str().expect("memory id").to_string();
+
+        // Rename ws → ws-2.
+        let body = serde_json::json!({ "from": "ws", "to": "ws-2" }).to_string();
+        let (status, resp) = app.call(Method::Post, "/room/rename", Some(body));
+        assert_eq!(status, 200, "{resp}");
+        assert_eq!(resp["renamed"], serde_json::json!("ws"));
+        assert_eq!(resp["room"]["id"], serde_json::json!("ws-2"));
+
+        // Update title/description on ws-2.
+        let body = serde_json::json!({
+            "room_id": "ws-2",
+            "title": "Workspace",
+            "description": "Renamed workspace"
+        })
+        .to_string();
+        let (status, resp) = app.call(Method::Post, "/room/update", Some(body));
+        assert_eq!(status, 200, "{resp}");
+        assert_eq!(
+            resp["room"]["description"],
+            serde_json::json!("Renamed workspace")
+        );
+
+        // Move the memory ws-2 → ws-3.
+        let body = serde_json::json!({
+            "memory_id": memory_id,
+            "from_room": "ws-2",
+            "to_room": "ws-3"
+        })
+        .to_string();
+        let (status, resp) = app.call(Method::Post, "/room/memory/move", Some(body.clone()));
+        assert_eq!(status, 200, "{resp}");
+        assert_eq!(resp["moved"], serde_json::json!(memory_id));
+
+        // Moving again → 404 (no link left in source).
+        let (status, resp) = app.call(Method::Post, "/room/memory/move", Some(body));
+        assert_eq!(status, 404, "{resp}");
+        assert!(
+            resp["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("no link")
+        );
+    }
+
+    #[test]
+    fn room_update_missing_room_returns_404() {
+        let app = NamespaceApp::new();
+        let body = serde_json::json!({ "room_id": "ghost", "title": "x" }).to_string();
+        let (status, resp) = app.call(Method::Post, "/room/update", Some(body));
+        assert_eq!(status, 404, "{resp}");
     }
 
     #[test]
