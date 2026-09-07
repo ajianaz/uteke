@@ -480,9 +480,15 @@ mod tests {
 
     // ── Room rename / update / memory room-move (#1202) ─────────────
 
+    /// Embedder-less engine — these ops never touch embeddings, and CI has
+    /// no ONNX runtime (same pattern as operations::namespace_management_tests).
+    fn open_no_embedder() -> crate::Uteke {
+        crate::Uteke::open_with_backend(":memory:", None).unwrap()
+    }
+
     #[test]
     fn rename_room_moves_registry_and_links() {
-        let uteke = open_in_memory();
+        let uteke = open_no_embedder();
         uteke
             .create_room("old-room", Some("Old"), "default")
             .unwrap();
@@ -546,7 +552,7 @@ mod tests {
 
     #[test]
     fn rename_room_rejects_missing_source_and_taken_target() {
-        let uteke = open_in_memory();
+        let uteke = open_no_embedder();
         uteke.create_room("a", None, "default").unwrap();
         uteke.create_room("b", None, "default").unwrap();
 
@@ -562,7 +568,7 @@ mod tests {
 
     #[test]
     fn update_room_sets_title_and_description() {
-        let uteke = open_in_memory();
+        let uteke = open_no_embedder();
         uteke.create_room("r", Some("Title"), "default").unwrap();
 
         // Description only — title must survive.
@@ -592,7 +598,7 @@ mod tests {
 
     #[test]
     fn move_memory_between_rooms_preserves_link_provenance() {
-        let uteke = open_in_memory();
+        let uteke = open_no_embedder();
         uteke.create_room("src", None, "default").unwrap();
         uteke.create_room("dst", None, "default").unwrap();
         let mid = uteke
@@ -630,7 +636,7 @@ mod tests {
 
     #[test]
     fn move_memory_rejects_bad_targets() {
-        let uteke = open_in_memory();
+        let uteke = open_no_embedder();
         uteke.create_room("s", None, "default").unwrap();
         let mid = uteke.remember("x", &[], None, Some("default")).unwrap();
         uteke
