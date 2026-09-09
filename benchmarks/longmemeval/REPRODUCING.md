@@ -15,7 +15,7 @@ disk. The embedding model (~188 MB) downloads once on first run. Everything else
 in this repo.
 
 > **Published numbers (v0.17.0, 500 questions, LongMemEval-S):**
-> recall_any@5 **98.5%** · recall_any@10 98.9% · strict recall_all@5 88.3% ·
+> recall_any@5 **98.4%** · recall_any@10 98.8% · strict recall_all@5 88.3% ·
 > coverage R@5 94.7% (470 non-abstention questions; the 30 `_abs` abstention
 > questions are reported separately — they measure answering, not retrieval).
 > What these metric names mean: [docs/benchmarks.md](../../docs/benchmarks.md) and
@@ -25,7 +25,7 @@ in this repo.
 
 | File | Run | Headline |
 |---|---|---|
-| [`results/default-500q-v017.jsonl`](results/default-500q-v017.jsonl) | v0.17.0 (current release binary) | any@5 **98.5%** |
+| [`results/default-500q-v017.jsonl`](results/default-500q-v017.jsonl) | v0.17.0 (current release binary) | any@5 **98.4%** |
 | [`results/default-500q.jsonl`](results/default-500q.jsonl) | v0.16.0 (canonical validation) | any@5 98.3% |
 
 ---
@@ -151,7 +151,7 @@ different questions:
 
 - **recall_any@K** — "did the retriever surface *the* evidence?" (at least one
   gold session in top-K). This is the metric competitor benchmarks publish;
-  ours: **98.5% @ 5**.
+  ours: **98.4% @ 5** (full 500-question set).
 - **recall_all@K (strict)** — "did it get *all* of them?" (every gold session in
   top-K; 43% of questions need multiple sessions). The honest ceiling-capable
   number: **88.3% @ 5** — mathematical ceiling is 99.4% (3 questions have 6 gold

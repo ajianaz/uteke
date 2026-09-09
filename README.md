@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>98.5% LongMemEval-S recall@5</strong> · 23 ms warm query · <strong>0 LLM tokens</strong> per query · CPU-only · fully offline
+  <strong>98.4% LongMemEval-S recall@5</strong> · ~45 ms warm query · <strong>0 LLM tokens</strong> per query · CPU-only · fully offline
 </p>
 
 <p align="center">
@@ -19,8 +19,8 @@
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=flat-square" alt="License: Apache 2.0" /></a>
   <img src="https://img.shields.io/badge/Rust-1.85+-orange.svg?style=flat-square" alt="Rust 1.85+" />
   <a href="https://github.com/codecoradev/uteke/pkgs/container/uteke"><img src="https://img.shields.io/badge/Docker-ready-blue.svg?style=flat-square" alt="Docker" /></a>
-  <img src="https://img.shields.io/badge/recall-~23ms_warm-brightgreen.svg?style=flat-square" alt="Recall ~23ms warm" />
-  <a href="#-benchmarks--985-recall-on-longmemeval-s"><img src="https://img.shields.io/badge/LongMemEval--S_recall@5-98.5%25-crimson.svg?style=flat-square" alt="LongMemEval-S recall@5: 98.5%" /></a>
+  <img src="https://img.shields.io/badge/recall-~45ms-brightgreen.svg?style=flat-square" alt="Recall ~45ms" />
+  <a href="#-benchmarks--985-recall-on-longmemeval-s"><img src="https://img.shields.io/badge/LongMemEval--S_recall@5-98.4%25-crimson.svg?style=flat-square" alt="LongMemEval-S recall@5: 98.4%" /></a>
 </p>
 
 <p align="center">
@@ -70,7 +70,7 @@ setup, asks which agent you use, and wires everything up. 📖 [Onboarding docs]
 
 ---
 
-## 📊 Benchmarks — 98.5% recall on LongMemEval-S
+## 📊 Benchmarks — 98.4% recall on LongMemEval-S
 
 [LongMemEval-S](https://arxiv.org/abs/2410.10813) (ICLR 2025) hides the facts an
 agent needs across ~115 chat sessions per question and checks whether retrieval
@@ -80,7 +80,7 @@ one CPU, deterministic.
 
 | Metric | uteke **v0.17.0** | agentmemory¹ | BM25-only¹ |
 |---|---|---|---|
-| **recall_any@5** (evidence in top-5) | **98.5%** | 95.2% | 86.2% |
+| **recall_any@5** (evidence in top-5) | **98.4%** | 95.2% | 86.2% |
 | recall_any@10 | 98.9% | 98.6% | 94.6% |
 | **recall_all@5** (all evidence, strict) | **88.3%**² | 88.2% MRR³ | — |
 | LLM tokens / query | **0** | 0 | 0 |
@@ -133,7 +133,7 @@ Every AI tool forgets. Context windows fill up, sessions end, and your AI starts
 | **API keys** | ❌ None | ⚠️ For remote embeddings | ✅ OpenAI/LLM | ✅ LLM key | ✅ LLM key | ✅ LLM key | ⚠️ Cloud only | ❌ None |
 | **Works offline** | ✅ Fully | ⚠️ Optional | ❌ Cloud embedding | ❌ Needs LLM | ❌ Needs LLM | ❌ Needs LLM + vector DB | ✅ Local binary + Ollama | ✅ Fully |
 | **Search** | **Fusion** (weighted RRF of vector + hybrid; hybrid = HNSW + FTS5 RRF) | sqlite-vec + FTS5 | Vector + Graph | Vector + Graph | Vector | Hybrid (semantic + keyword + graph) | Vector + rerank | **FTS5 only** |
-| **Recall speed** | ~23ms warm | ~50ms+ | Network round-trip | Network round-trip | Network round-trip | Network round-trip | Network round-trip | ~Fast (local) |
+| **Recall speed** | ~45ms | ~50ms+ | Network round-trip | Network round-trip | Network round-trip | Network round-trip | Network round-trip | ~Fast (local) |
 | **Multi-agent** | ✅ **Rooms** (shared memory, cross-agent recall, author attribution) | ✅ Multi-agent surface | ❌ | ✅ Shared server | ✅ Multi-agent groups | ❌ | ❌ | ⚠️ Shared via MCP |
 | **Time-travel** | ✅ Native point-in-time | ⚠️ Temporal triples | ❌ | ❌ | ❌ | ✅ Temporal graphs | ❌ | ❌ |
 | **MCP server** | ✅ JSON-RPC + HTTP | ✅ stdio + SSE | ❌ | ✅ 54 MCP tools | ❌ | ✅ Graphiti MCP | ✅ Open-source MCP | ✅ stdio MCP |
@@ -329,7 +329,7 @@ Yes. The embedding model (EmbeddingGemma Q4, 768d) downloads once (~188MB) on fi
 <details>
 <summary><strong>How fast is recall?</strong></summary>
 
-~23ms warm / ~45ms cold as a library (measured at 100–10K memories, flat with store size). No network round-trip because everything is local. The LRU recall cache eliminates redundant embedding computation for repeated queries.
+~45ms as a CLI (measurements: 31ms avg @10K on the published bench host) (measured at 100–10K memories, flat with store size). No network round-trip because everything is local. The LRU recall cache eliminates redundant embedding computation for repeated queries.
 </details>
 
 <details>
