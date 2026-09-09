@@ -6,6 +6,14 @@ title: Roadmap
 
 Demand-gated — we build what people actually use. Track progress on [GitHub Issues](https://github.com/codecoradev/uteke/issues).
 
+## v0.17.0 — Inspectable, Trustworthy Memory `✓ Released 2026-09-06`
+
+- **Explain recall (#1160)** — see why each memory ranked where it did, on every recall surface (CLI `--explain`, HTTP `explain`, MCP flag)
+- **Contradiction resolution as an auditable ledger (#1172)** — supersede/list/undo with provenance; contradiction benchmark segment: fusion winner@1 0.850 → 1.000 after supersede, stale@5 1.000 → 0.000
+- **Provenance data model (#1172, schema v18)** — `source_hash` tamper evidence, actor/evidence timeline events, `provenance(id)` report
+- **Dual-engine vector layer** — runtime-switchable vector engine (#1169/#1171)
+- **Namespace management API (#1181)** — rename/merge/delete with explicit memory strategy; `/list` pagination metadata (#1188)
+
 ## v0.16.0 — Fusion Default `✓ Released 2026-08-29`
 
 - **`fusion` is now the default recall strategy (#1123)** — weighted RRF of the vector and hybrid rankings; LongMemEval 500Q R@5 0.946 vs 0.854 hybrid (+9.2 pts), zero config needed

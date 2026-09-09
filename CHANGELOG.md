@@ -15,7 +15,7 @@ graphs, pagination metadata, and a dual-engine vector layer.
 
 ### Added
 
-- **Contradiction benchmark segment (#1172, phase 3)** — `benchmarks/longmemeval/contradiction_segment.py`: 40-topic active-store segment measuring conflict-resolution quality end-to-end. Baseline (both facts active) vs resolved (superseded): fusion winner@1 0.975 → 1.000, stale@5 0.825 → 0.000. Published in `benchmarks/longmemeval/RESULTS.md`. Also adds `uteke supersede <old> <new> [--reason]` — CLI surface parity for supersession (previously MCP/HTTP only).
+- **Contradiction benchmark segment (#1172, phase 3)** — `benchmarks/longmemeval/contradiction_segment.py`: 40-topic active-store segment measuring conflict-resolution quality end-to-end. Baseline (both facts active) vs resolved (superseded): fusion winner@1 0.850 → 1.000, stale@5 1.000 → 0.000. Published in `benchmarks/longmemeval/RESULTS.md`. Also adds `uteke supersede <old> <new> [--reason]` — CLI surface parity for supersession (previously MCP/HTTP only).
 
 - **`/list` pagination metadata (#1188)** — `POST /list` accepts `"include_meta": true` to respond with an envelope `{memories, total, has_more, next_offset}` (`next_offset` is `null` on the last page) so clients no longer blind-paginate with 100-row guesses. The default response is unchanged (bare array) — existing clients are untouched; `include_meta` is ignored in `at` (point-in-time) mode, which stays a bare array.
 

@@ -16,6 +16,7 @@
   <img src="https://img.shields.io/badge/Rust-1.85+-orange.svg?style=flat-square" alt="Rust 1.85+" />
   <a href="https://github.com/codecoradev/uteke/pkgs/container/uteke"><img src="https://img.shields.io/badge/Docker-ready-blue.svg?style=flat-square" alt="Docker" /></a>
   <img src="https://img.shields.io/badge/recall-~45ms-brightgreen.svg?style=flat-square" alt="Recall ~45ms" />
+  <a href="docs/benchmarks.md#longmemeval-s--retrieval-accuracy-500-questions"><img src="https://img.shields.io/badge/LongMemEval--S_recall@5-98.2%25-crimson.svg?style=flat-square" alt="LongMemEval-S recall@5: 98.2%" /></a>
 </p>
 
 <p align="center">
@@ -134,8 +135,10 @@ Every AI tool forgets. Context windows fill up, sessions end, and your AI starts
 >
 > **Uteke vs Tool C:** Tool C has 54 MCP tools and multi-agent shared memory via a local engine. Uteke's edge: **zero dependencies** (no npm, no extra engine), **hybrid search** (Tool C lacks FTS5), and **time-travel queries**.
 
-<details>
-<summary>📊 Benchmark numbers</summary>
+## 📊 Benchmarks — 98.2% recall on LongMemEval-S
+
+Fusion retrieval answers "what does the agent know *now*": after `supersede`, the
+contradiction segment goes from 85% → **100% winner@1 with zero stale facts** in top-5.
 
 | Metric | Result | Notes |
 |--------|--------|-------|
@@ -145,14 +148,13 @@ Every AI tool forgets. Context windows fill up, sessions end, and your AI starts
 | **LongMemEval-S recall_any@5** | **98.2%** | Full 500Q validation, zero-config fusion default (v0.16.0) — the metric competitor benchmarks publish |
 | LongMemEval-S recall_all@10 | 95.4% | Strict: every gold session in top-10 |
 | LongMemEval-S strict recall_all@5 | 88.0% | Every gold session in top-5 (mathematical ceiling 99.4%) |
+| Contradiction segment: winner@1 after supersede | **100%** | Stale facts drop from top-5 entirely (85% → 100% winner@1) — see [RESULTS.md](benchmarks/longmemeval/RESULTS.md) |
 
 ![uteke vs published systems on LongMemEval-S](docs/assets/longmemeval-comparison.jpg)
 
 > **Don't trust our benchmark — run your own.** We re-ran 108 of the 500 published questions on a 4-core ARM desktop (different CPU architecture from the published Modal x86 run, same v0.16.0 binary and harness): **107/108 produced identical per-question rankings**. The single difference was an adjacent-rank near-tie, both runs retrieved the identical top-10 session set, one gold session swapped ranks 5-6. Details in [RESULTS.md](benchmarks/longmemeval/RESULTS.md).
 
-Full benchmarks: `uteke bench --counts 100,1000,10000 --json` · [Benchmark details](docs/benchmarks.md) · [LongMemEval results](benchmarks/longmemeval/RESULTS.md) — fusion default: R@5 0.946 / R@10 0.977 on the full 500Q validation set (v0.16.0)
-
-</details>
+Full benchmarks: `uteke bench --counts 100,1000,10000 --json` · [Benchmark details](docs/benchmarks.md) · [LongMemEval results](benchmarks/longmemeval/RESULTS.md) — full 500Q validation (v0.16.0): recall_any@5 0.982 / strict recall_all@5 0.880
 
 ---
 
@@ -384,7 +386,7 @@ Yes. Uteke ships with an MCP server that works with Claude Code, Cursor, and Her
 <details>
 <summary><strong>Is it production-ready?</strong></summary>
 
-Uteke is at v0.16.0 with 200+ tests, CI/CD on every commit, and a benchmark harness. It's used in production by the CodeCora team and other early adopters. Still in 0.x, so expect rough edges, but the core is stable.
+Uteke is at v0.17.0 with 200+ tests, CI/CD on every commit, and a benchmark harness. It's used in production by the CodeCora team and other early adopters. Still in 0.x, so expect rough edges, but the core is stable.
 </details>
 
 ---
