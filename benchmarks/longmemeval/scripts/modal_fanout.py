@@ -50,7 +50,7 @@ UTEKE_VERSION = "v0.15.0"
 # before tagging). The exact SHA must be used, not a branch name, so the image
 # build is reproducible.
 UTEKE_GIT_REF = os.environ.get("UTEKE_GIT_REF", "")
-DATA_FILE = "longmemeval_s_cleaned.json"
+DATA_FILE = os.environ.get("LMEVAL_DATA", "longmemeval_s_cleaned.json")
 # Local source of the embedding model (must contain onnx/ + tokenizer.json).
 MODEL_SOURCE = pathlib.Path("/opt/data/.codecora/uteke/models/embeddinggemma-q4")
 
