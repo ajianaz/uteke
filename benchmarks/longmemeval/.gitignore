@@ -5,6 +5,7 @@ data/
 # exploratory run outputs (results_*/ directories) stay local / on Modal volume
 results/*
 !results/default-500q.jsonl
+!results/default-500q-v017.jsonl
 !results/fts5-500q.jsonl
 !results/contradiction-f3-metrics.json
 results_*/
