@@ -128,7 +128,7 @@ An independent local re-run (2026-09-01) of 108 of the 500 questions on a 4-core
 | OS | Linux 6.8.0 (aarch64) |
 | Rust | 1.85+ |
 | Embedding | EmbeddingGemma Q4, 768d, ONNX Runtime CPU |
-| Uteke | v0.12.0 |
+| Uteke | v0.16.0 for LongMemEval-S validation; perf table re-verified on v0.17.0 (2026-09-09) |
 
 ## Methodology
 
