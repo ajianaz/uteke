@@ -1,17 +1,19 @@
-# LongMemEval dataset (downloaded separately)
+# LongMemEval dataset (downloaded separately via scripts/download_data.sh)
 data/
 
-# Results (commit RESULTS.md, ignore raw outputs)
-results/*.jsonl
-results/*.log
+# Results: canonical published artifacts ARE committed (allow-listed below);
+# exploratory run outputs (results_*/ directories) stay local / on Modal volume
+results/*
+!results/default-500q.jsonl
+!results/default-500q-v017.jsonl
+!results/fts5-500q.jsonl
+!results/contradiction-f3-metrics.json
+results_*/
+
+# Run logs
+*.log
 
 # Python
 __pycache__/
 *.pyc
 .venv/
-
-# Fast-eval datasets are derived from the parent dataset (regenerate with make_fast_eval.py)
-data/longmemeval_fast50.json
-data/longmemeval_fast10.json
-data/longmemeval_temporal15.json
-data/longmemeval_multisession15.json
