@@ -3,8 +3,9 @@
 **Dataset:** `longmemeval_s_cleaned.json` — 500 questions = 470 answerable + 30 abstention (`_abs`), 6+1 question types
 **Metric:** Session-level retrieval (Recall@k, NDCG@k). Deterministic — no LLM in the retrieval path.
 
-**TL;DR headline (v0.16.0 pure-default, full 500 questions):**
-recall_any@5 = **0.982** · strict recall_all@5 = **0.880** · strict recall_all@10 = **0.954** · coverage@5 = **0.943**
+**TL;DR headline (v0.17.0 re-validation, full 500 questions — see section below):**
+recall_any@5 = **0.984** · strict recall_all@5 = **0.880** · strict recall_all@10 = **0.954** · coverage@5 = **0.944**
+(Original v0.16.0 validation run: 0.982 / 0.880 / 0.954 / 0.943 — raw committed alongside the re-validation run.)
 
 Every number below can be recomputed from the committed raw artifacts in
 [`results/`](results/) — instructions at the bottom. See also the
@@ -95,14 +96,33 @@ python3 scripts/run_eval.py --data data/subset_kupd.json --output results_rerun 
 
 Raw artifacts are kept on the benchmark Modal volume (`uteke-longmemeval`, `default/` and rerun prefixes), consistent with the published run — datasets and exploratory result files are not committed to git (see `.gitignore` here; `scripts/download_data.sh` fetches the dataset). **Canonical published artifacts ARE committed** under `results/`.
 
-## v0.17.0 re-validation — PENDING
+## v0.17.0 re-validation — ✅ DONE (2026-09-09)
 
-Planned full 500-question re-run on the v0.17.0 binary (same fan-out harness, exact release
-SHA in `UTEKE_GIT_REF`). The retrieval scoring path is unchanged between 0.16.0 and 0.17.0
-(0.17 added explain/supersede/provenance surfaces; fusion weights and channels untouched),
-so the expected outcome is an identical ranking — the re-run converts "attributed to
-v0.16.0" into "re-validated on v0.17.0". Results will land in `results/` and this table
-will be updated.
+Full 500-question re-run on the v0.17.0 binary (built in-image from exact release SHA
+`a2ec81a` via `UTEKE_GIT_REF`, same 10-shard Modal fan-out, shards isolated under
+`default-v017/` on the volume so the v0.16.0 artifacts could not be resume-skipped).
+
+Raw artifact (committed): [`results/default-500q-v017.jsonl`](results/default-500q-v017.jsonl).
+
+| Metric | v0.16.0 | v0.17.0 | Δ |
+|---|---|---|---|
+| strict recall_all@5 | 0.8800 | **0.8800** | ±0.00pp |
+| strict recall_all@10 | 0.9540 | **0.9540** | ±0.00pp |
+| coverage@5 | 0.9433 | 0.9443 | +0.09pp |
+| recall_any@5 | 0.9820 | **0.9840** | +0.20pp |
+| recall_any@10 | 0.9880 | 0.9880 | ±0.00pp |
+
+Per-question comparison (n=500): 238 identical rankings, 254 reorder-only (identical
+top-k sets, near-tie swaps), **8** questions with a different top-10 set — of the 3
+questions whose strict@5 changed, all stayed within partial credit (none flipped
+perfect↔imperfect). The retrieval scoring path is confirmed unchanged in 0.17.0: the
+headline numbers above are now **re-validated on v0.17.0**, not merely attributed to
+the v0.16.0 run.
+
+```bash
+# reproduce
+UTEKE_GIT_REF=a2ec81a0915a242cee6e1de8811491e4fad1d4da modal run scripts/modal_fanout.py --strategy default --tag v017
+```
 
 ## Strategy Comparison (historical runs)
 
