@@ -20,7 +20,7 @@
   <img src="https://img.shields.io/badge/Rust-1.85+-orange.svg?style=flat-square" alt="Rust 1.85+" />
   <a href="https://github.com/codecoradev/uteke/pkgs/container/uteke"><img src="https://img.shields.io/badge/Docker-ready-blue.svg?style=flat-square" alt="Docker" /></a>
   <img src="https://img.shields.io/badge/recall-~45ms-brightgreen.svg?style=flat-square" alt="Recall ~45ms" />
-  <a href="#-benchmarks--985-recall-on-longmemeval-s"><img src="https://img.shields.io/badge/LongMemEval--S_recall@5-98.4%25-crimson.svg?style=flat-square" alt="LongMemEval-S recall@5: 98.4%" /></a>
+  <a href="#-benchmarks--984-recall-on-longmemeval-s"><img src="https://img.shields.io/badge/LongMemEval--S_recall@5-98.4%25-crimson.svg?style=flat-square" alt="LongMemEval-S recall@5: 98.4%" /></a>
 </p>
 
 <p align="center">
@@ -38,11 +38,11 @@ curl -sSL codecora.dev/uteke/install | sh
 # Store a memory
 uteke remember "Deploy v2.1 to staging at 3pm"
 
-# Search it back: by meaning, not just keywords
+# Search it back: by meaning AND by keyword
 uteke recall "when do we deploy?"
 ```
 
-**That's it.** No API keys, no Python, no cloud required. First run downloads the embedding model (~188MB, one-time) and you're running.
+**That's it.** No API keys, no Python, no cloud required. First run downloads the embedding model (~200MB, one-time) and you're running.
 
 Want your agent (Claude Code, Cursor, Hermes) to use it? One line:
 
@@ -65,41 +65,41 @@ Want your agent (Claude Code, Cursor, Hermes) to use it? One line:
 📖 [Full install guide](INSTALL.md) · [Docker docs](docs/docker.md)
 </details>
 
-New to uteke (or you *are* an AI agent)? Run `uteke onboard` — it detects your
+New to uteke (or you *are* an AI agent)? Run `uteke onboard`. It detects your
 setup, asks which agent you use, and wires everything up. 📖 [Onboarding docs](docs/getting-started.md#interactive-onboarding)
 
 ---
 
-## 📊 Benchmarks — 98.4% recall on LongMemEval-S
+## 📊 Benchmarks: 98.4% recall on LongMemEval-S
 
 [LongMemEval-S](https://arxiv.org/abs/2410.10813) (ICLR 2025) hides the facts an
 agent needs across ~115 chat sessions per question and checks whether retrieval
 finds the evidence. 500 hand-curated questions, five memory abilities. Uteke runs
-the full suite with **zero LLM calls in the retrieval path** — local embeddings,
+the full suite with **zero LLM calls in the retrieval path**: local embeddings,
 one CPU, deterministic.
 
 | Metric | uteke **v0.17.0** | agentmemory¹ | BM25-only¹ |
 |---|---|---|---|
 | **recall_any@5** (evidence in top-5) | **98.4%** | 95.2% | 86.2% |
 | recall_any@10 | 98.9% | 98.6% | 94.6% |
-| **recall_all@5** (all evidence, strict) | **88.3%**² | 88.2% MRR³ | — |
+| **recall_all@5** (all evidence, strict) | **88.3%**² | 88.2% MRR³ | n/a |
 | LLM tokens / query | **0** | 0 | 0 |
 
-<sub>¹ agentmemory's published numbers, same benchmark, same 500-question split (their recall_any@5 basis — verified apples-to-apples in our [head-to-head](docs/benchmarks.md#head-to-head-vs-published-systems)). ² Strict = *every* gold session in top-5; 43% of questions need multiple sessions. Mathematical ceiling 99.4%. ³ MRR, not recall_all — not directly comparable, shown for completeness.</sub>
+<sub>¹ agentmemory's published numbers, same benchmark, same 500-question split (their recall_any@5 basis; verified apples-to-apples in our [head-to-head](docs/benchmarks.md#head-to-head-vs-published-systems)). ² Strict = *every* gold session in top-5; 43% of questions need multiple sessions. Mathematical ceiling 99.4%. ³ MRR, not recall_all (not directly comparable; shown for completeness).</sub>
 
-**By question category** (recall_any@5 — the category-level story most tools don't show):
+**By question category** (recall_any@5: the category-level story most tools don't show):
 
 | knowledge-update | single-session | temporal | multi-session |
 |:---:|:---:|:---:|:---:|
 | **100%** | 96.7–98.2% | **99.2%** | 98.3% |
 
-The hard part isn't finding *a* needle — every question's evidence lands in the
+The hard part isn't finding *a* needle; every question's evidence lands in the
 top-50 (**zero misses**). The residual gap is *ordering* when a question needs
 several sessions at once: strict recall_all@5 is 88.3% against a 99.4% ceiling.
 
-> **🎯 Don't trust our benchmark — run it yourself.** The full harness is in this
+> **🎯 Don't trust our benchmark. Run it yourself.** The full harness is in this
 > repo: public dataset, committed raw outputs for both releases, deterministic
-> scoring you can recompute in ~20 lines of Python — no embedder needed to verify,
+> scoring you can recompute in ~20 lines of Python. No embedder needed to verify,
 > ~$10 to re-run the whole 500 questions yourself.
 > **👉 [benchmarks/longmemeval/REPRODUCING.md](benchmarks/longmemeval/REPRODUCING.md)**
 
@@ -160,7 +160,7 @@ Every AI tool forgets. Context windows fill up, sessions end, and your AI starts
 
 | Feature | What it does |
 |---------|-------------|
-| 🧠 **Hybrid + Fusion Search** | Vector similarity + FTS5 full-text search, merged by Reciprocal Rank Fusion (RRF). Since v0.16.0, `fusion` — a weighted RRF of the vector and hybrid rankings — is the default recall strategy. Finds by meaning AND exact keywords. |
+| 🧠 **Hybrid + Fusion Search** | Vector similarity + FTS5 full-text search, merged by Reciprocal Rank Fusion (RRF). Since v0.16.0, `fusion` (a weighted RRF of the vector and hybrid rankings) is the default recall strategy. Finds by meaning AND exact keywords. |
 | 🏠 **Rooms** | **Multi-agent shared memory.** Group memories by context (meetings, projects, clients). Multiple agents read/write to the same room with author attribution. Cross-agent recall without manual sync. |
 | ⏳ **Time-travel** | Recall memories as they existed at any point in time. `uteke recall "deploy" --at 2025-01-15` |
 | 🏷️ **Rich Metadata** | Tags, entities, categories, key:value pairs on every memory. |
@@ -179,7 +179,7 @@ Every AI tool forgets. Context windows fill up, sessions end, and your AI starts
 | 📈 **Salience + Recency** | Dual-axis recall boost by memory type and age. |
 | 🔍 **Orphan Detection** | Find disconnected, low-importance memories for cleanup. |
 | 🌙 **Dream Cycle** | One-command maintenance: lint → backlinks → dedup → orphans. |
-| 🧬 **Consolidation** | Merge near-duplicate room memories into fewer, denser records — segment-level planner, provenance trust policy, per-pair control. |
+| 🧬 **Consolidation** | Merge near-duplicate room memories into fewer, denser records: segment-level planner, provenance trust policy, per-pair control. |
 
 ### Integrations
 
@@ -234,7 +234,7 @@ Everything runs in-process. No network. No cloud. No server required (unless you
 <details>
 <summary>🐳 Deployment modes (local-first by default, Docker/server when you need it)</summary>
 
-**Local-first (default)** — single binary, zero infrastructure:
+**Local-first (default)**: single binary, zero infrastructure.
 
 ```bash
 curl -sSL codecora.dev/uteke/install | sh
@@ -243,7 +243,7 @@ uteke remember "first memory"
 
 Your data stays in `~/.codecora/uteke/`.
 
-**Docker / server mode** — for teams or remote agents:
+**Docker / server mode**: for teams or remote agents.
 
 ```bash
 docker run -d -p 127.0.0.1:8767:8767 -v uteke-data:/data ghcr.io/codecoradev/uteke:latest
@@ -317,13 +317,13 @@ Some platforms offer dozens of MCP tools and multi-agent shared memory via a loc
 <details>
 <summary><strong>How is Uteke different from other single-binary memory tools?</strong></summary>
 
-Some single-binary tools share our philosophy: one binary, zero deps, MCP server, local-first. The key difference is **search**: most are **FTS5-only** (keyword matching). Uteke uses **hybrid search** (HNSW vector similarity + FTS5 + Reciprocal Rank Fusion), meaning you can search by *meaning*, not just exact words. Uteke also adds rooms, time-travel, graph relationships, smart decay, document engine, and batch import.
+Some single-binary tools share our philosophy: one binary, zero deps, MCP server, local-first. The key difference is **search**: most are **FTS5-only** (keyword matching). Uteke uses **hybrid search** (HNSW vector similarity + FTS5 + Reciprocal Rank Fusion), meaning you can search by *meaning*, beyond exact words. Uteke also adds rooms, time-travel, graph relationships, smart decay, document engine, and batch import.
 </details>
 
 <details>
 <summary><strong>Does it really work offline?</strong></summary>
 
-Yes. The embedding model (EmbeddingGemma Q4, 768d) downloads once (~188MB) on first run. After that, zero network calls. No telemetry. If the local model fails, Uteke degrades gracefully to a no-op embedder. It never crashes and never calls a cloud API.
+Yes. The embedding model (EmbeddingGemma Q4, 768d) downloads once (~200MB) on first run. After that, zero network calls. No telemetry. If the local model fails, Uteke degrades gracefully to a no-op embedder. It never crashes and never calls a cloud API.
 </details>
 
 <details>
@@ -350,13 +350,13 @@ Uteke is at v0.17.0 with 200+ tests, CI/CD on every commit, and a benchmark harn
 
 | | **Uteke OSS** (this repo) | **Uteke Cloud** |
 |---|---|---|
-| Retrieval quality | ✅ Full — identical engine | ✅ Identical (parity-benchmarked) |
+| Retrieval quality | ✅ Full (identical engine) | ✅ Identical (parity-benchmarked) |
 | License | Apache-2.0, self-host | Managed service |
 | LLM-powered answering (recency-aware fact resolution, abstention) | BYOK | Included |
 | Multi-workspace, dashboard, backups | DIY | ✅ Included |
 | Price | Free | *Coming soon* |
 
-The open-source engine stays full-capability — nothing about the benchmark
+The open-source engine stays full-capability. Nothing about the benchmark
 results above is paywalled. Cloud adds hosted convenience on top.
 
 ---
