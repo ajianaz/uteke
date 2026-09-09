@@ -124,7 +124,7 @@ def run_shard(spec: dict) -> dict:
     num_shards = spec["num_shards"]
     limit = spec["limit"]
 
-    vol_path = pathlib.Path("/root/vol") / strategy / f"shard_{shard_idx:02d}.jsonl"
+    vol_path = pathlib.Path("/root/vol") / spec.get("vol_dir", strategy) / f"shard_{shard_idx:02d}.jsonl"
     data = _json.loads(pathlib.Path("/root/harness/data.json").read_text())
     if limit and limit > 0:
         data = data[:limit]
@@ -224,7 +224,12 @@ def main(
     num_shards: int = 10,
     limit: int = 0,
     outdir: str = "",
+    tag: str = "",
 ):
+    # tag: isolates this run's shards on the volume under "{strategy}-{tag}",
+    # so a re-run with a different binary (e.g. v0.17.0 re-validation) cannot
+    # resume-skip shards left by an earlier binary's run under "{strategy}/".
+    vol_dir = f"{strategy}-{tag}" if tag else strategy
     if not MODEL_SOURCE.exists():
         sys.exit(f"Model source not found: {MODEL_SOURCE}")
     if not (REPO_DIR / "data" / DATA_FILE).exists():
@@ -237,20 +242,20 @@ def main(
     # Progress check from the volume (if any shards completed before a prior
     # interruption, they'll be resumed instead of recomputed).
     try:
-        done = list_volume.remote(strategy)
+        done = list_volume.remote(vol_dir)
         if done:
-            print(f"Volume state: {len(done)} shard(s) already on volume:")
+            print(f"Volume state ({vol_dir}/): {len(done)} shard(s) already on volume:")
             for d in done:
                 print(f"  {d['shard']}: {d['questions']} questions")
     except Exception as e:
         print(f"(volume check skipped: {e})")
 
-    print(f"Fan-out: strategy={strategy} shards={num_shards} limit={limit or 'ALL'}")
+    print(f"Fan-out: strategy={strategy} vol_dir={vol_dir} shards={num_shards} limit={limit or 'ALL'}")
     t0 = time.time()
 
     # Strided slicing means shard i covers data[i::num_shards].
     inputs = [
-        {"strategy": strategy, "shard_idx": i, "num_shards": num_shards, "limit": limit}
+        {"strategy": strategy, "shard_idx": i, "num_shards": num_shards, "limit": limit, "vol_dir": vol_dir}
         for i in range(num_shards)
     ]
     merged, seen = [], set()
