@@ -114,7 +114,7 @@ the same data.
   published benchmark documents (accessed Aug 2026) and differ in embedding
   models and pipeline details.
 - The FTS5-only bar is an ablation of our own system, not a competitor.
-- Aggregate metrics + per-type breakdown: `benchmarks/longmemeval/RESULTS.md` in this repo. Raw per-question results are kept on the benchmark Modal volume (`uteke-longmemeval`, `default/` prefix), not committed here.
+- Aggregate metrics + per-type breakdown: benchmarks/longmemeval/RESULTS.md in this repo. Canonical raw per-question artifacts are committed under benchmarks/longmemeval/results/ (default & FTS5-ablation 500-question runs, contradiction segment) — recompute any headline number straight from the repo; older exploratory outputs live on the benchmark Modal volume (uteke-longmemeval).
 
 ### Reproducibility
 
