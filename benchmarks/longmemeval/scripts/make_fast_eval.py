@@ -24,7 +24,7 @@ import json
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).parent
+HERE = Path(__file__).parent.parent  # benchmarks/longmemeval (scripts live in scripts/)
 DATA = HERE / "data"
 PARENT = DATA / "longmemeval_s_cleaned.json"
 IDS = HERE / "fast_eval_ids.json"

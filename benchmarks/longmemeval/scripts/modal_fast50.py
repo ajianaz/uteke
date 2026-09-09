@@ -35,77 +35,53 @@ Notes:
 """
 
 import json
-import os
+import hashlib
 import pathlib
 import subprocess
+import os
 import sys
 import time
 
 import modal
 
-REPO_DIR = pathlib.Path(__file__).parent
+REPO_DIR = pathlib.Path(__file__).parent.parent  # benchmarks/longmemeval (scripts live in scripts/)
 UTEKE_VERSION = "v0.15.0"
-# When set, the image builds uteke from this git ref instead of downloading
-# the UTEKE_VERSION release. Used for pre-release validation (e.g. develop tip
-# before tagging). The exact SHA must be used, not a branch name, so the image
-# build is reproducible.
-UTEKE_GIT_REF = os.environ.get("UTEKE_GIT_REF", "")
-DATA_FILE = "longmemeval_s_cleaned.json"
+DATA_FILE = os.environ.get("LMEVAL_DATA", "longmemeval_fast50.json")
+RERANK = False  # removed (#1118 cancelled — single-model direction); kept as False for compat
+RERANK_DEPTH = 20
 # Local source of the embedding model (must contain onnx/ + tokenizer.json).
 MODEL_SOURCE = pathlib.Path("/opt/data/.codecora/uteke/models/embeddinggemma-q4")
 
-app = modal.App("uteke-longmemeval")
+app = modal.App("uteke-lmeval-fast")
 
 # Volume for durable shard outputs: if the local map() call dies (network,
 # spend limit mid-run, Ctrl-C), completed shards are preserved and a rerun
 # resumes instead of starting from zero.
-vol = modal.Volume.from_name("uteke-longmemeval", create_if_missing=True)
+vol = modal.Volume.from_name("uteke-lmeval-fast", create_if_missing=True)
+
+SCRIPTS = REPO_DIR / "scripts"  # harness scripts moved into scripts/
 
 image = (
     # Ubuntu 24.04 base: glibc 2.39 — the uteke release binary needs it
     # (debian slim/bookworm ships glibc 2.36 → too old, incl. the "legacy" build).
     modal.Image.from_registry("ubuntu:24.04", add_python="3.11")
     .apt_install("curl", "ca-certificates", "util-linux")
-)
-if UTEKE_GIT_REF:
-    # Pre-release validation: build uteke from the exact SHA (reproducible),
-    # but reuse the official ORT 1.24.4 x86_64 (SSE4.2) shared lib from the
-    # latest release tarball — ort is load-dynamic, so the lib is decoupled
-    # from the binary and versioned identically to official releases.
-    # build-essential: cargo needs a native linker (cc) on the base image.
-    image = image.apt_install("build-essential", "pkg-config").run_commands(
-        "curl -sL https://github.com/codecoradev/uteke/releases/download/"
-        f"{UTEKE_VERSION}/uteke-x86_64-unknown-linux-gnu-legacy-{UTEKE_VERSION}.tar.gz"
-        " | tar xz -C /tmp && "
-        "cp /tmp/libonnxruntime* /usr/local/bin/ && "
-        "curl -sL https://github.com/codecoradev/uteke/archive/" + UTEKE_GIT_REF + ".tar.gz | tar xz -C /tmp && "
-        "cd /tmp/uteke-*/ && "
-        "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable && "
-        "$HOME/.cargo/bin/cargo build --release -p uteke-cli && "
-        "cp target/release/uteke /usr/local/bin/uteke && "
-        "chmod +x /usr/local/bin/uteke && "
-        "uteke --version"
-    )
-else:
     # uteke release bundle: binary + libonnxruntime colocated (exe-dir lookup).
-    image = image.run_commands(
+    .run_commands(
         f"curl -sL https://github.com/codecoradev/uteke/releases/download/{UTEKE_VERSION}/"
         f"uteke-x86_64-unknown-linux-gnu-legacy-{UTEKE_VERSION}.tar.gz | tar xz -C /tmp && "
         "cp /tmp/uteke /usr/local/bin/uteke && cp /tmp/libonnxruntime* /usr/local/bin/ && "
         "chmod +x /usr/local/bin/uteke && uteke --version"
     )
-image = (
-    image
-    .pip_install("tqdm>=4.65.0", "numpy>=1.24.0")
+    .pip_install("tqdm>=4.65.0", "numpy>=1.24.0", "onnxruntime>=1.17.0", "tokenizers>=0.19.0")
     # Bake the embedding model so containers never download at runtime.
     # (add_local_* must come last — Modal mounts them at container start.)
     .add_local_dir(str(MODEL_SOURCE), "/root/.codecora/uteke/models/embeddinggemma-q4")
-    .add_local_file(str(REPO_DIR / "run_eval.py"), "/root/harness/run_eval.py")
-    # run_eval.py imports temporal/mmr experiment modules at import time —
-    # they must be baked into the image or every shard dies on ModuleNotFoundError.
-    .add_local_file(str(REPO_DIR / "temporal.py"), "/root/harness/temporal.py")
-    .add_local_file(str(REPO_DIR / "mmr.py"), "/root/harness/mmr.py")
+    .add_local_file(str(SCRIPTS / "run_eval.py"), "/root/harness/run_eval.py")
     .add_local_file(str(REPO_DIR / "data" / DATA_FILE), "/root/harness/data.json")
+    .add_local_file(str(SCRIPTS / "temporal.py"), "/root/harness/temporal.py")
+    .add_local_file(str(SCRIPTS / "mmr.py"), "/root/harness/mmr.py")
+    .add_local_file(str(SCRIPTS / "compare_fast50.py"), "/root/harness/compare_fast50.py")
 )
 
 
@@ -123,9 +99,26 @@ def run_shard(spec: dict) -> dict:
     shard_idx = spec["shard_idx"]
     num_shards = spec["num_shards"]
     limit = spec["limit"]
+    temporal = bool(spec.get("temporal", False))
+    mmr_lambda = spec.get("mmr_lambda")  # None = OFF (default)
+    fusion = bool(spec.get("fusion", False))
+    fusion_w = spec.get("fusion_weight")  # primary weight, None = default
 
-    vol_path = pathlib.Path("/root/vol") / strategy / f"shard_{shard_idx:02d}.jsonl"
-    data = _json.loads(pathlib.Path("/root/harness/data.json").read_text())
+    # Variant-keyed volume path: baseline and temporal shards must never
+    # share cache entries, or resume would silently return stale results.
+    variant = f"{strategy}_temporal" if temporal else strategy
+    if mmr_lambda is not None:
+        variant += f"_mmr{mmr_lambda}"
+    if fusion:
+        variant += f"_fusion{fusion_w}"
+    # Dataset fingerprint: sha256 of the mounted dataset file (non-security
+    # fingerprinting, but avoids scanner flags). Cross-dataset
+    # stale hits are possible without it (fast50 shard satisfies a 15Q run's
+    # `len(prior) >= expected` check and is returned verbatim) — see #1129.
+    data_bytes = pathlib.Path("/root/harness/data.json").read_bytes()
+    data_tag = hashlib.sha256(data_bytes).hexdigest()[:8]
+    vol_path = pathlib.Path("/root/vol") / variant / data_tag / f"shard_{shard_idx:02d}.jsonl"
+    data = _json.loads(data_bytes)
     if limit and limit > 0:
         data = data[:limit]
     shard = data[shard_idx::num_shards]  # strided → even question-type mix
@@ -136,8 +129,22 @@ def run_shard(spec: dict) -> dict:
     # Volume cache: skip kalau shard SUDAH LENGKAP; resume kalau PARTIAL (dari timeout)
     resume_args = []
     if vol_path.exists():
-        prior = [l for l in vol_path.read_text().splitlines() if l.strip()]
-        if len(prior) >= expected:
+        prior = []
+        for l in vol_path.read_text().splitlines():
+            if not l.strip():
+                continue
+            try:
+                json.loads(l)
+            except json.JSONDecodeError:
+                # Truncated tail line from a killed container mid-write: drop
+                # it rather than abort the shard (#1130 review finding).
+                continue
+            prior.append(l)
+        prior_qids = {json.loads(l).get("question_id") for l in prior}
+        expected_qids = {e.get("question_id") for e in shard}
+        # Complete = same question set, not just same count (guard #1129 even
+        # if two datasets share a prefix and length by coincidence).
+        if len(prior) >= expected and prior_qids == expected_qids:
             return {
                 "shard_idx": shard_idx,
                 "n": len(prior),
@@ -165,6 +172,9 @@ def run_shard(spec: dict) -> dict:
                 "--output", out_dir,
                 "--strategy", strategy,
                 "--namespace", "lmeval",
+                *(["--temporal"] if temporal else []),
+                *(["--mmr-lambda", f"{mmr_lambda}"] if mmr_lambda is not None else []),
+                *(["--fusion", "--fusion-primary-weight", f"{fusion_w}"] if fusion and fusion_w is not None else (["--fusion"] if fusion else [])),
                 *resume_args,
             ],
             capture_output=True, text=True, timeout=14100,  # 14400 - buffer commit
@@ -208,36 +218,54 @@ def run_shard(spec: dict) -> dict:
 
 @app.function(image=image, timeout=600, cpu=1, volumes={"/root/vol": vol})
 def list_volume(strategy: str) -> list:
-    """List completed shards for a strategy on the volume (progress check)."""
+    """List completed shards for a strategy on the volume (progress check).
+
+    Glob is dataset-tag-agnostic (shard_*.jsonl under any tag dir) so the
+    progress view still works after #1129 introduced per-dataset subdirs.
+    """
     base = pathlib.Path("/root/vol") / strategy
     out = []
     if base.exists():
-        for f in sorted(base.glob("shard_*.jsonl")):
+        for f in sorted(base.glob("*/shard_*.jsonl")):
             n = sum(1 for l in f.read_text().splitlines() if l.strip())
-            out.append({"shard": f.name, "questions": n})
+            out.append({"shard": f"{f.parent.name}/{f.name}", "questions": n})
     return out
 
 
 @app.local_entrypoint()
 def main(
     strategy: str = "hybrid",
-    num_shards: int = 10,
+    num_shards: int = 2,
     limit: int = 0,
     outdir: str = "",
-):
+    temporal: bool = False,
+    mmr_lambda: float = 0.0,
+    fusion: bool = False,
+    fusion_weight: float = 0.0,
+) -> None:
     if not MODEL_SOURCE.exists():
         sys.exit(f"Model source not found: {MODEL_SOURCE}")
     if not (REPO_DIR / "data" / DATA_FILE).exists():
         sys.exit(f"Dataset not found: {REPO_DIR / 'data' / DATA_FILE}")
 
-    outdir = outdir or f"results_modal_{strategy}" + (f"_{limit}q" if limit else "")
+    lam: float | None = mmr_lambda if mmr_lambda > 0 else None  # 0/omitted = OFF
+    fw: float | None = fusion_weight if fusion_weight > 0 else None  # None = harness default
+    variant = f"{strategy}_temporal" if temporal else strategy
+    if lam is not None:
+        variant += f"_mmr{lam}"
+    if fusion:
+        variant += f"_fusion{fw}"
+    outdir = outdir or "results_modal_" + variant + (f"_{limit}q" if limit else "")
     out_path = pathlib.Path(outdir) / "retrieval_results.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Progress check from the volume (if any shards completed before a prior
     # interruption, they'll be resumed instead of recomputed).
     try:
-        done = list_volume.remote(strategy)
+        variant = f"{strategy}_temporal" if temporal else strategy
+        if lam is not None:
+            variant += f"_mmr{lam}"
+        done = list_volume.remote(variant)
         if done:
             print(f"Volume state: {len(done)} shard(s) already on volume:")
             for d in done:
@@ -250,7 +278,8 @@ def main(
 
     # Strided slicing means shard i covers data[i::num_shards].
     inputs = [
-        {"strategy": strategy, "shard_idx": i, "num_shards": num_shards, "limit": limit}
+        {"strategy": strategy, "shard_idx": i, "num_shards": num_shards, "limit": limit,
+         "temporal": temporal, "mmr_lambda": lam, "fusion": fusion, "fusion_weight": fw}
         for i in range(num_shards)
     ]
     merged, seen = [], set()
@@ -276,4 +305,4 @@ def main(
     print(f"Results: {out_path}")
     print(f"\nRun: python print_metrics.py {out_path}")
     # Print metrics right away (numpy available locally).
-    subprocess.run([sys.executable, str(REPO_DIR / "print_metrics.py"), str(out_path)])
+    subprocess.run([sys.executable, str(SCRIPTS / "print_metrics.py"), str(out_path)])

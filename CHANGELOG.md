@@ -4,6 +4,14 @@
 
 ### Added
 
+- **Benchmarks directory restructure** — `benchmarks/` is now the single source of truth: `benchmarks/README.md` (index, policies, reproduction), `internal/` (uteke bench, re-verified on v0.17.0), `longmemeval/` (harness + committed canonical raw artifacts under `results/` + corrected baselines), `locomo/` (planned external benchmark #2). The old `benchmarks/RESULTS.md` stub (stale pre-embedding figures) is removed — real numbers live in `internal/RESULTS.md` and `docs/benchmarks.md`.
+
+### Fixed
+
+- **LongMemEval baseline mislabel** — RESULTS.md previously attributed the 0.854/0.885 (2026-08-13) full-500 baseline to "v0.15.0 hybrid"; those figures are the **vector-only** run (hybrid was validated at 50 questions only). Corrected, with both delta bases stated (+8.9pp full-500, +9.2pp 470-non-abstention).
+- **Full-dataset aggregates** — RESULTS.md now labels all three bases explicitly: Overall (470 non-abstention), Abstention (30), and Overall (full 500 = 0.982 recall_any@5 / 0.880 strict recall_all@5); no questions silently dropped from the aggregate rows.
+- Removed stale run logs and an outdated metrics snapshot from git tracking (values superseded by recomputation from committed raw artifacts).
+
 - **Room rename, room update, and memory room-move (#1202)** — rooms now have sanctioned lifecycle ops matching the namespace family: `Uteke::rename_room(old, new)` rewrites the registry row and every `room_memories`/`room_documents` reference in ONE transaction (FK-safe insert→repoint→delete order; no `ON UPDATE CASCADE` needed), preserving title/description/namespace; `Uteke::update_room(id, title?, description?)` edits room metadata (schema v19 adds the additive `rooms.description` column; structural export/import carry it and stay backward-compatible with 5-column exports); `Uteke::move_memory_to_room(id, from, to)` moves a memory between rooms preserving the link's `author`/`role`/`joined_at` provenance (`Ok(0)` when not a member of `from`). Surfaces: HTTP `POST /room/rename|/room/update|/room/memory/move` (404 on missing room/link), CLI `uteke room rename|update|move-memory`, MCP `uteke_room_rename|uteke_room_update|uteke_room_memory_move`.
 - **`uteke update <id>` CLI** — in-place memory edit (content/tags/importance/pinned/type), closing the CLI surface gap: HTTP `PUT /memory` and MCP `uteke_update` already existed (#1202 item 5).
 
