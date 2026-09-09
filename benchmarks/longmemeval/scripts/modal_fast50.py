@@ -59,6 +59,8 @@ app = modal.App("uteke-lmeval-fast")
 # resumes instead of starting from zero.
 vol = modal.Volume.from_name("uteke-lmeval-fast", create_if_missing=True)
 
+SCRIPTS = REPO_DIR / "scripts"  # harness scripts moved into scripts/
+
 image = (
     # Ubuntu 24.04 base: glibc 2.39 — the uteke release binary needs it
     # (debian slim/bookworm ships glibc 2.36 → too old, incl. the "legacy" build).
@@ -75,11 +77,11 @@ image = (
     # Bake the embedding model so containers never download at runtime.
     # (add_local_* must come last — Modal mounts them at container start.)
     .add_local_dir(str(MODEL_SOURCE), "/root/.codecora/uteke/models/embeddinggemma-q4")
-    .add_local_file(str(REPO_DIR / "run_eval.py"), "/root/harness/run_eval.py")
+    .add_local_file(str(SCRIPTS / "run_eval.py"), "/root/harness/run_eval.py")
     .add_local_file(str(REPO_DIR / "data" / DATA_FILE), "/root/harness/data.json")
-    .add_local_file(str(REPO_DIR / "temporal.py"), "/root/harness/temporal.py")
-    .add_local_file(str(REPO_DIR / "mmr.py"), "/root/harness/mmr.py")
-    .add_local_file(str(REPO_DIR / "compare_fast50.py"), "/root/harness/compare_fast50.py")
+    .add_local_file(str(SCRIPTS / "temporal.py"), "/root/harness/temporal.py")
+    .add_local_file(str(SCRIPTS / "mmr.py"), "/root/harness/mmr.py")
+    .add_local_file(str(SCRIPTS / "compare_fast50.py"), "/root/harness/compare_fast50.py")
 )
 
 
@@ -303,4 +305,4 @@ def main(
     print(f"Results: {out_path}")
     print(f"\nRun: python print_metrics.py {out_path}")
     # Print metrics right away (numpy available locally).
-    subprocess.run([sys.executable, str(REPO_DIR / "print_metrics.py"), str(out_path)])
+    subprocess.run([sys.executable, str(SCRIPTS / "print_metrics.py"), str(out_path)])
