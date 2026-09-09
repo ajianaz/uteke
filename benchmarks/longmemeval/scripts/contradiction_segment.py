@@ -93,7 +93,7 @@ def resolve_binary(cli_path: str) -> str:
         if p.exists():
             return str(p)
         print(f"warning: --binary {cli_path} missing; falling back", file=sys.stderr)
-    repo = Path(__file__).resolve().parent.parent.parent
+    repo = Path(__file__).resolve().parent.parent.parent.parent
     cand = repo / "target" / "release" / "uteke"
     if cand.exists():
         return str(cand)
